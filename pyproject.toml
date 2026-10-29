@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "opensim-extensions"
-version = "8"
+version = "9"
 description = "Frameworks, anthropometric users, and visualization for OpenSim"
 requires-python = ">=3.10"
 dependencies = [
@@ -20,13 +20,18 @@ dependencies = [
 
 [project.optional-dependencies]
 opensim = ["opensim"]
+step = ["pythonocc-core>=7.7"]
 test = ["pytest>=8"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-opensim_extensions = ["models/user/assets/*", "models/user/assets/meshes/*", "bodies/assets/meshes/*"]
+opensim_extensions = [
+    "models/user/assets/*",
+    "models/user/assets/meshes/*",
+    "bodies/assets/meshes/*",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

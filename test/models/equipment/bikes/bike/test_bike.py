@@ -1,11 +1,7 @@
 import math
-import sys
-from pathlib import Path
 
 import numpy as np
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from opensim_extensions import Bike, User
 from opensim_extensions.bodies import (
@@ -19,9 +15,10 @@ from opensim_extensions.bodies import (
     mass_properties,
 )
 from opensim_extensions.models.equipment import Equipment, Screen
-from opensim_extensions.models.equipment.bikes.bike import _horn_direction
-from opensim_extensions.models.equipment.bikes.fitting import _horn_local
-from opensim_extensions.models.equipment.bikes.groupcycle3 import GroupCycle3
+from opensim_extensions.models.equipment.bikes.bike.fitting import (
+    _horn_local,
+)
+from opensim_extensions.models.equipment.bikes.bike.bike import horn_direction
 
 
 def _forefoot_midpoint_pedal_coordinates_mm(bike, user, side):
@@ -304,20 +301,6 @@ def test_bike_screen_geometry_and_center_follow_configured_offsets():
     assert bike.getBodySet().get("screen") is not None
 
 
-def test_groupcycle3_clone_preserves_selected_adjustments():
-    bike = GroupCycle3()
-    bike.set_handlebar_tube_step(0)
-    bike.set_handlebar_slide_step(10)
-
-    clone = bike.clone()
-
-    assert isinstance(clone, GroupCycle3)
-    assert clone.handlebar_position == pytest.approx(bike.handlebar_position)
-    assert clone.screen.position_anchor_m == pytest.approx(
-        bike.screen.position_anchor_m
-    )
-
-
 def test_bike_directed_angles_use_the_world_xy_reference():
     default_bike = Bike()
     assert default_bike.seat_tube_angle_deg == pytest.approx(
@@ -354,12 +337,12 @@ def test_bike_directed_angles_use_the_world_xy_reference():
 def test_horn_pitch_raises_tips_and_positive_roll_turns_horns_medially():
     bike = Bike(horn_pitch_deg=90.0, horn_roll_deg=0.0)
     assert np.allclose(
-        _horn_direction(bike.horn_pitch_deg, bike.horn_roll_deg, "r"),
+        horn_direction(bike.horn_pitch_deg, bike.horn_roll_deg, "r"),
         [0.0, 1.0, 0.0],
         atol=1e-7,
     )
-    right = _horn_direction(0.0, 10.0, "r")
-    left = _horn_direction(0.0, 10.0, "l")
+    right = horn_direction(0.0, 10.0, "r")
+    left = horn_direction(0.0, 10.0, "l")
     assert right[2] < 0.0
     assert left[2] > 0.0
 
@@ -378,7 +361,7 @@ def test_horn_palm_target_is_centered_and_tangent_to_outer_cylinder_side(
     )
     target = _horn_local(bike, side, hand_breadth_mm=90.0)
     start = np.array([0.0, 0.0, sign * bike._handlebar_width_mm * 1e-3 / 2])
-    direction = _horn_direction(pitch, roll, side)
+    direction = horn_direction(pitch, roll, side)
     from_start = target - start
     longitudinal_position = float(np.dot(from_start, direction))
     radial_position = from_start - longitudinal_position * direction

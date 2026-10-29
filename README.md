@@ -12,8 +12,8 @@ di modelli e strumenti di visualizzazione ed esportazione.
   la postura.
 - **`Bike`**: modello OpenSim di una bike regolabile, con fitting di un utente,
   pedali, manubrio, schermo, supporto e sella arrotondata e rastremata.
-- **`GroupCycle3`**: configurazione predefinita di `Bike` con le geometrie e le
-  regolazioni del modello GroupCycle3.
+- **Importazione STEP**: converte geometrie STEP in corpi OpenSim e mesh VTP,
+  usando densità e colori dei materiali quando disponibili.
 - **`Framework`**: contenitore nominativo di modelli OpenSim distinti, con
   snapshot composito, accoppiamenti e strumenti per simulare o creare un
   modello OpenSim indipendente.
@@ -31,12 +31,15 @@ src/opensim_extensions/
 ├── models/
 │   ├── user/       User, riferimenti ANSUR II, scaling e asset anatomici
 │   └── equipment/
-│       └── bikes/  Bike, fitting cinematico e attrezzatura
+│       ├── equipment.py    Equipment, Screen e importazione STEP
+│       └── bikes/
+│           └── bike/       Bike parametrica e fitting cinematico
 ├── bodies/         primitive geometriche e builder per corpi OpenSim
 ├── framework/      composizione di modelli e accoppiamenti
-├── viewer/         scena VTK, player, lettura geometrie ed export SVG
-├── animation.py    rendering off-screen delle motion in MP4
-└── opensim.py      caricamento binding OpenSim e risoluzione mesh
+├── viewer/         scena VTK, player, animazione off-screen ed export SVG
+└── utils/
+    ├── functions.py  caricamento binding OpenSim e risoluzione mesh
+    └── constants.py costanti condivise dal package
 ```
 
 `User` e `Bike` sono modelli nativi OpenSim. `Framework` li mantiene come
@@ -62,10 +65,17 @@ Da una copia locale del repository, installare il package con l'extra OpenSim:
 python -m pip install -e ".[opensim]"
 ```
 
+Per importare file STEP, installare anche l'extra `step`, che aggiunge
+`pythonocc-core`:
+
+```powershell
+python -m pip install -e ".[opensim,step]"
+```
+
 Per installare anche le dipendenze di test:
 
 ```powershell
-python -m pip install -e ".[opensim,test]"
+python -m pip install -e ".[opensim,step,test]"
 ```
 
 L'extra `opensim` richiede un binding installabile con `pip` nell'ambiente
@@ -73,6 +83,8 @@ corrente. Se OpenSim è già gestito da un ambiente Conda o da un'installazione
 separata, usare quell'ambiente e assicurarsi che `import opensim` funzioni
 prima di importare `opensim_extensions`. Su Windows il package prepara il
 percorso delle librerie native dell'ambiente Python prima di caricare OpenSim.
+Il file `requirements.txt` include anche `pythonocc-core>=7.7` per abilitare
+l'importazione STEP.
 
 Il modello OpenSim, i dati ANSUR II e le mesh usate da `User` sono inclusi nel
 package. La geometria di `Bike` usa primitive e mesh incluse nel package.
@@ -216,9 +228,7 @@ dello schermo si inclina con `screen_inclination_deg` (default 40).
 inclina i corni verso l'alto quando positivo; `horn_roll_deg` positivo li
 ruota medialmente, verso il piano centrale della bike. Questi angoli orientano
 i due corni individualmente: non è previsto un tilt globale del manubrio.
-Il default di `crank_axis_position_mm` è `(0, 322, 0)` mm. `GroupCycle3` è una
-sottoclasse preconfigurata di `Bike` che imposta le specifiche del modello,
-inclusa questa posizione dell'asse.
+Il default di `crank_axis_position_mm` è `(0, 322, 0)` mm.
 
 Il fitting centra il punto medio tra i marker `TOE` e `MT5` sul centro del
 pedale e ne imposta la distanza dalla superficie del pedale, misurata lungo
@@ -408,6 +418,41 @@ Altri parametri e proprietà:
   punta anteriore è rastremata. `seat_length_mm`, `seat_width_mm` e
   `seat_height_mm` ne controllano l'ingombro.
 
+## Importazione STEP
+
+L'importazione STEP è disponibile da
+`opensim_extensions.models.equipment`. Il parser crea corpi OpenSim con massa,
+centro di massa e inerzia ricavati dalla geometria e dalle densità dei
+materiali STEP; mantiene inoltre i colori delle superfici nelle mesh VTP.
+Le mesh vengono scritte nella directory indicata e collegate ai corpi
+importati.
+
+```python
+from pathlib import Path
+
+from opensim_extensions.models.equipment import read_step
+
+step_file = Path("cad/frame.step")
+mesh_directory = Path("output/meshes")
+
+body, mesh_paths = read_step(
+    step_file,
+    mesh_directory,
+    density_kg_m3=7850.0,
+)
+```
+
+Il valore di `density_kg_m3` è un fallback per i solidi senza una densità
+STEP utilizzabile; può essere un singolo valore o una mappa dai nomi esatti
+dei solidi alle rispettive densità. Se manca una densità sia nel file sia nei
+fallback, l'importazione segnala l'errore anziché assegnare una massa
+arbitraria. Per ottenere una struttura annidata di corpi distinti per
+assemblaggi e componenti, usare `read_step(..., return_hierarchy=True)`.
+`read_step_components()` consente invece di selezionare i nomi di componenti
+e solidi da separare; restituisce per ciascun corpo un `StepBodyImport` con
+mesh, percorso nell'assieme e, su richiesta, i vertici CAD trasformati in
+metri.
+
 ## Composizione con `Framework`
 
 `Framework` è un contenitore simile a un dizionario, con modelli OpenSim
@@ -540,8 +585,9 @@ l'apertura rapida del visualizzatore.
 
 ## Test
 
-Il repository configura pytest tramite `pyproject.toml` e raccoglie i test
-dalla directory `test/`. Dopo aver installato l'extra di test, eseguire:
+Il repository configura pytest tramite `pyproject.toml`; i test sono organizzati
+in sottocartelle che rispecchiano le aree del package (`framework`, `models`,
+`viewer` e `package`). Dopo aver installato l'extra di test, eseguire:
 
 ```powershell
 python -m pytest
@@ -556,12 +602,13 @@ Gli elementi inclusi nell'API di wildcard `opensim_extensions` (`__all__`) sono:
 `User`, `Bike`, `IRON_DENSITY_KG_M3`, `Framework`, `save_animation`,
 `VTKViewer`, `VTKVisualizer`, `MotionData`, `MotionPlayer`, `PlayerWindow`,
 `DEFAULT_SIZE` e `VIEW_NAMES`.
-`GroupCycle3`, `Equipment` e `Screen` sono disponibili nel sottopackage
+`Equipment` e `Screen` sono disponibili nel sottopackage
 `opensim_extensions.models.equipment`; `VisualErgonomicsFramework` è esposto
 da `opensim_extensions.framework`. Le primitive geometriche e gli helper per
 creare corpi OpenSim sono esposti nel sottopackage `opensim_extensions.bodies`, ad esempio
 `Box`, `Cylinder`, `Disk`, `Ellipsoid`, `Sphere`, `Tube` e
-`mass_properties`.
+`mass_properties`. `read_step`, `read_step_components` e `StepBodyImport` sono
+disponibili da `opensim_extensions.models.equipment`.
 Le primitive sono espresse in unità SI e i builder forniscono helper per
 calcolare proprietà di massa e aggiungere corpi saldati o articolati a modelli
 OpenSim.

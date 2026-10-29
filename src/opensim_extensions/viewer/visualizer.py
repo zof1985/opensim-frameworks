@@ -57,6 +57,7 @@ from __future__ import annotations
 import threading
 from typing import Any
 
+from ..utils.constants import DEFAULT_SIZE, VIEW_NAMES
 from . import geometry as _geometry
 
 __all__ = ["VTKVisualizer", "DEFAULT_SIZE", "VIEW_NAMES"]
@@ -66,8 +67,6 @@ __all__ = ["VTKVisualizer", "DEFAULT_SIZE", "VIEW_NAMES"]
 #: a ``VTKVisualizer`` even exists (it must embed that frame's handle
 #: *during* construction -- see ``VTKVisualizer.__init__``'s ``embed``
 #: parameter -- so construction can't happen first).
-DEFAULT_SIZE = (900, 700)
-
 # Ground reference plane: a flat grid in OpenSim's XZ plane (Y=0), matching
 # every ``opensim.Model``'s default gravity direction ((0, -9.80665, 0),
 # confirmed directly) -- i.e. "down" is -Y, so the ground belongs at Y=0,
@@ -108,9 +107,6 @@ _VIEW_DIRECTIONS: dict[str, tuple[tuple[float, float, float], tuple[float, float
 }
 
 #: Names accepted by :meth:`VTKVisualizer.set_view`, in a stable display order.
-VIEW_NAMES = ("front", "back", "left", "right", "top", "bottom")
-
-
 def _build_interactor_style(vtk: Any) -> Any:
     """Build the camera interactor style: left-drag rotates, Ctrl+left-drag pans, wheel zooms.
 

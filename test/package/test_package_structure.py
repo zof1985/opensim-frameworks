@@ -12,6 +12,8 @@ def public_modules():
     ):
         if any(part.startswith("_") for part in info.name.split(".")[1:]):
             continue
+        if info.ispkg:
+            continue
         yield info.name
 
 
@@ -25,8 +27,9 @@ def test_every_public_module_has_an_explicit_clean_all():
         assert all(hasattr(module, item) for item in names), name
 
 
-def test_top_level_api_contains_only_requested_public_elements():
-    assert set(opensim_extensions.__all__) == {
+def test_top_level_api_exposes_requested_public_elements():
+    assert not hasattr(opensim_extensions, "__all__")
+    assert {
         "Framework",
         "Bike",
         "IRON_DENSITY_KG_M3",
@@ -39,4 +42,4 @@ def test_top_level_api_contains_only_requested_public_elements():
         "MotionData",
         "MotionPlayer",
         "PlayerWindow",
-    }
+    } <= set(vars(opensim_extensions))

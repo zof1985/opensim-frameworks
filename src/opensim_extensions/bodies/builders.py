@@ -6,7 +6,7 @@ from typing import Sequence
 
 import numpy as np
 
-from ..opensim import import_opensim
+from ..utils.functions import import_opensim
 from .shapes import (
     Box,
     Cylinder,

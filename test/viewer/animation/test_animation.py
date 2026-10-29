@@ -6,7 +6,7 @@ opensim = pytest.importorskip("opensim")
 
 from opensim_extensions import save_animation
 from opensim_extensions.models.user.user import DEFAULT_MESHES_DIR, DEFAULT_MODEL_PATH
-from opensim_extensions.opensim import register_geometry_search_path
+from opensim_extensions.utils.functions import register_geometry_search_path
 
 
 def make_model():

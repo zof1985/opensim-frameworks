@@ -9,7 +9,7 @@ from typing import Any, Literal
 import numpy as np
 
 from ...bodies.shapes import MESHES_DIR
-from ...opensim import import_opensim, register_geometry_search_path
+from ...utils.functions import import_opensim, register_geometry_search_path
 from .data import DEFAULT_DATASET, resolve_reference
 from .joint_center_table import JOINT_CENTER_NAMES as _JOINT_CENTER_NAMES
 from .joint_centers_generated import _JointCenterMixin

@@ -17,7 +17,7 @@ from scipy.spatial import ConvexHull, QhullError
 from ..bodies import Cylinder, Shape, add_welded_body, matrix_to_euler_xyz
 from ..models.equipment import Equipment, Screen
 from ..models.user import User
-from ..opensim import import_opensim
+from ..utils.functions import import_opensim
 from .framework import Framework
 
 __all__ = ["VisualErgonomicsFramework"]

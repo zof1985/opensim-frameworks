@@ -3,6 +3,9 @@
 Used by the "Export" controls in :mod:`opensim_extensions.viewer.player` -- kept
 separate from that module since these are pure render/encode operations
 (no Tk widgets), independently testable/reusable without a live window.
+``render_motion_animation`` reuses the player's existing visualizer; the
+off-screen :func:`opensim_extensions.viewer.animation.save_animation` creates
+its own visualizer for a model and motion table.
 """
 
 from __future__ import annotations
@@ -10,7 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
-__all__ = ["save_image", "save_animation"]
+__all__ = ["save_image", "render_motion_animation"]
 
 
 def save_image(visualizer: Any, path: str | Path, *, dpi: int = 300) -> None:
@@ -33,7 +36,7 @@ def save_image(visualizer: Any, path: str | Path, *, dpi: int = 300) -> None:
     Image.fromarray(visualizer.capture_frame()).save(str(path), dpi=(dpi, dpi))
 
 
-def save_animation(
+def render_motion_animation(
     model: Any,
     data: "MotionData",
     visualizer: Any,

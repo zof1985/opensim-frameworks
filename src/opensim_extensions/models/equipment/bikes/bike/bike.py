@@ -6,7 +6,7 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-from ....bodies import (
+from .....bodies import (
     Box,
     Cylinder,
     Ellipsoid,
@@ -14,15 +14,14 @@ from ....bodies import (
     add_welded_body,
     cylinder_between,
 )
-from ..equipment import Equipment, Screen
-from ....opensim import import_opensim
+from ...equipment import Equipment, Screen
+from .....utils.constants import IRON_DENSITY_KG_M3, MM_TO_M
+from .....utils.functions import import_opensim
 
 __all__ = ["Bike", "IRON_DENSITY_KG_M3"]
 
 opensim = import_opensim()
 
-IRON_DENSITY_KG_M3 = 7870.0
-_MM = 1e-3
 _SCREEN_THICKNESS_MM = 6.0
 _SCREEN_COLOR = (0.25, 0.65, 0.8)
 _SCREEN_MOUNT_COLOR = (0.2, 0.2, 0.2)
@@ -42,7 +41,7 @@ _CRANK_BAR = (0.03, 0.015)  # crank bar (height along y, thickness along z), m
 _AXLE_RADIUS = 0.012
 
 
-def _horn_direction(pitch_deg: float, roll_deg: float, side: str) -> np.ndarray:
+def horn_direction(pitch_deg: float, roll_deg: float, side: str) -> np.ndarray:
     """Return a horn's unit direction; positive pitch raises it and roll toes it in."""
     if side not in {"r", "l"}:
         raise ValueError("side must be 'r' or 'l'")
@@ -195,6 +194,9 @@ def _parameter_property(name: str, doc: str):
 
 class Bike(Equipment):
     """A fixed exercise-bike OpenSim model; only cranks and pedals move.
+
+    The model is generated in memory for each configured instance; it does not
+    load or cache a product-specific ``.osim`` file or mesh directory.
 
     Conventions (world frame, ground at ``y = 0``): ``x`` points forward,
     ``y`` up, ``z`` to the rider's right. Lengths are given in millimetres,
@@ -458,13 +460,13 @@ class Bike(Equipment):
     @staticmethod
     def _xyz(point_mm: Sequence[float]) -> np.ndarray:
         """Return an (x, y) point in millimetres as an (x, y, 0) array in metres."""
-        return np.array([point_mm[0], point_mm[1], 0.0]) * _MM
+        return np.array([point_mm[0], point_mm[1], 0.0]) * MM_TO_M
 
     @staticmethod
     def _along(angle_deg: float, distance_mm: float) -> np.ndarray:
         """Return the (x, y, 0) vector in metres of a distance along an XY angle."""
         angle = math.radians(angle_deg)
-        return distance_mm * _MM * np.array([math.cos(angle), math.sin(angle), 0.0])
+        return distance_mm * MM_TO_M * np.array([math.cos(angle), math.sin(angle), 0.0])
 
     # --------------------------------------------------------- derived values
     @property
@@ -549,7 +551,7 @@ class Bike(Equipment):
     @property
     def _crank_axis_position_m(self) -> np.ndarray:
         """Pedal axis centre in world coordinates (m), for OpenSim calculations."""
-        return np.asarray(self._crank_axis_position_mm) * _MM
+        return np.asarray(self._crank_axis_position_mm) * MM_TO_M
 
     @property
     def pedal_lateral_offset(self) -> float:
@@ -561,11 +563,11 @@ class Bike(Equipment):
             Lateral distance in millimetres. It combines half the spacing
             between pedal inner faces and the pedal's lateral width.
         """
-        return self._pedal_lateral_offset_m / _MM
+        return self._pedal_lateral_offset_m / MM_TO_M
 
     @property
     def _pedal_lateral_offset_m(self) -> float:
-        return self.pedal_spacing_mm * _MM / 2 + self._pedal_size_mm[1] * _MM
+        return self.pedal_spacing_mm * MM_TO_M / 2 + self._pedal_size_mm[1] * MM_TO_M
 
     @property
     def pedal_spacing_mm(self) -> float:
@@ -596,8 +598,14 @@ class Bike(Equipment):
         offset = self._along(
             self._seat_slide_angle_deg, self.seat_slide_positions_mm[slide_step]
         )
-        lift = np.array([0.0, self._seat_height_mm * _MM / 2, 0.0])
+        lift = np.array([0.0, self._seat_height_mm * MM_TO_M / 2, 0.0])
         return self._seat_tube_top_at(tube_step) + offset + lift
+
+    def seat_position_at_m(self, tube_step: int, slide_step: int) -> np.ndarray:
+        """Return the seat centre in metres at the supplied adjustment steps."""
+        tube_step = _check_step("tube_step", tube_step, self._seat_tube_steps)
+        slide_step = _check_step("slide_step", slide_step, self._seat_slide_steps)
+        return self._seat_position_at(tube_step, slide_step)
 
     def _handlebar_tube_top_at(self, tube_step: int) -> np.ndarray:
         return self._xyz(self.handlebar_tube_positions_mm[tube_step])
@@ -609,6 +617,18 @@ class Bike(Equipment):
         )
         return self._handlebar_tube_top_at(tube_step) + offset
 
+    def handlebar_position_at_m(
+        self, tube_step: int, slide_step: int
+    ) -> np.ndarray:
+        """Return the handlebar centre in metres at the supplied adjustment steps."""
+        tube_step = _check_step(
+            "tube_step", tube_step, self._handlebar_tube_steps
+        )
+        slide_step = _check_step(
+            "slide_step", slide_step, self._handlebar_slide_steps
+        )
+        return self._handlebar_position_at(tube_step, slide_step)
+
     @property
     def seat_tube_top(self) -> np.ndarray:
         """Return the selected seat-tube top centre.
@@ -618,7 +638,7 @@ class Bike(Equipment):
         numpy.ndarray, shape (3,)
             ``(x, y, z)`` position in millimetres in the world frame.
         """
-        return self._seat_tube_top_at(self._seat_tube_step) / _MM
+        return self._seat_tube_top_at(self._seat_tube_step) / MM_TO_M
 
     @property
     def seat_position(self) -> np.ndarray:
@@ -630,7 +650,7 @@ class Bike(Equipment):
             ``(x, y, z)`` seat-centre position in millimetres. The seat is
             centred on the selected seat-slide point.
         """
-        return self._seat_position_at(self._seat_tube_step, self._seat_slide_step) / _MM
+        return self._seat_position_at(self._seat_tube_step, self._seat_slide_step) / MM_TO_M
 
     @property
     def handlebar_tube_base(self) -> np.ndarray:
@@ -641,7 +661,7 @@ class Bike(Equipment):
         numpy.ndarray, shape (3,)
             ``(x, y, z)`` handlebar-tube-base position in millimetres.
         """
-        return self._handlebar_tube_base_m / _MM
+        return self._handlebar_tube_base_m / MM_TO_M
 
     @property
     def _handlebar_tube_base_m(self) -> np.ndarray:
@@ -656,7 +676,7 @@ class Bike(Equipment):
         numpy.ndarray, shape (3,)
             ``(x, y, z)`` position in millimetres in the world frame.
         """
-        return self._handlebar_tube_top_at(self._handlebar_tube_step) / _MM
+        return self._handlebar_tube_top_at(self._handlebar_tube_step) / MM_TO_M
 
     @property
     def handlebar_position(self) -> np.ndarray:
@@ -667,7 +687,7 @@ class Bike(Equipment):
         numpy.ndarray, shape (3,)
             ``(x, y, z)`` handlebar-centre position in millimetres.
         """
-        return self._handlebar_position_m / _MM
+        return self._handlebar_position_m / MM_TO_M
 
     @property
     def _handlebar_position_m(self) -> np.ndarray:
@@ -677,7 +697,7 @@ class Bike(Equipment):
 
     @property
     def _screen_base_m(self) -> np.ndarray:
-        return self._handlebar_position_m + _MM * np.array(
+        return self._handlebar_position_m + MM_TO_M * np.array(
             [self._screen_horizontal_offset_mm, self._screen_vertical_offset_mm, 0.0]
         )
 
@@ -691,13 +711,13 @@ class Bike(Equipment):
             ``(x, y, z)`` screen-base position in millimetres in the world
             frame.
         """
-        return self._screen_base_m / _MM
+        return self._screen_base_m / MM_TO_M
 
     @property
     def _screen_center_m(self) -> np.ndarray:
         angle = math.radians(self._screen_inclination_deg)
         up_the_panel = np.array([math.cos(angle), math.sin(angle), 0.0])
-        return self._screen_base_m + (self._screen_height_mm * _MM / 2) * up_the_panel
+        return self._screen_base_m + (self._screen_height_mm * MM_TO_M / 2) * up_the_panel
 
     @property
     def screen_center(self) -> np.ndarray:
@@ -708,7 +728,7 @@ class Bike(Equipment):
         numpy.ndarray, shape (3,)
             ``(x, y, z)`` screen-centre position in millimetres.
         """
-        return self._screen_center_m / _MM
+        return self._screen_center_m / MM_TO_M
 
     @property
     def screen(self) -> Screen:
@@ -883,7 +903,7 @@ class Bike(Equipment):
 
     def _set_angle(self, name: str, value: float) -> None:
         self._angles_deg[name] = _finite(name, value)
-        self._reset_state()
+        self.reset_state()
 
     def set_crank_angle_deg(self, value: float) -> None:
         """Set the crank rotation and update the OpenSim state.
@@ -1053,9 +1073,9 @@ class Bike(Equipment):
         )
 
     def _seat_shapes(self) -> list[Ellipsoid]:
-        length = self._seat_length_mm * _MM
-        width = self._seat_width_mm * _MM
-        height = self._seat_height_mm * _MM
+        length = self._seat_length_mm * MM_TO_M
+        width = self._seat_width_mm * MM_TO_M
+        height = self._seat_height_mm * MM_TO_M
         return [
             Ellipsoid(
                 center=(-0.16 * length, 0.0, 0.0),
@@ -1082,13 +1102,13 @@ class Bike(Equipment):
             opensim.Model.__init__(self)
             self.setName("Bike")
         self._component_masses: dict[str, float] = {}
-        tube_radius = self._frame_tube_diameter_mm * _MM / 2
+        tube_radius = self._frame_tube_diameter_mm * MM_TO_M / 2
         axis = self._crank_axis_position_m
         tube_base = self._handlebar_tube_base_m
         tube_top = self._handlebar_tube_top_at(self._handlebar_tube_step)
         seat_tube_top = self._seat_tube_top_at(self._seat_tube_step)
-        margin = self._frame_margin_mm * _MM
-        half_width = self._frame_width_mm * _MM / 2
+        margin = self._frame_margin_mm * MM_TO_M
+        half_width = self._frame_width_mm * MM_TO_M / 2
 
         # Frame (world coordinates): rail along x under the pedal axis, rear and
         # front feet, a vertical support to the pedal axis and a strut from the
@@ -1129,7 +1149,7 @@ class Bike(Equipment):
             [
                 Box(
                     size=(
-                        max((seat_slide_high - seat_slide_low) * _MM, 1e-3),
+                        max((seat_slide_high - seat_slide_low) * MM_TO_M, 1e-3),
                         tube_radius,
                         2 * tube_radius,
                     )
@@ -1161,7 +1181,7 @@ class Bike(Equipment):
         self._add_static(
             "handlebar_slide",
             "handlebar_slide",
-            [Box(size=(max((high - low) * _MM, 1e-3), tube_radius, 2 * tube_radius))],
+            [Box(size=(max((high - low) * MM_TO_M, 1e-3), tube_radius, 2 * tube_radius))],
             location=tube_top
             + self._along(self._handlebar_slide_angle_deg, (low + high) / 2),
             orientation=(0.0, 0.0, slide),
@@ -1175,14 +1195,14 @@ class Bike(Equipment):
             ),
         )
 
-        radius = self._handlebar_diameter_mm * _MM / 2
-        width = self._handlebar_width_mm * _MM
-        horn = self._horn_length_mm * _MM
+        radius = self._handlebar_diameter_mm * MM_TO_M / 2
+        width = self._handlebar_width_mm * MM_TO_M
+        horn = self._horn_length_mm * MM_TO_M
         handlebar_shapes = [Cylinder(radius=radius, length=width, axis="z")]
         for side in ("r", "l"):
             side_sign = 1.0 if side == "r" else -1.0
             start = np.array([0.0, 0.0, side_sign * width / 2])
-            end = start + horn * _horn_direction(
+            end = start + horn * horn_direction(
                 self._horn_pitch_deg, self._horn_roll_deg, side
             )
             handlebar_shapes.append(cylinder_between(start, end, radius))
@@ -1196,8 +1216,8 @@ class Bike(Equipment):
         panel_rotation = inclination - math.pi / 2
         screen_base = np.array(
             [
-                self._screen_horizontal_offset_mm * _MM,
-                self._screen_vertical_offset_mm * _MM,
+                self._screen_horizontal_offset_mm * MM_TO_M,
+                self._screen_vertical_offset_mm * MM_TO_M,
             ]
         )
         if abs(math.sin(inclination)) > 1e-8:
@@ -1219,8 +1239,8 @@ class Bike(Equipment):
                 ),
                 size=(
                     max(length, 1e-3),
-                    _SCREEN_THICKNESS_MM * _MM,
-                    self._screen_width_mm * _MM,
+                    _SCREEN_THICKNESS_MM * MM_TO_M,
+                    self._screen_width_mm * MM_TO_M,
                 ),
                 orientation=(
                     0.0,
@@ -1246,11 +1266,11 @@ class Bike(Equipment):
             "screen",
             [
                 Box(
-                    center=(0.0, self._screen_height_mm * _MM / 2, 0.0),
+                    center=(0.0, self._screen_height_mm * MM_TO_M / 2, 0.0),
                     size=(
-                        _SCREEN_THICKNESS_MM * _MM,
-                        self._screen_height_mm * _MM,
-                        self._screen_width_mm * _MM,
+                        _SCREEN_THICKNESS_MM * MM_TO_M,
+                        self._screen_height_mm * MM_TO_M,
+                        self._screen_width_mm * MM_TO_M,
                     ),
                     color=_SCREEN_COLOR,
                 )
@@ -1263,9 +1283,9 @@ class Bike(Equipment):
         self._build_drivetrain(axis)
         self._add_brake()
         self.finalizeConnections()
-        self._reset_state()
+        self.reset_state()
 
-    def _reset_state(self) -> None:
+    def reset_state(self) -> None:
         """Re-initialize the system and restore the stored crank and pedal angles."""
         self.state = self.initSystem()
         for name, value in self._angles_deg.items():
@@ -1288,7 +1308,7 @@ class Bike(Equipment):
         returned framework contains ``user`` and ``bike`` with both feet welded
         to their pedals. If ``user`` is omitted, the 170 cm, 70 kg male
         reference user is fitted. See
-        :func:`opensim_extensions.models.equipment.bikes.fitting.fit_user` for the full
+        :func:`opensim_extensions.models.equipment.bikes.bike.fitting.fit_user` for the full
         procedure.
 
         Parameters
@@ -1323,8 +1343,8 @@ class Bike(Equipment):
         )
 
     def _build_drivetrain(self, axis) -> None:
-        length = self._crank_length_mm * _MM
-        spacing = self._crank_spacing_mm * _MM
+        length = self._crank_length_mm * MM_TO_M
+        spacing = self._crank_spacing_mm * MM_TO_M
         crank_height, crank_thickness = _CRANK_BAR
         density = self._densities["cranks"]
 
@@ -1355,8 +1375,8 @@ class Bike(Equipment):
         )
         self._component_masses["cranks"] = total + left_mass
 
-        pedal_length, pedal_width, pedal_height = (v * _MM for v in self._pedal_size_mm)
-        outward = self.pedal_spacing_mm * _MM / 2 + pedal_width / 2
+        pedal_length, pedal_width, pedal_height = (v * MM_TO_M for v in self._pedal_size_mm)
+        outward = self.pedal_spacing_mm * MM_TO_M / 2 + pedal_width / 2
         pedal_masses = 0.0
         # The left crank frame is rotated by pi; counter-rotating the pedal joint
         # frame makes pedal angle 0 mean "pedal parallel to the ground" on both sides.
@@ -1381,7 +1401,7 @@ class Bike(Equipment):
     def _add_brake(self) -> None:
         # Both pedals apply the brake force at the crank length; tanh keeps the
         # resistance smooth around zero speed.
-        torque = 2.0 * self._brake_force_n * self._crank_length_mm * _MM
+        torque = 2.0 * self._brake_force_n * self._crank_length_mm * MM_TO_M
         brake = opensim.ExpressionBasedCoordinateForce(
             "crank_angle", f"-{torque:.10g}*tanh(qdot/0.1)"
         )

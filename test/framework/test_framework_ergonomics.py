@@ -1,13 +1,9 @@
 import inspect
 import math
-import sys
 import warnings
-from pathlib import Path
 
 import numpy as np
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from opensim_extensions import Bike, User
 from opensim_extensions.framework import VisualErgonomicsFramework

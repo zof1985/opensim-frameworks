@@ -8,9 +8,9 @@ from typing import Any
 
 import numpy as np
 
-from .bodies.shapes import MESHES_DIR
-from .opensim import import_opensim
-from .opensim import resolve_geometry_file as _resolve_geometry_file
+from ..utils.constants import DEFAULT_SIZE, MESHES_DIR
+from ..utils.functions import import_opensim
+from ..utils.functions import resolve_geometry_file as _resolve_geometry_file
 
 
 def _user_dirs(model: Any) -> tuple:
@@ -24,7 +24,7 @@ def save_animation(
     sto_table: Any,
     path: str | Path,
     *,
-    size: tuple[int, int] = (900, 700),
+    size: tuple[int, int] = DEFAULT_SIZE,
     camera_position: tuple[float, float, float] | None = None,
     camera_focal_point: tuple[float, float, float] | None = None,
     camera_view_up: tuple[float, float, float] | None = None,
@@ -226,7 +226,7 @@ def save_animation(
         if not coordinates.get(name).get_locked()
     }
 
-    from .viewer.visualizer import VTKVisualizer
+    from .visualizer import VTKVisualizer
     import imageio
 
     visualizer = VTKVisualizer(

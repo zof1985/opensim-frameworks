@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Sequence
 
 import numpy as np
 
-from ..opensim import import_opensim, register_geometry_search_path
+from ..utils.constants import MESHES_DIR
+from ..utils.functions import import_opensim, register_geometry_search_path
 
 __all__ = [
     "MESHES_DIR",
@@ -27,7 +27,6 @@ __all__ = [
 
 opensim = import_opensim()
 
-MESHES_DIR = Path(__file__).resolve().parent / "assets" / "meshes"
 register_geometry_search_path(opensim, MESHES_DIR)
 
 

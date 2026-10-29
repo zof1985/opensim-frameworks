@@ -339,6 +339,9 @@ def _apply_time(model: Any, data: MotionData, time: float) -> None:
             continue
         coordinate.setValue(state, value, False)
     native_model.realizePosition(state)
+    visualizer = getattr(model, "visualizer", None)
+    if visualizer is not None:
+        visualizer.show(state)
 
 class PlayerWindow:
     """Handle to a running playback/status window (see :func:`start_player`).
@@ -481,7 +484,8 @@ def start_player(
 
         import sv_ttk
 
-        from .visualizer import DEFAULT_SIZE, VIEW_NAMES, VTKVisualizer
+        from ..utils.constants import DEFAULT_SIZE, VIEW_NAMES
+        from .visualizer import VTKVisualizer
 
         root = tk.Tk()
         # A flat, modern ttk theme (Windows 11-style) instead of the dated
@@ -712,7 +716,9 @@ def start_player(
             root.config(cursor="wait")
             root.update()
             try:
-                _export.save_animation(model, data, visualizer, _apply_time, path, fps=fps)
+                _export.render_motion_animation(
+                    model, data, visualizer, _apply_time, path, fps=fps
+                )
             except Exception as error:  # noqa: BLE001 -- reported via a dialog, not swallowed
                 messagebox.showerror("Export failed", str(error), parent=root)
             finally:

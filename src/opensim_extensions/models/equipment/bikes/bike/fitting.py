@@ -9,10 +9,10 @@ from typing import Any
 import numpy as np
 from scipy.optimize import least_squares, minimize_scalar
 
-from ....bodies.shapes import matrix_to_euler_xyz
-from ....framework import Framework
-from ....opensim import import_opensim
-from .bike import _horn_direction
+from .....bodies.shapes import matrix_to_euler_xyz
+from .....framework import Framework
+from .....utils.functions import import_opensim
+from .bike import horn_direction
 
 __all__ = ["fit_user"]
 
@@ -192,11 +192,11 @@ class _LegFit:
     def __init__(self, rider: _Rider, bike: Any, shoe: float):
         self.rider = rider
         self.shoe = shoe
-        self.half_pedal = bike._pedal_size_mm[2] * 1e-3 / 2
-        self.axis = bike._crank_axis_position_m
-        self.crank = bike._crank_length_mm * 1e-3
-        self.lateral = bike._pedal_lateral_offset_m
-        self.half_pedal_width = bike._pedal_size_mm[1] * 1e-3 / 2
+        self.half_pedal = bike.pedal_size_mm[2] * 1e-3 / 2
+        self.axis = bike.crank_axis_position * 1e-3
+        self.crank = bike.crank_length_mm * 1e-3
+        self.lateral = bike.pedal_lateral_offset * 1e-3
+        self.half_pedal_width = bike.pedal_size_mm[1] * 1e-3 / 2
 
     def solve(self, hip_target: np.ndarray) -> dict[str, Any]:
         rider = self.rider
@@ -318,16 +318,16 @@ class _LegFit:
 
 def _choose_tube_step(bike: Any, target: float) -> int:
     nominal = int(np.argmin(np.abs(bike.seat_slide_positions_mm)))
-    lift = np.array([0.0, bike._seat_height_mm * 1e-3 / 2, 0.0])
-    axis = bike._crank_axis_position_m
-    crank = bike._crank_length_mm * 1e-3
+    lift = np.array([0.0, bike.seat_height_mm * 1e-3 / 2, 0.0])
+    axis = bike.crank_axis_position * 1e-3
+    crank = bike.crank_length_mm * 1e-3
     pedal_tops = axis[None, :2] + crank * np.stack(
         [np.cos(_BOTTOM_ANGLES), np.sin(_BOTTOM_ANGLES)], axis=1
     )
-    pedal_tops[:, 1] += bike._pedal_size_mm[2] * 1e-3 / 2
+    pedal_tops[:, 1] += bike.pedal_size_mm[2] * 1e-3 / 2
     errors = []
-    for step in range(bike._seat_tube_steps + 1):
-        seat_top = (bike._seat_position_at(step, nominal) + lift)[:2]
+    for step in range(bike.seat_tube_steps + 1):
+        seat_top = (bike.seat_position_at_m(step, nominal) + lift)[:2]
         errors.append(abs(np.linalg.norm(pedal_tops - seat_top, axis=1).max() - target))
     return int(np.argmin(errors))
 
@@ -335,7 +335,7 @@ def _choose_tube_step(bike: Any, target: float) -> int:
 def _handlebar_pose(
     bike: Any, tube_step: int, slide_step: int
 ) -> tuple[np.ndarray, np.ndarray]:
-    return bike._handlebar_position_at(tube_step, slide_step), np.eye(3)
+    return bike.handlebar_position_at_m(tube_step, slide_step), np.eye(3)
 
 
 def _horn_local(
@@ -343,8 +343,8 @@ def _horn_local(
 ) -> np.ndarray:
     """Return the palm-centre target tangent to a horn at its length midpoint."""
     sign = 1.0 if side == "r" else -1.0
-    start = np.array([0.0, 0.0, sign * bike._handlebar_width_mm * 1e-3 / 2])
-    direction = _horn_direction(bike._horn_pitch_deg, bike._horn_roll_deg, side)
+    start = np.array([0.0, 0.0, sign * bike.handlebar_width_mm * 1e-3 / 2])
+    direction = horn_direction(bike.horn_pitch_deg, bike.horn_roll_deg, side)
     outward = np.array([0.0, 0.0, sign])
     normal = outward - np.dot(outward, direction) * direction
     normal_length = float(np.linalg.norm(normal))
@@ -354,11 +354,11 @@ def _horn_local(
         normal_length = float(np.linalg.norm(normal))
     normal /= normal_length
     contact_offset = (
-        bike._handlebar_diameter_mm + hand_breadth_mm
+        bike.handlebar_diameter_mm + hand_breadth_mm
     ) * 0.5e-3
     return (
         start
-        + bike._horn_length_mm * 1e-3 / 2 * direction
+        + bike.horn_length_mm * 1e-3 / 2 * direction
         + contact_offset * normal
     )
 
@@ -592,7 +592,7 @@ def fit_user(
         Framework with members ``user`` and ``bike``, and the couplings
         ``foot_right`` and ``foot_left``.
     """
-    from ...user import User
+    from ....user import User
 
     if user is None:
         user = User("M", height_cm=170.0, mass_kg=70.0)
@@ -613,24 +613,24 @@ def fit_user(
             raise ValueError(f"{label} must be finite")
 
     rider = _Rider(user)
-    crotch_height = user._reference.values["crotchheight"] * 1e-3
-    seat_lift = np.array([0.0, bike._seat_height_mm * 1e-3 / 2, 0.0])
+    crotch_height = user.anthropometry.values["crotchheight"] * 1e-3
+    seat_lift = np.array([0.0, bike.seat_height_mm * 1e-3 / 2, 0.0])
 
     tube_step = _choose_tube_step(bike, crotch_height + shoe)
     bike.set_seat_tube_step(tube_step)
 
     legs = _LegFit(rider, bike, shoe)
-    axis = bike._crank_axis_position_m
-    pedal_x = axis[0] + bike._crank_length_mm * 1e-3
+    axis = bike.crank_axis_position * 1e-3
+    pedal_x = axis[0] + bike.crank_length_mm * 1e-3
     candidates = []
-    for slide in range(bike._seat_slide_steps + 1):
-        hip = bike._seat_position_at(tube_step, slide) + seat_lift
+    for slide in range(bike.seat_slide_steps + 1):
+        hip = bike.seat_position_at_m(tube_step, slide) + seat_lift
         solution = legs.solve(hip)
         error = abs(solution["knee_x"] - pedal_x)
         candidates.append((error + 10 * solution["residual"], error, slide, solution))
     _, knee_error, slide_step, legs_solution = min(candidates, key=lambda item: item[0])
     bike.set_seat_slide_step(slide_step)
-    hip = bike._seat_position_at(tube_step, slide_step) + seat_lift
+    hip = bike.seat_position_at_m(tube_step, slide_step) + seat_lift
     legs_solution = legs.solve(hip)
     if legs_solution["residual"] > _TOLERANCE_M:
         warnings.warn(
@@ -687,19 +687,22 @@ def fit_user(
 
     steps = [
         (tube, slide)
-        for tube in range(bike._handlebar_tube_steps + 1)
-        for slide in range(bike._handlebar_slide_steps + 1)
+        for tube in range(bike.handlebar_tube_steps + 1)
+        for slide in range(bike.handlebar_slide_steps + 1)
     ]
     if trunk_angle_deg is None:
         # The starting trunk posture is a reference for the IK; the handlebar tube
         # keeps the handlebar near seat height while the slide and trunk fit the hands.
         options = []
-        for slide in range(bike._handlebar_slide_steps + 1):
+        for slide in range(bike.handlebar_slide_steps + 1):
             tube = int(
                 np.argmin(
                     [
-                        abs(bike._handlebar_position_at(step, slide)[1] - seat_top_y)
-                        for step in range(bike._handlebar_tube_steps + 1)
+                        abs(
+                            bike.handlebar_position_at_m(step, slide)[1]
+                            - seat_top_y
+                        )
+                        for step in range(bike.handlebar_tube_steps + 1)
                     ]
                 )
             )
@@ -727,7 +730,7 @@ def fit_user(
         arm_solution = fit_arms(grips_at(tube_step, handlebar_slide))
     bike.set_handlebar_tube_step(tube_step)
     bike.set_handlebar_slide_step(handlebar_slide)
-    height_error = bike._handlebar_position_m[1] - seat_top_y
+    height_error = bike.handlebar_position[1] * 1e-3 - seat_top_y
     if arm_solution["residual"] > _TOLERANCE_M or (
         trunk_angle_deg is None and abs(height_error) > 0.02
     ):
@@ -746,12 +749,11 @@ def fit_user(
     rider.sync_couplers()
     user.update_state()
 
-    bike._angles_deg.update(
-        crank_angle=0.0,
-        pedal_right_angle=0.0,
-        pedal_left_angle=math.degrees(legs_solution["left_pedal_pitch"]),
+    bike.set_crank_angle_deg(0.0)
+    bike.set_pedal_right_angle_deg(0.0)
+    bike.set_pedal_left_angle_deg(
+        math.degrees(legs_solution["left_pedal_pitch"])
     )
-    bike._reset_state()
 
     for side, name in (("r", "right"), ("l", "left")):
         calcn = user.getBodySet().get(f"calcn_{side}")
@@ -767,7 +769,7 @@ def fit_user(
         )
     user.reinitialize()
     bike.finalizeConnections()
-    bike._reset_state()
+    bike.reset_state()
 
     framework = Framework(user=user, bike=bike)
     for side, name in (("r", "right"), ("l", "left")):

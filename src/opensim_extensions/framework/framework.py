@@ -10,7 +10,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Self, TypeGuard
 
 from ..bodies.shapes import MESHES_DIR
-from ..opensim import import_opensim
+from ..utils.functions import import_opensim
 from .couplings import ComponentRef, Coupling, normalize_reference
 
 if TYPE_CHECKING:
