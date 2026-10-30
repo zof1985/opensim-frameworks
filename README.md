@@ -1,6 +1,6 @@
-# opensim-extensions
+# opensim-frameworks
 
-`opensim-extensions` è un package Python che estende [OpenSim](https://opensim.stanford.edu/)
+`opensim-frameworks` è un package Python che estende [OpenSim](https://opensim.stanford.edu/)
 con modelli antropometrici, una bike da indoor cycling regolabile, composizione
 di modelli e strumenti di visualizzazione ed esportazione.
 
@@ -27,7 +27,7 @@ La struttura attuale del package separa modelli, composizione e
 visualizzazione:
 
 ```text
-src/opensim_extensions/
+src/opensim_frameworks/
 ├── models/
 │   ├── user/       User, riferimenti ANSUR II, scaling e asset anatomici
 │   └── equipment/
@@ -56,8 +56,8 @@ anche disporre dei binding Python di OpenSim compatibili con l'interprete
 selezionato. La versione OpenSim va verificata nell'ambiente di installazione:
 il package non definisce una matrice di compatibilità Python/OpenSim.
 
-Il nome della distribuzione è `opensim-extensions`; il namespace Python da
-importare è `opensim_extensions`.
+Il nome della distribuzione è `opensim-frameworks`; il namespace Python da
+importare è `opensim_frameworks`.
 
 Da una copia locale del repository, installare il package con l'extra OpenSim:
 
@@ -81,7 +81,7 @@ python -m pip install -e ".[opensim,step,test]"
 L'extra `opensim` richiede un binding installabile con `pip` nell'ambiente
 corrente. Se OpenSim è già gestito da un ambiente Conda o da un'installazione
 separata, usare quell'ambiente e assicurarsi che `import opensim` funzioni
-prima di importare `opensim_extensions`. Su Windows il package prepara il
+prima di importare `opensim_frameworks`. Su Windows il package prepara il
 percorso delle librerie native dell'ambiente Python prima di caricare OpenSim.
 Il file `requirements.txt` include anche `pythonocc-core>=7.7` per abilitare
 l'importazione STEP.
@@ -94,7 +94,7 @@ package. La geometria di `Bike` usa primitive e mesh incluse nel package.
 ```python
 from pathlib import Path
 
-from opensim_extensions import Bike, VTKViewer
+from opensim_frameworks import Bike, VTKViewer
 
 # Crea e adatta la bike al rider di riferimento.
 bike = Bike()
@@ -118,7 +118,7 @@ create automaticamente.
 ```python
 from pathlib import Path
 
-from opensim_extensions import User
+from opensim_frameworks import User
 
 user = User("F", height_cm=170.0, mass_kg=65.0)
 user.set_left_arm_length(user.left_arm_length * 1.05)
@@ -185,7 +185,7 @@ Per esempio, `seat_tube_steps=20` definisce 21 posizioni (indici 0-20), mentre
 Per avviare il fitting:
 
 ```python
-from opensim_extensions import Bike, User
+from opensim_frameworks import Bike, User
 
 bike = Bike()
 user = User("M", height_cm=178.0, mass_kg=75.0)
@@ -254,7 +254,7 @@ per avvicinarsi all'altezza della sella.
 
 ### Ergonomia visiva
 
-`VisualErgonomicsFramework`, esportata da `opensim_extensions.framework`, estende
+`VisualErgonomicsFramework`, esportata da `opensim_frameworks.framework`, estende
 `Framework` con un cono visivo a base rettangolare ancorato al punto medio
 degli occhi e con le superfici dello spazio di raggiungimento delle mani.
 Ogni mano è un corpo articolato rispetto al radio da un giunto che consente
@@ -267,8 +267,8 @@ basso. La linea di visione è orientata separatamente. Gli overlay sono inclusi
 nel framework e appaiono quando viene mostrato nel viewer.
 
 ```python
-from opensim_extensions import Bike, User
-from opensim_extensions.framework import VisualErgonomicsFramework
+from opensim_frameworks import Bike, User
+from opensim_frameworks.framework import VisualErgonomicsFramework
 
 user = User("M", height_cm=178.0, mass_kg=75.0)
 bike = Bike()
@@ -281,7 +281,7 @@ ergonomics = VisualErgonomicsFramework(
 
 posture_optimized = ergonomics.optimize_user_position(
     neck_base_flexion_deg=(-30.0, 30.0),
-    lumbar_extension_deg=0.0,
+    lumbar_framework_deg=0.0,
     right_shoulder_flexion_deg=(20.0, 90.0),
 )
 optimized = posture_optimized.optimize_screen_position(
@@ -421,7 +421,7 @@ Altri parametri e proprietà:
 ## Importazione STEP
 
 L'importazione STEP è disponibile da
-`opensim_extensions.models.equipment`. Il parser crea corpi OpenSim con massa,
+`opensim_frameworks.models.equipment`. Il parser crea corpi OpenSim con massa,
 centro di massa e inerzia ricavati dalla geometria e dalle densità dei
 materiali STEP; mantiene inoltre i colori delle superfici nelle mesh VTP.
 Le mesh vengono scritte nella directory indicata e collegate ai corpi
@@ -430,7 +430,7 @@ importati.
 ```python
 from pathlib import Path
 
-from opensim_extensions.models.equipment import read_step
+from opensim_frameworks.models.equipment import read_step
 
 step_file = Path("cad/frame.step")
 mesh_directory = Path("output/meshes")
@@ -453,7 +453,7 @@ annidati; le foglie mesh sono un `Path`, oppure una tupla di `Path` quando i
 colori richiedono più file.
 
 ```python
-from opensim_extensions.models.equipment import (
+from opensim_frameworks.models.equipment import (
     read_step,
     weld_bodies,
 )
@@ -490,7 +490,7 @@ sintassi `framework["user"]` sia, quando il nome non è riservato, con
 `framework.user`.
 
 ```python
-from opensim_extensions import Bike
+from opensim_frameworks import Bike
 
 framework = Bike().fit_user()
 state = framework.initSystem()
@@ -538,7 +538,7 @@ i modelli che contengono un `opensim.FreeJoint`.
 ## Visualizzazione ed esportazione
 
 ```python
-from opensim_extensions import VTKViewer
+from opensim_frameworks import VTKViewer
 
 viewer = VTKViewer()
 window = viewer.show(framework, motion="motion.sto", loop=True, fps=30.0)
@@ -627,14 +627,14 @@ impostare pytest come framework di test Python.
 
 ## API pubblica
 
-Gli elementi inclusi nell'API di wildcard `opensim_extensions` (`__all__`) sono:
+Gli elementi inclusi nell'API di wildcard `opensim_frameworks` (`__all__`) sono:
 `User`, `Bike`, `IRON_DENSITY_KG_M3`, `Framework`, `save_animation`,
 `VTKViewer`, `VTKVisualizer`, `MotionData`, `MotionPlayer`, `PlayerWindow`,
 `DEFAULT_SIZE` e `VIEW_NAMES`.
 `Equipment`, `Screen`, `read_step` e `weld_bodies` sono disponibili nel
-sottopackage `opensim_extensions.models.equipment`; `VisualErgonomicsFramework`
-è esposto da `opensim_extensions.framework`. Le primitive geometriche e gli helper per
-creare corpi OpenSim sono esposti nel sottopackage `opensim_extensions.bodies`, ad esempio
+sottopackage `opensim_frameworks.models.equipment`; `VisualErgonomicsFramework`
+è esposto da `opensim_frameworks.framework`. Le primitive geometriche e gli helper per
+creare corpi OpenSim sono esposti nel sottopackage `opensim_frameworks.bodies`, ad esempio
 `Box`, `Cylinder`, `Disk`, `Ellipsoid`, `Sphere`, `Tube` e
 `mass_properties`. `weld_bodies` combina corpi OpenSim rigidamente connessi.
 Le primitive sono espresse in unità SI e i builder forniscono helper per

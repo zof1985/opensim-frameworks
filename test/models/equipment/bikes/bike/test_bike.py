@@ -3,8 +3,8 @@ import math
 import numpy as np
 import pytest
 
-from opensim_extensions import Bike, User
-from opensim_extensions.bodies import (
+from opensim_frameworks import Bike, User
+from opensim_frameworks.bodies import (
     Box,
     Cylinder,
     Disk,
@@ -14,19 +14,17 @@ from opensim_extensions.bodies import (
     cylinder_between,
     mass_properties,
 )
-from opensim_extensions.models.equipment import Equipment, Screen
-from opensim_extensions.models.equipment.bikes.bike.fitting import (
+from opensim_frameworks.models.equipment import Equipment, Screen
+from opensim_frameworks.models.equipment.bikes.bike.fitting import (
     _horn_local,
 )
-from opensim_extensions.models.equipment.bikes.bike.bike import horn_direction
+from opensim_frameworks.models.equipment.bikes.bike.bike import horn_direction
 
 
 def _forefoot_midpoint_pedal_coordinates_mm(bike, user, side):
     pedal = bike.getBodySet().get(f"pedal_{'right' if side == 'r' else 'left'}")
     transform = pedal.getTransformInGround(bike.state)
-    rotation = np.array(
-        [[transform.R().get(i, j) for j in range(3)] for i in range(3)]
-    )
+    rotation = np.array([[transform.R().get(i, j) for j in range(3)] for i in range(3)])
     position = np.array([transform.p().get(i) for i in range(3)])
     markers = user.getMarkerSet()
     toe = markers.get(f"{side.upper()}TOE")
@@ -81,9 +79,7 @@ def _foot_pedal_orientation_errors_deg(bike, user, side):
 
     pedal_name = "pedal_right" if side == "r" else "pedal_left"
     transform = bike.getBodySet().get(pedal_name).getTransformInGround(bike.state)
-    rotation = np.array(
-        [[transform.R().get(i, j) for j in range(3)] for i in range(3)]
-    )
+    rotation = np.array([[transform.R().get(i, j) for j in range(3)] for i in range(3)])
     pedal_axis = rotation[:, 0]
     pedal_normal = rotation[:, 1]
     if np.dot(sole_normal, pedal_normal) < 0:
@@ -225,9 +221,7 @@ def test_bike_setters_density_and_steps():
     bike.frame_density = 2 * bike.frame_density
     assert bike.component_masses_kg["frame"] == pytest.approx(2 * iron)
     bike.seat_tube_step = 0
-    assert np.allclose(
-        bike.seat_tube_top, [*bike.seat_tube_range_mm[0], 0.0]
-    )
+    assert np.allclose(bike.seat_tube_top, [*bike.seat_tube_range_mm[0], 0.0])
     with pytest.raises(ValueError):
         bike.seat_tube_step = 99
     with pytest.raises(ValueError):
@@ -250,9 +244,7 @@ def test_pedal_spacing_is_numeric_independent_and_measures_the_inner_face_gap():
     left = bike.getBodySet().get("pedal_left").getPositionInGround(bike.state)
     inner_gap = abs(right.get(2) - left.get(2)) * 1000.0 - pedal_width
     assert inner_gap == pytest.approx(205.0)
-    assert bike.pedal_lateral_offset == pytest.approx(
-        205.0 / 2 + pedal_width
-    )
+    assert bike.pedal_lateral_offset == pytest.approx(205.0 / 2 + pedal_width)
     with pytest.raises(TypeError):
         Bike(pedal_spacing_mm=None)
 
@@ -277,12 +269,8 @@ def test_bike_screen_geometry_and_center_follow_configured_offsets():
         bike.screen_base,
     )
     screen_rotation = screen.getTransformInGround(bike.state).R()
-    panel_up = np.array(
-        [screen_rotation.get(i, 1) for i in range(3)]
-    )
-    actual_center_mm = (
-        bike.screen_base + panel_up * bike._screen_height_mm / 2
-    )
+    panel_up = np.array([screen_rotation.get(i, 1) for i in range(3)])
+    actual_center_mm = bike.screen_base + panel_up * bike._screen_height_mm / 2
     assert np.allclose(actual_center_mm, bike.screen_center)
     screen_joint = bike.getJointSet().get("screen_weld")
     assert screen_joint.getConcreteClassName() == "WeldJoint"
@@ -295,9 +283,7 @@ def test_bike_screen_geometry_and_center_follow_configured_offsets():
     assert mount_body.getPropertyByName("components").size() == 2
 
     bike.screen_horizontal_offset_mm = 80.0
-    assert bike.screen_base[0] == pytest.approx(
-        bike.handlebar_position[0] + 80.0
-    )
+    assert bike.screen_base[0] == pytest.approx(bike.handlebar_position[0] + 80.0)
     assert bike.getBodySet().get("screen") is not None
 
 
@@ -331,7 +317,6 @@ def test_bike_directed_angles_use_the_world_xy_reference():
     assert math.degrees(math.atan2(stem_vector[1], stem_vector[0])) == pytest.approx(
         60.0, abs=0.01
     )
-
 
 
 def test_horn_pitch_raises_tips_and_positive_roll_turns_horns_medially():
@@ -414,9 +399,8 @@ def test_fit_user_feet_align_forefoot_markers_with_pedals_and_hands_are_neutral(
     for side, sign in (("R", 1.0), ("L", -1.0)):
         mt5 = user.getMarkerSet().get(f"{side}MT5").getLocationInGround(state)
         toe = user.getMarkerSet().get(f"{side}TOE").getLocationInGround(state)
-        pedal_center_z = (
-            bike.crank_axis_position[2] * 1e-3
-            + sign * (bike.pedal_lateral_offset * 1e-3 - pedal_width / 2)
+        pedal_center_z = bike.crank_axis_position[2] * 1e-3 + sign * (
+            bike.pedal_lateral_offset * 1e-3 - pedal_width / 2
         )
         inner_edge_z = pedal_center_z - sign * pedal_width / 2
         assert toe.get(2) == pytest.approx(inner_edge_z, abs=5e-3)
@@ -442,7 +426,9 @@ def test_fit_user_feet_align_forefoot_markers_with_pedals_and_hands_are_neutral(
     assert framework.couplings["foot_right"].kind == "weld"
     assert framework.couplings["foot_left"].kind == "weld"
     for side in ("r", "l"):
-        assert user.getCoordinateSet().get(f"pro_sup_{side}").getValue(state) == pytest.approx(np.pi / 2)
+        assert user.getCoordinateSet().get(f"pro_sup_{side}").getValue(
+            state
+        ) == pytest.approx(np.pi / 2)
 
 
 @pytest.mark.parametrize("shoe_height_mm", [0.0, 30.0])
@@ -459,7 +445,9 @@ def test_fit_user_places_forefoot_midpoints_at_the_requested_shoe_height(
             shoe_height_mm,
             abs=1.0,
         )
-    assert user.getCoordinateSet().get("ankle_angle_l").getValue(user.state) == pytest.approx(
+    assert user.getCoordinateSet().get("ankle_angle_l").getValue(
+        user.state
+    ) == pytest.approx(
         0.0,
         abs=1e-3,
     )
@@ -513,9 +501,7 @@ def test_fit_user_adjusts_unspecified_trunk_to_reach_handlebar_horns():
     for side, marker_name in (("r", "RPALM"), ("l", "LPALM")):
         marker = user.getMarkerSet().get(marker_name).getLocationInGround(user.state)
         palm_center = np.array([marker.get(index) for index in range(3)])
-        target = bike._handlebar_position_m + _horn_local(
-            bike, side, hand_breadth_mm
-        )
+        target = bike._handlebar_position_m + _horn_local(bike, side, hand_breadth_mm)
         assert palm_center == pytest.approx(target, abs=5e-3)
     coordinates = user.getCoordinateSet()
     for right_name, left_name in (
@@ -551,12 +537,12 @@ def test_fit_user_can_keep_requested_trunk_shoulder_and_elbow_angles():
     assert bike.fit_report["elbow_flexion_deg"] == pytest.approx(20.0, abs=0.1)
     coordinates = user.getCoordinateSet()
     for side in ("r", "l"):
-        assert coordinates.get(f"arm_flex_{side}").getValue(user.state) == pytest.approx(
-            math.radians(60.0), abs=1e-3
-        )
-        assert coordinates.get(f"elbow_flex_{side}").getValue(user.state) == pytest.approx(
-            math.radians(20.0), abs=1e-3
-        )
+        assert coordinates.get(f"arm_flex_{side}").getValue(
+            user.state
+        ) == pytest.approx(math.radians(60.0), abs=1e-3)
+        assert coordinates.get(f"elbow_flex_{side}").getValue(
+            user.state
+        ) == pytest.approx(math.radians(20.0), abs=1e-3)
     assert any(
         abs(coordinates.get(f"arm_add_{side}").getValue(user.state)) > 1e-3
         for side in ("r", "l")
@@ -632,7 +618,7 @@ def test_fit_user_without_user_uses_the_default_benchmark_rider_and_pose():
 
 def test_fit_user_rejects_non_finite_angles():
     import pytest
-    from opensim_extensions import User
+    from opensim_frameworks import User
 
     with pytest.raises(ValueError):
         Bike().fit_user(User("M", height_cm=178), shoulder_flexion_deg=float("nan"))

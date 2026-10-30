@@ -3,12 +3,12 @@
 import importlib
 import pkgutil
 
-import opensim_extensions
+import opensim_frameworks
 
 
 def public_modules():
     for info in pkgutil.walk_packages(
-        opensim_extensions.__path__, "opensim_extensions."
+        opensim_frameworks.__path__, "opensim_frameworks."
     ):
         if any(part.startswith("_") for part in info.name.split(".")[1:]):
             continue
@@ -28,7 +28,7 @@ def test_every_public_module_has_an_explicit_clean_all():
 
 
 def test_top_level_api_exposes_requested_public_elements():
-    assert not hasattr(opensim_extensions, "__all__")
+    assert not hasattr(opensim_frameworks, "__all__")
     assert {
         "Framework",
         "Bike",
@@ -42,4 +42,4 @@ def test_top_level_api_exposes_requested_public_elements():
         "MotionData",
         "MotionPlayer",
         "PlayerWindow",
-    } <= set(vars(opensim_extensions))
+    } <= set(vars(opensim_frameworks))

@@ -6,16 +6,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from opensim_extensions.models.equipment import (
+from opensim_frameworks.models.equipment import (
     read_step,
     weld_bodies,
 )
-from opensim_extensions.models.equipment.equipment import opensim
-from opensim_extensions.utils.functions import StepBodyImport
+from opensim_frameworks.models.equipment.equipment import opensim
+from opensim_frameworks.utils.functions import StepBodyImport
 
-functions_module = importlib.import_module(
-    "opensim_extensions.utils.functions"
-)
+functions_module = importlib.import_module("opensim_frameworks.utils.functions")
 
 
 def _write_box_step(path):
@@ -48,9 +46,7 @@ def test_read_step_returns_body_with_mass_properties_and_mesh(tmp_path):
     _write_box_step(step_file)
     mesh_directory = tmp_path / "custom_meshes"
 
-    bodies, meshes = read_step(
-        step_file, mesh_directory, density_kg_m3=1000.0
-    )
+    bodies, meshes = read_step(step_file, mesh_directory, density_kg_m3=1000.0)
 
     body = bodies["box"]
     assert body.getName() == "box"
@@ -60,10 +56,7 @@ def test_read_step_returns_body_with_mass_properties_and_mesh(tmp_path):
         [0.005, 0.01, 0.015],
     )
     np.testing.assert_allclose(
-        [
-            body.getInertia().getMoments().get(index)
-            for index in range(3)
-        ],
+        [body.getInertia().getMoments().get(index) for index in range(3)],
         [6.5e-7, 5e-7, 2.5e-7],
     )
 
@@ -93,9 +86,7 @@ def test_read_step_returns_parallel_body_and_mesh_trees(tmp_path):
     assert meshes == {"box": (mesh_directory / "box.vtp").resolve()}
 
 
-def test_read_step_preserves_nested_assembly_paths(
-    tmp_path, monkeypatch
-):
+def test_read_step_preserves_nested_assembly_paths(tmp_path, monkeypatch):
     frame = opensim.Body(
         "frame",
         1.0,
@@ -117,12 +108,8 @@ def test_read_step_preserves_nested_assembly_paths(
         functions_module,
         "_read_step_imports",
         lambda *args, **kwargs: {
-            "frame": StepBodyImport(
-                frame, (frame_mesh,), ("machine", "assembly")
-            ),
-            "pad": StepBodyImport(
-                pad, pad_meshes, ("machine", "assembly")
-            ),
+            "frame": StepBodyImport(frame, (frame_mesh,), ("machine", "assembly")),
+            "pad": StepBodyImport(pad, pad_meshes, ("machine", "assembly")),
         },
     )
 
@@ -246,9 +233,7 @@ def test_weld_bodies_keeps_meshes_with_different_colors_separate(tmp_path):
     assert isinstance(body_only, opensim.Body)
     assert body_only.getPropertyByName("attached_geometry").size() == 2
 
-    combined, fused_mesh_paths = weld_bodies(
-        bodies, [mesh_path, mesh_path]
-    )
+    combined, fused_mesh_paths = weld_bodies(bodies, [mesh_path, mesh_path])
 
     assert combined.getPropertyByName("attached_geometry").size() == 2
     assert len(fused_mesh_paths) == 2

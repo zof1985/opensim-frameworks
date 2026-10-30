@@ -1,10 +1,10 @@
 """Save the player's current 3D view as an image, or a loaded motion as a video.
 
-Used by the "Export" controls in :mod:`opensim_extensions.viewer.player` -- kept
+Used by the "Export" controls in :mod:`opensim_frameworks.viewer.player` -- kept
 separate from that module since these are pure render/encode operations
 (no Tk widgets), independently testable/reusable without a live window.
 ``render_motion_animation`` reuses the player's existing visualizer; the
-off-screen :func:`opensim_extensions.viewer.animation.save_animation` creates
+off-screen :func:`opensim_frameworks.viewer.animation.save_animation` creates
 its own visualizer for a model and motion table.
 """
 
@@ -21,8 +21,8 @@ def save_image(visualizer: Any, path: str | Path, *, dpi: int = 300) -> None:
 
     Parameters
     ----------
-    visualizer : opensim_extensions.viewer.visualizer.VTKVisualizer
-        The visualizer to capture (see :meth:`~opensim_extensions.viewer.visualizer.VTKVisualizer.capture_frame`).
+    visualizer : opensim_frameworks.viewer.visualizer.VTKVisualizer
+        The visualizer to capture (see :meth:`~opensim_frameworks.viewer.visualizer.VTKVisualizer.capture_frame`).
     path : str or pathlib.Path
         Destination file. Any existing file at ``path`` is overwritten.
     dpi : int, optional
@@ -57,14 +57,14 @@ def render_motion_animation(
     ----------
     model : opensim.Model
         Model the motion drives.
-    data : opensim_extensions.viewer.player.MotionData
+    data : opensim_frameworks.viewer.player.MotionData
         The motion to render, start to end.
-    visualizer : opensim_extensions.viewer.visualizer.VTKVisualizer
+    visualizer : opensim_frameworks.viewer.visualizer.VTKVisualizer
         The visualizer to capture each frame from.
     apply_time : callable
         ``(model, data, time) -> None``, applying ``data``'s coordinate
         values at ``time`` to ``model`` and redrawing ``visualizer`` --
-        pass :func:`opensim_extensions.viewer.player._apply_time`.
+        pass :func:`opensim_frameworks.viewer.player._apply_time`.
     path : str or pathlib.Path
         Destination ``.mp4`` file. Any existing file at ``path`` is
         overwritten.
@@ -83,7 +83,11 @@ def render_motion_animation(
     # already controllable (DEFAULT_SIZE/resize()), so the saved video
     # should match it exactly rather than being padded.
     writer = imageio.get_writer(
-        str(path), fps=fps, codec="libx264", quality=8, macro_block_size=1,
+        str(path),
+        fps=fps,
+        codec="libx264",
+        quality=8,
+        macro_block_size=1,
     )
     try:
         for index in range(frame_count + 1):

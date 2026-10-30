@@ -68,7 +68,9 @@ def _remove_segment_mass(body: Any, mass: float, center: np.ndarray) -> None:
     if remaining_mass <= 0:
         raise ValueError(f"cannot split {mass:g} kg from body {body.getName()!r}")
     original_center = np.array([body.getMassCenter().get(i) for i in range(3)])
-    remaining_center = (original_mass * original_center - mass * center) / remaining_mass
+    remaining_center = (
+        original_mass * original_center - mass * center
+    ) / remaining_mass
     body.scaleMass(remaining_mass / original_mass)
     body.setMassCenter(opensim.Vec3(*remaining_center))
 
@@ -134,7 +136,7 @@ class User(opensim.Model, _MeasurementMixin, _PostureMixin, _JointCenterMixin):
         ``weight_kg`` resolved for this user's height/percentile (see
         :attr:`anthropometry`) -- i.e. mass is always resolved "like the
         other measurements" (from height when given, via
-        :func:`~opensim_extensions.models.user.data.resolve_reference`),
+        :func:`~opensim_frameworks.models.user.data.resolve_reference`),
         never left as a pure side effect of geometric scaling. See
         :attr:`mass_kg` to read back the resolved value either way.
     dataset : str or pathlib.Path, optional
@@ -185,7 +187,9 @@ class User(opensim.Model, _MeasurementMixin, _PostureMixin, _JointCenterMixin):
         register_geometry_search_path(opensim, DEFAULT_MESHES_DIR)
         opensim.Model.__init__(self, str(DEFAULT_MODEL_PATH))
         self._unlock_coordinates()
-        self._baseline = resolve_reference(self.gender, percentile=50.0, dataset=dataset)
+        self._baseline = resolve_reference(
+            self.gender, percentile=50.0, dataset=dataset
+        )
         self._add_anatomical_bodies()
         self.finalizeConnections()
         self.state = self.initSystem()
@@ -231,9 +235,7 @@ class User(opensim.Model, _MeasurementMixin, _PostureMixin, _JointCenterMixin):
 
         neck_center = np.array([0.0, 0.445, 0.0])
         neck_mass = 1000.0 * math.pi * 0.045**2 * 0.09
-        neck_radial_inertia = neck_mass * (
-            3 * 0.045**2 + 0.09**2
-        ) / 12
+        neck_radial_inertia = neck_mass * (3 * 0.045**2 + 0.09**2) / 12
         neck_axial_inertia = 0.5 * neck_mass * 0.045**2
         if spine_mesh is None:
             raise RuntimeError("The bundled model does not contain hat_spine.vtp")
@@ -332,9 +334,7 @@ class User(opensim.Model, _MeasurementMixin, _PostureMixin, _JointCenterMixin):
             ("REYE", (0.075, 0.56, 0.03)),
             ("LEYE", (0.075, 0.56, -0.03)),
         ):
-            self.addMarker(
-                opensim.Marker(marker_name, skull, opensim.Vec3(*location))
-            )
+            self.addMarker(opensim.Marker(marker_name, skull, opensim.Vec3(*location)))
 
         baseline_palm_length = self._baseline.values["palmlength"] * 1e-3
         for side, marker_name in (("r", "RPALM"), ("l", "LPALM")):
@@ -383,9 +383,7 @@ class User(opensim.Model, _MeasurementMixin, _PostureMixin, _JointCenterMixin):
             independent_values = self.opensim.Vector(independent_names.getSize(), 0.0)
             for coordinate_index in range(independent_names.getSize()):
                 independent = coordinates.get(independent_names.get(coordinate_index))
-                independent_values.set(
-                    coordinate_index, independent.getDefaultValue()
-                )
+                independent_values.set(coordinate_index, independent.getDefaultValue())
             dependent = coordinates.get(coupler.getDependentCoordinateName())
             dependent.setDefaultValue(
                 coupler.getFunction().calcValue(independent_values)
@@ -435,9 +433,7 @@ class User(opensim.Model, _MeasurementMixin, _PostureMixin, _JointCenterMixin):
             scale_set.adoptAndAppend(scale)
         self.scale(self.state, scale_set, True)
         for side in ("left", "right"):
-            marker = self.getMarkerSet().get(
-                "LPALM" if side == "left" else "RPALM"
-            )
+            marker = self.getMarkerSet().get("LPALM" if side == "left" else "RPALM")
             marker.set_location(
                 self.opensim.Vec3(
                     0.0,
@@ -569,9 +565,7 @@ class User(opensim.Model, _MeasurementMixin, _PostureMixin, _JointCenterMixin):
         self._sync_coordinate_defaults()
         mesh_files = self._referenced_mesh_files() if with_meshes else []
         if with_meshes:
-            self._export_mesh_files(
-                destination.parent / mesh_subdirectory, mesh_files
-            )
+            self._export_mesh_files(destination.parent / mesh_subdirectory, mesh_files)
 
         try:
             if with_meshes:
@@ -775,7 +769,7 @@ class User(opensim.Model, _MeasurementMixin, _PostureMixin, _JointCenterMixin):
 
         Mass feeds into the multibody system's mass matrix, built once in
         ``initSystem()`` -- the same reason
-        :meth:`~opensim_extensions.components.Body.set_mass` calls
+        :meth:`~opensim_frameworks.components.Body.set_mass` calls
         :meth:`User.reinitialize` after
         changing a single body's mass -- so this does the same once every
         body has been rescaled, preserving whatever posture is current when
@@ -817,7 +811,10 @@ class User(opensim.Model, _MeasurementMixin, _PostureMixin, _JointCenterMixin):
                 target[1] / current[1],
                 target[2] / current[2],
             )
-            if any(not math.isclose(ratio, 1.0, rel_tol=0.0, abs_tol=1e-12) for ratio in ratios):
+            if any(
+                not math.isclose(ratio, 1.0, rel_tol=0.0, abs_tol=1e-12)
+                for ratio in ratios
+            ):
                 incremental_factors[body_name] = ratios
         if incremental_factors:
             self.scale_bodies(incremental_factors)
@@ -996,7 +993,7 @@ class User(opensim.Model, _MeasurementMixin, _PostureMixin, _JointCenterMixin):
 
         Returns
         -------
-        opensim_extensions.models.user.data.AnthropometricReference
+        opensim_frameworks.models.user.data.AnthropometricReference
             Internal reference object exposing ``gender``, ``percentile``,
             ``values`` (a ``dict`` mapping every numeric ANSUR II column
             resolved for this user to its value in the dataset's original

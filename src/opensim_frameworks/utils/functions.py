@@ -578,7 +578,7 @@ def _read_step_imports(
         )
     except ImportError as error:
         raise ImportError(
-            "read_step requires pythonocc-core (pip install opensim-extensions[step])"
+            "read_step requires pythonocc-core (pip install opensim-frameworks[step])"
         ) from error
 
     step_path = Path(file).expanduser().resolve()

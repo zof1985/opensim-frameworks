@@ -7,7 +7,7 @@ import pytest
 
 opensim = pytest.importorskip("opensim")
 
-from opensim_extensions import User
+from opensim_frameworks import User
 
 
 def make_user() -> User:

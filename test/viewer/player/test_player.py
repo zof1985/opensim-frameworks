@@ -1,12 +1,13 @@
 import numpy as np
 import pytest
 
-from opensim_extensions.utils.functions import register_geometry_search_path
+from opensim_frameworks.utils.functions import register_geometry_search_path
+
 # DEFAULT_MODEL_PATH is User's bundled model, reused here as a real .osim
 # fixture with both a rotational (hip_flexion_r) and a translational
 # (pelvis_tx) coordinate, to test MotionData's unit handling.
-from opensim_extensions.models.user.user import DEFAULT_MESHES_DIR, DEFAULT_MODEL_PATH
-from opensim_extensions.viewer.player import MotionData, MotionPlayer
+from opensim_frameworks.models.user.user import DEFAULT_MESHES_DIR, DEFAULT_MODEL_PATH
+from opensim_frameworks.viewer.player import MotionData, MotionPlayer
 
 opensim = pytest.importorskip("opensim")
 

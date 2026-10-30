@@ -1,8 +1,8 @@
 """Turning an OpenSim ``DecorativeGeometry`` into a VTK source, shared.
 
-Both :class:`~opensim_extensions.viewer.visualizer.VTKVisualizer` (building a
-renderable actor) and :class:`~opensim_extensions.components.Body` (computing
-local-frame bounds for :attr:`~opensim_extensions.components.Body.corners`)
+Both :class:`~opensim_frameworks.viewer.visualizer.VTKVisualizer` (building a
+renderable actor) and :class:`~opensim_frameworks.components.Body` (computing
+local-frame bounds for :attr:`~opensim_frameworks.components.Body.corners`)
 need the exact same ``Mesh``/``Brick``/``Cylinder``/``Sphere`` dispatch;
 this module is that one shared implementation instead of two copies that
 could drift apart.
@@ -29,13 +29,13 @@ def build_source(
 
     ``None`` for a mesh whose file can't be resolved (via ``resolve_file``),
     or a geometry type not handled (only ``Mesh``/``Brick``/``Cylinder``/
-    ``Sphere`` -- what :mod:`opensim_extensions.operators`'s
+    ``Sphere`` -- what :mod:`opensim_frameworks.operators`'s
     ``add_box_body``/``add_cylinder_body``/``add_sphere_body`` and every
     bundled model's own mesh attach -- are).
 
     Applies ``geometry``'s own ``scale_factors`` (every ``opensim.Geometry``
     has one, default ``(1, 1, 1)``) on top of the source -- this is what
-    makes a scaled mesh (e.g. every :class:`~opensim_extensions.models.user.User`
+    makes a scaled mesh (e.g. every :class:`~opensim_frameworks.models.user.User`
     body not at the base model's own size) render at its actual scaled
     size instead of the generic unscaled one baked into the mesh file,
     which would otherwise visibly detach a long bone's rendered geometry

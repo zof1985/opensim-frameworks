@@ -1,4 +1,4 @@
-"""Place an anthropometric :class:`~opensim_extensions.User` on a :class:`Bike`."""
+"""Place an anthropometric :class:`~opensim_frameworks.User` on a :class:`Bike`."""
 
 from __future__ import annotations
 
@@ -338,9 +338,7 @@ def _handlebar_pose(
     return bike.handlebar_position_at_m(tube_step, slide_step), np.eye(3)
 
 
-def _horn_local(
-    bike: Any, side: str, hand_breadth_mm: float
-) -> np.ndarray:
+def _horn_local(bike: Any, side: str, hand_breadth_mm: float) -> np.ndarray:
     """Return the palm-centre target tangent to a horn at its length midpoint."""
     sign = 1.0 if side == "r" else -1.0
     start = np.array([0.0, 0.0, sign * bike.handlebar_width_mm * 1e-3 / 2])
@@ -353,14 +351,8 @@ def _horn_local(
         normal = fallback - np.dot(fallback, direction) * direction
         normal_length = float(np.linalg.norm(normal))
     normal /= normal_length
-    contact_offset = (
-        bike.handlebar_diameter_mm + hand_breadth_mm
-    ) * 0.5e-3
-    return (
-        start
-        + bike.horn_length_mm * 1e-3 / 2 * direction
-        + contact_offset * normal
-    )
+    contact_offset = (bike.handlebar_diameter_mm + hand_breadth_mm) * 0.5e-3
+    return start + bike.horn_length_mm * 1e-3 / 2 * direction + contact_offset * normal
 
 
 class _ArmFit:
@@ -698,10 +690,7 @@ def fit_user(
             tube = int(
                 np.argmin(
                     [
-                        abs(
-                            bike.handlebar_position_at_m(step, slide)[1]
-                            - seat_top_y
-                        )
+                        abs(bike.handlebar_position_at_m(step, slide)[1] - seat_top_y)
                         for step in range(bike.handlebar_tube_steps + 1)
                     ]
                 )
@@ -751,9 +740,7 @@ def fit_user(
 
     bike.set_crank_angle_deg(0.0)
     bike.set_pedal_right_angle_deg(0.0)
-    bike.set_pedal_left_angle_deg(
-        math.degrees(legs_solution["left_pedal_pitch"])
-    )
+    bike.set_pedal_left_angle_deg(math.degrees(legs_solution["left_pedal_pitch"]))
 
     for side, name in (("r", "right"), ("l", "left")):
         calcn = user.getBodySet().get(f"calcn_{side}")

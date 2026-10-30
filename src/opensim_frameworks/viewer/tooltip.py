@@ -1,13 +1,13 @@
 """A floating, rounded-corner tooltip following the mouse cursor.
 
-Used by :mod:`opensim_extensions.viewer.player` to show the hovered component's
+Used by :mod:`opensim_frameworks.viewer.player` to show the hovered component's
 name and ground-frame position next to the cursor, instead of a fixed
 bottom status bar. Rounded corners are faked with a Windows-only trick
 (``-transparentcolor`` keys out every pixel of that exact colour, making
 the area outside the rounded shape drawn on the canvas invisible *and*
 click-through) -- on other platforms this falls back to a plain
 rectangular popup, the same per-platform split as the visualizer embedding
-in :mod:`opensim_extensions.viewer.win32_embed`.
+in :mod:`opensim_frameworks.viewer.win32_embed`.
 """
 
 from __future__ import annotations
@@ -29,22 +29,36 @@ _OFFSET = 18  # pixels from the cursor, so the tooltip never sits under it
 _LINE_SPACING = 4
 
 
-def _rounded_rect_points(x1: float, y1: float, x2: float, y2: float, radius: float) -> list[float]:
+def _rounded_rect_points(
+    x1: float, y1: float, x2: float, y2: float, radius: float
+) -> list[float]:
     """Return the point list for a rounded-rectangle ``create_polygon(..., smooth=True)``."""
     radius = max(0.0, min(radius, (x2 - x1) / 2, (y2 - y1) / 2))
     return [
-        x1 + radius, y1,
-        x2 - radius, y1,
-        x2, y1,
-        x2, y1 + radius,
-        x2, y2 - radius,
-        x2, y2,
-        x2 - radius, y2,
-        x1 + radius, y2,
-        x1, y2,
-        x1, y2 - radius,
-        x1, y1 + radius,
-        x1, y1,
+        x1 + radius,
+        y1,
+        x2 - radius,
+        y1,
+        x2,
+        y1,
+        x2,
+        y1 + radius,
+        x2,
+        y2 - radius,
+        x2,
+        y2,
+        x2 - radius,
+        y2,
+        x1 + radius,
+        y2,
+        x1,
+        y2,
+        x1,
+        y2 - radius,
+        x1,
+        y1 + radius,
+        x1,
+        y1,
     ]
 
 
@@ -86,7 +100,7 @@ class HoverTooltip:
         Parameters
         ----------
         info : tuple[str, float, float, float] or None
-            ``(label, x, y, z)`` -- see :meth:`~opensim_extensions.viewer.visualizer.VTKVisualizer.hover_info`
+            ``(label, x, y, z)`` -- see :meth:`~opensim_frameworks.viewer.visualizer.VTKVisualizer.hover_info`
             -- or ``None`` when nothing is hovered, which hides the tooltip.
         """
         if info is None:
@@ -108,12 +122,19 @@ class HoverTooltip:
         self._canvas.config(width=width, height=height)
         self._canvas.create_polygon(
             _rounded_rect_points(1, 1, width - 1, height - 1, _RADIUS),
-            smooth=True, fill=_BG, outline="",
+            smooth=True,
+            fill=_BG,
+            outline="",
         )
         y_cursor = _PAD_Y
         for (text, font, color), line_height in zip(lines, line_heights):
             self._canvas.create_text(
-                _PAD_X, y_cursor, anchor="nw", text=text, font=font, fill=color,
+                _PAD_X,
+                y_cursor,
+                anchor="nw",
+                text=text,
+                font=font,
+                fill=color,
             )
             y_cursor += line_height + _LINE_SPACING
 

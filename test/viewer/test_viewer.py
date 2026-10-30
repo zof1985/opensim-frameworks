@@ -4,10 +4,10 @@ import pytest
 
 opensim = pytest.importorskip("opensim")
 
-from opensim_extensions.viewer import VTKViewer, viewer as viewer_module
-from opensim_extensions.viewer.visualizer import VTKVisualizer
-from opensim_extensions.viewer.viewer import _ViewerModel
-from opensim_extensions.framework import Framework
+from opensim_frameworks.viewer import VTKViewer, viewer as viewer_module
+from opensim_frameworks.viewer.visualizer import VTKVisualizer
+from opensim_frameworks.viewer.viewer import _ViewerModel
+from opensim_frameworks.framework import Framework
 
 
 def make_model() -> opensim.Model:
@@ -192,7 +192,7 @@ def test_save_snapshot_writes_png_with_default_and_custom_dpi(tmp_path):
             )
 
 
-def test_save_snapshot_rejects_unsupported_extensions_and_frame_without_motion(
+def test_save_snapshot_rejects_unsupported_frameworks_and_frame_without_motion(
     tmp_path,
 ):
     model = make_pin_model()

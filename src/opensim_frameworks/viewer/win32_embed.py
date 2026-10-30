@@ -40,7 +40,7 @@ def hwnd_from_vtk_window_id(window_id: Any) -> int:
     ----------
     window_id : object
         SWIG pointer encoding returned by
-        :meth:`~opensim_extensions.viewer.visualizer.VTKVisualizer.get_window_id`.
+        :meth:`~opensim_frameworks.viewer.visualizer.VTKVisualizer.get_window_id`.
 
     Returns
     -------
@@ -106,7 +106,13 @@ if IS_WINDOWS:
         _user32.SetWindowLongPtrW(hwnd, _GWL_STYLE, style)
         _user32.SetParent(hwnd, parent_hwnd)
         _user32.SetWindowPos(
-            hwnd, None, 0, 0, 0, 0, _SWP_FRAMECHANGED | _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOZORDER
+            hwnd,
+            None,
+            0,
+            0,
+            0,
+            0,
+            _SWP_FRAMECHANGED | _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOZORDER,
         )
 
     def resize_embedded_window(hwnd: int, width: int, height: int) -> None:

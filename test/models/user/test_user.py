@@ -3,20 +3,20 @@ import math
 import numpy as np
 import pytest
 
-from opensim_extensions import User
+from opensim_frameworks import User
 
 # Tests use the resolved dataset directly to exercise ANSUR interpolation.
-from opensim_extensions.models.user.data import (
+from opensim_frameworks.models.user.data import (
     DEFAULT_DATASET,
     load_ansur,
     resolve_reference,
 )
-from opensim_extensions.models.user.user import (
+from opensim_frameworks.models.user.user import (
     DEFAULT_MESHES_DIR,
     _FOOT_MARKER_NAMES,
     _JOINT_CENTER_NAMES,
 )
-from opensim_extensions.models.user.posture_table import (
+from opensim_frameworks.models.user.posture_table import (
     POSTURE_COORDINATE_NAMES as _POSTURE_COORDINATE_NAMES,
 )
 
@@ -241,7 +241,7 @@ def test_gender_only_accepts_m_or_f():
 
 
 @requires_opensim
-def test_instances_are_backed_by_independent_opensim_extensions():
+def test_instances_are_backed_by_independent_opensim_frameworks():
     user_50 = make_user(gender="M", percentile=50)
     user_75 = make_user(gender="M", percentile=75)
 
@@ -282,8 +282,12 @@ def test_mass_kg_does_not_affect_geometric_scaling():
     heavy_user = make_user(gender="M", height_cm=180.0, mass_kg=200.0)
     light_user = make_user(gender="M", height_cm=180.0, mass_kg=50.0)
 
-    assert heavy_user.right_thigh_length == pytest.approx(default_user.right_thigh_length)
-    assert light_user.right_thigh_length == pytest.approx(default_user.right_thigh_length)
+    assert heavy_user.right_thigh_length == pytest.approx(
+        default_user.right_thigh_length
+    )
+    assert light_user.right_thigh_length == pytest.approx(
+        default_user.right_thigh_length
+    )
     assert heavy_user.left_hip == pytest.approx(default_user.left_hip)
     assert light_user.left_hip == pytest.approx(default_user.left_hip)
 
@@ -399,9 +403,7 @@ def test_user_has_articulated_skull_eye_palm_markers_and_wrist_joints():
         opensim.Mesh.safeDownCast(
             bodies.get("neck").get_attached_geometry(i)
         ).get_mesh_file()
-        for i in range(
-            bodies.get("neck").getPropertyByName("attached_geometry").size()
-        )
+        for i in range(bodies.get("neck").getPropertyByName("attached_geometry").size())
     ]
     assert neck_meshes == ["hat_neck.vtp"]
     torso_meshes = [
@@ -411,14 +413,14 @@ def test_user_has_articulated_skull_eye_palm_markers_and_wrist_joints():
         for i in range(
             bodies.get("torso").getPropertyByName("attached_geometry").size()
         )
-        if opensim.Mesh.safeDownCast(
-            bodies.get("torso").get_attached_geometry(i)
-        )
+        if opensim.Mesh.safeDownCast(bodies.get("torso").get_attached_geometry(i))
         is not None
     ]
     assert "hat_spine_torso.vtp" in torso_meshes
     assert {
-        opensim.Mesh.safeDownCast(bodies.get("skull").get_attached_geometry(i)).get_mesh_file()
+        opensim.Mesh.safeDownCast(
+            bodies.get("skull").get_attached_geometry(i)
+        ).get_mesh_file()
         for i in range(
             bodies.get("skull").getPropertyByName("attached_geometry").size()
         )
@@ -495,7 +497,9 @@ def test_originally_locked_coordinates_are_unlocked_for_full_configurability():
 
 @requires_opensim
 @pytest.mark.parametrize("setter_name, coordinate_name", POSTURE_SETTERS)
-def test_every_posture_setter_writes_its_target_coordinate(setter_name, coordinate_name):
+def test_every_posture_setter_writes_its_target_coordinate(
+    setter_name, coordinate_name
+):
     user = make_user(gender="F")
 
     getattr(user, setter_name)(12.0)
@@ -512,10 +516,18 @@ def test_posture_setters_do_not_cross_talk_between_sides():
     user.set_right_hip_flexionextension(25.0)
 
     coordinates = user.getCoordinateSet()
-    assert np.rad2deg(coordinates.get("knee_angle_l").getValue(user.state)) == pytest.approx(10.0)
-    assert np.rad2deg(coordinates.get("knee_angle_r").getValue(user.state)) == pytest.approx(0.0)
-    assert np.rad2deg(coordinates.get("hip_flexion_r").getValue(user.state)) == pytest.approx(25.0)
-    assert np.rad2deg(coordinates.get("hip_flexion_l").getValue(user.state)) == pytest.approx(0.0)
+    assert np.rad2deg(
+        coordinates.get("knee_angle_l").getValue(user.state)
+    ) == pytest.approx(10.0)
+    assert np.rad2deg(
+        coordinates.get("knee_angle_r").getValue(user.state)
+    ) == pytest.approx(0.0)
+    assert np.rad2deg(
+        coordinates.get("hip_flexion_r").getValue(user.state)
+    ) == pytest.approx(25.0)
+    assert np.rad2deg(
+        coordinates.get("hip_flexion_l").getValue(user.state)
+    ) == pytest.approx(0.0)
 
 
 def test_posture_properties_mirror_every_posture_setter():
@@ -528,8 +540,12 @@ def test_posture_properties_mirror_every_posture_setter():
 
 
 @requires_opensim
-@pytest.mark.parametrize("property_name, coordinate_name", list(_POSTURE_COORDINATE_NAMES.items()))
-def test_posture_angle_property_reads_back_the_coordinate(property_name, coordinate_name):
+@pytest.mark.parametrize(
+    "property_name, coordinate_name", list(_POSTURE_COORDINATE_NAMES.items())
+)
+def test_posture_angle_property_reads_back_the_coordinate(
+    property_name, coordinate_name
+):
     user = make_user(gender="F")
 
     user.getCoordinateSet().get(coordinate_name).setValue(
@@ -546,7 +562,9 @@ def test_posture_angle_property_reads_back_the_coordinate(property_name, coordin
 
 @requires_opensim
 @pytest.mark.parametrize("property_name, joint_name", list(_JOINT_CENTER_NAMES.items()))
-def test_joint_center_property_matches_the_opensim_joint_position(property_name, joint_name):
+def test_joint_center_property_matches_the_opensim_joint_position(
+    property_name, joint_name
+):
     user = make_user(gender="M")
 
     frame = user.getJointSet().get(joint_name).getChildFrame()
@@ -580,7 +598,9 @@ def test_joint_center_reflects_posture_without_calling_update_state():
 
 @requires_opensim
 @pytest.mark.parametrize("property_name, marker_name", list(_FOOT_MARKER_NAMES.items()))
-def test_foot_marker_property_matches_the_opensim_marker_location(property_name, marker_name):
+def test_foot_marker_property_matches_the_opensim_marker_location(
+    property_name, marker_name
+):
     user = make_user(gender="M")
 
     expected = user.getMarkerSet().get(marker_name).getLocationInGround(user.state)
@@ -605,8 +625,12 @@ def test_foot_markers_dict_matches_every_named_property():
 def test_thigh_and_shank_length_match_joint_center_distances():
     user = make_user(gender="M")
 
-    assert user.right_thigh_length == pytest.approx(math.dist(user.right_hip, user.right_knee))
-    assert user.right_shank_length == pytest.approx(math.dist(user.right_knee, user.right_ankle))
+    assert user.right_thigh_length == pytest.approx(
+        math.dist(user.right_hip, user.right_knee)
+    )
+    assert user.right_shank_length == pytest.approx(
+        math.dist(user.right_knee, user.right_ankle)
+    )
 
 
 @requires_opensim
@@ -625,10 +649,14 @@ def test_arm_and_forearm_length_match_joint_center_distances():
 def test_torso_height_and_shoulder_width_match_joint_center_geometry():
     user = make_user(gender="M")
     hip_center = tuple((a + b) / 2 for a, b in zip(user.left_hip, user.right_hip))
-    shoulder_center = tuple((a + b) / 2 for a, b in zip(user.left_shoulder, user.right_shoulder))
+    shoulder_center = tuple(
+        (a + b) / 2 for a, b in zip(user.left_shoulder, user.right_shoulder)
+    )
 
     assert user.torso_height == pytest.approx(math.dist(hip_center, shoulder_center))
-    assert user.shoulder_width == pytest.approx(math.dist(user.left_shoulder, user.right_shoulder))
+    assert user.shoulder_width == pytest.approx(
+        math.dist(user.left_shoulder, user.right_shoulder)
+    )
 
 
 @requires_opensim
@@ -650,7 +678,9 @@ def test_left_foot_height_is_the_ankle_joint_height():
 
 @requires_opensim
 @pytest.mark.parametrize("property_name, ansur_column", ANSUR_DIRECT_PROPERTIES)
-def test_ansur_direct_property_matches_resolved_measurement(property_name, ansur_column):
+def test_ansur_direct_property_matches_resolved_measurement(
+    property_name, ansur_column
+):
     user = make_user(gender="M")
 
     assert getattr(user, property_name) == pytest.approx(
@@ -659,7 +689,9 @@ def test_ansur_direct_property_matches_resolved_measurement(property_name, ansur
 
 
 @requires_opensim
-@pytest.mark.parametrize("property_name, circumference_column", CIRCULAR_SECTION_PROPERTIES)
+@pytest.mark.parametrize(
+    "property_name, circumference_column", CIRCULAR_SECTION_PROPERTIES
+)
 def test_circular_section_property_derives_diameter_from_circumference(
     property_name, circumference_column
 ):

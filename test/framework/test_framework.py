@@ -6,7 +6,7 @@ import pytest
 
 opensim = pytest.importorskip("opensim")
 
-from opensim_extensions import Framework
+from opensim_frameworks import Framework
 
 
 def make_model(name: str = "model"):
@@ -160,7 +160,7 @@ def test_merge_to_model_clones_members_and_resolves_component_name_collisions():
 
 
 def test_merge_to_model_carries_member_meshes(tmp_path):
-    from opensim_extensions.bodies.shapes import MESHES_DIR
+    from opensim_frameworks.bodies.shapes import MESHES_DIR
 
     member = make_single_body_model()
     member.geometry_directories = (tmp_path,)

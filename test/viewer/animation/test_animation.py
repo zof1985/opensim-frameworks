@@ -4,9 +4,9 @@ from importlib import import_module
 
 opensim = pytest.importorskip("opensim")
 
-from opensim_extensions import save_animation
-from opensim_extensions.models.user.user import DEFAULT_MESHES_DIR, DEFAULT_MODEL_PATH
-from opensim_extensions.utils.functions import register_geometry_search_path
+from opensim_frameworks import save_animation
+from opensim_frameworks.models.user.user import DEFAULT_MESHES_DIR, DEFAULT_MODEL_PATH
+from opensim_frameworks.utils.functions import register_geometry_search_path
 
 
 def make_model():
@@ -37,11 +37,10 @@ def make_motion():
     return table
 
 
-def test_save_animation_renders_sto_offscreen_and_restores_pose(
-    monkeypatch, tmp_path
-):
+def test_save_animation_renders_sto_offscreen_and_restores_pose(monkeypatch, tmp_path):
     import imageio
-    visualizer_module = import_module("opensim_extensions.viewer.visualizer")
+
+    visualizer_module = import_module("opensim_frameworks.viewer.visualizer")
 
     model = make_model()
     raw_model = model
@@ -143,7 +142,8 @@ def test_save_animation_renders_sto_offscreen_and_restores_pose(
 
 def test_save_animation_accepts_sto_path(monkeypatch, tmp_path):
     import imageio
-    visualizer_module = import_module("opensim_extensions.viewer.visualizer")
+
+    visualizer_module = import_module("opensim_frameworks.viewer.visualizer")
 
     model = make_model()
     table = make_motion()

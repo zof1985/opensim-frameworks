@@ -1,7 +1,7 @@
 """The unified viewer+playback window for an ``opensim.Model``.
 
-Used by :meth:`~opensim_extensions.viewer.show`: opens a single Tk
-window embedding the (VTK-based, see :mod:`opensim_extensions.viewer.visualizer`)
+Used by :meth:`~opensim_frameworks.viewer.show`: opens a single Tk
+window embedding the (VTK-based, see :mod:`opensim_frameworks.viewer.visualizer`)
 3D view in its upper area, with three groups of controls below it:
 
 - Playback (play/pause, stop, fast-forward, fast-backward, a loop/cycle
@@ -14,11 +14,11 @@ window embedding the (VTK-based, see :mod:`opensim_extensions.viewer.visualizer`
   never disabled, since these act on the 3D view itself rather than a loaded
   motion.
 - Export (save the current view as a PNG, or a loaded motion as an MP4 --
-  see :mod:`opensim_extensions.viewer.export`); the animation button is disabled
+  see :mod:`opensim_frameworks.viewer.export`); the animation button is disabled
   under the same condition as the playback controls, since there is
   nothing to animate without a loaded motion.
 
-A floating tooltip (:class:`~opensim_extensions.viewer.tooltip.HoverTooltip`) is
+A floating tooltip (:class:`~opensim_frameworks.viewer.tooltip.HoverTooltip`) is
 shown next to the mouse cursor whenever it is over a piece of geometry,
 with the hovered component's name and ground-frame position.
 
@@ -30,7 +30,7 @@ widget API (``Visualizer.addSlider``/``addMenu``/``setWindowTitle`` --
 anything taking a ``SimTK::String``) is not callable from Python on at
 least some OpenSim builds. The visualizer is no longer Simbody's, and
 runs in this same process now, so its native window is instead reparented
-(Windows only -- see :mod:`opensim_extensions.viewer.win32_embed`) directly into
+(Windows only -- see :mod:`opensim_frameworks.viewer.win32_embed`) directly into
 a frame inside this one Tk window: one window, no inter-window docking to
 keep in sync.
 
@@ -41,7 +41,7 @@ The window was never blank: its actors had no material colour set, so
 VTK's default (plain white) rendered indistinguishably from the
 near-white background underneath real geometry that was there all along,
 proven by sampling actual pixel values on and off the actor rather than
-eyeballing a screenshot. :meth:`~opensim_extensions.viewer.visualizer.VTKVisualizer._add_body_actors`
+eyeballing a screenshot. :meth:`~opensim_frameworks.viewer.visualizer.VTKVisualizer._add_body_actors`
 now sets an explicit colour for exactly this reason. The
 ``wglMakeCurrent`` log lines turned out to be unrelated, triggered by
 *this project's own test scripts* calling VTK interactor methods directly
@@ -51,10 +51,10 @@ input through the OS's normal per-thread message dispatch, would ever
 hit.
 
 This module's ``start_player`` still constructs ``model``'s
-:class:`~opensim_extensions.viewer.visualizer.VTKVisualizer` itself (setting
-:attr:`~opensim_extensions.viewer.VTKVisualizer`), on the same
+:class:`~opensim_frameworks.viewer.visualizer.VTKVisualizer` itself (setting
+:attr:`~opensim_frameworks.viewer.VTKVisualizer`), on the same
 background thread that runs this window and calls
-:meth:`~opensim_extensions.viewer.visualizer.VTKVisualizer.process_events`
+:meth:`~opensim_frameworks.viewer.visualizer.VTKVisualizer.process_events`
 every tick: a Win32 window's messages are only ever delivered to the
 thread that created it, so both the embedding reparent call and every
 later ``process_events()`` pump need to happen on that same thread.
@@ -124,7 +124,8 @@ class MotionData:
 
         in_degrees = (
             table.hasTableMetaDataKey("inDegrees")
-            and str(table.getTableMetaDataAsString("inDegrees")).strip().lower() == "yes"
+            and str(table.getTableMetaDataAsString("inDegrees")).strip().lower()
+            == "yes"
         )
 
         native_model = getattr(model, "model", model)
@@ -139,8 +140,7 @@ class MotionData:
             if (
                 in_degrees
                 and name in coordinate_names
-                and coordinate_set.get(name).getMotionType()
-                == _ROTATIONAL_MOTION_TYPE
+                and coordinate_set.get(name).getMotionType() == _ROTATIONAL_MOTION_TYPE
             ):
                 values = np.radians(values)
             columns[name] = values
@@ -217,7 +217,9 @@ class MotionPlayer:
         If ``end_time`` is not strictly greater than ``start_time``.
     """
 
-    def __init__(self, start_time: float, end_time: float, *, loop: bool = False) -> None:
+    def __init__(
+        self, start_time: float, end_time: float, *, loop: bool = False
+    ) -> None:
         if end_time <= start_time:
             raise ValueError("end_time must be greater than start_time")
         self.start_time = start_time
@@ -324,7 +326,6 @@ class MotionPlayer:
                 self.playing = False
 
 
-
 def _apply_time(model: Any, data: MotionData, time: float) -> None:
     native_model = getattr(model, "model", model)
     state = getattr(model, "state", None)
@@ -342,6 +343,7 @@ def _apply_time(model: Any, data: MotionData, time: float) -> None:
     visualizer = getattr(model, "visualizer", None)
     if visualizer is not None:
         visualizer.show(state)
+
 
 class PlayerWindow:
     """Handle to a running playback/status window (see :func:`start_player`).
@@ -405,13 +407,13 @@ def start_player(
 ) -> PlayerWindow:
     """Open the unified viewer+playback window for ``model``.
 
-    Also constructs ``model``'s :class:`~opensim_extensions.viewer.visualizer.VTKVisualizer`
-    (setting :attr:`~opensim_extensions.viewer.VTKVisualizer`) -- on
+    Also constructs ``model``'s :class:`~opensim_frameworks.viewer.visualizer.VTKVisualizer`
+    (setting :attr:`~opensim_frameworks.viewer.VTKVisualizer`) -- on
     the same background thread this starts for the window itself, rather
     than on the caller's thread, so that one thread both creates the VTK
     window and is the one later embedding/resizing/pumping it. A Win32
     window may only safely be manipulated by the thread that created it;
-    constructing it here instead of in :meth:`~opensim_extensions.viewer.show`
+    constructing it here instead of in :meth:`~opensim_frameworks.viewer.show`
     avoids a cross-thread deadlock in the embedding step confirmed by
     direct testing (``SetParent``/``ShowWindow`` block forever waiting for
     the *creating* thread to pump messages it was never going to pump,
@@ -428,8 +430,8 @@ def start_player(
     Parameters
     ----------
     model : opensim.Model
-        Model to show/animate; any previous :attr:`~opensim_extensions.viewer.VTKVisualizer`
-        should already be closed (see :meth:`~opensim_extensions.viewer.show`).
+        Model to show/animate; any previous :attr:`~opensim_frameworks.viewer.VTKVisualizer`
+        should already be closed (see :meth:`~opensim_frameworks.viewer.show`).
     motion : str, pathlib.Path, opensim.TimeSeriesTable, or None, optional
         A motion file path (``.mot``/``.sto``), or an already-loaded/built
         table (e.g. one written by a prior analysis) -- see
@@ -443,7 +445,7 @@ def start_player(
     fps : float, optional
         Target refresh rate for advancing playback, refreshing the
         tooltip, and redrawing the visualizer, in frames per second; also
-        the frame rate of an exported animation (see :mod:`opensim_extensions.viewer.export`).
+        the frame rate of an exported animation (see :mod:`opensim_frameworks.viewer.export`).
         Defaults to ``30.0``.
 
     Returns
@@ -468,7 +470,11 @@ def start_player(
     player: MotionPlayer | None = None
     if motion is not None:
         opensim = model.opensim
-        table = opensim.TimeSeriesTable(str(motion)) if isinstance(motion, (str, Path)) else motion
+        table = (
+            opensim.TimeSeriesTable(str(motion))
+            if isinstance(motion, (str, Path))
+            else motion
+        )
         data = MotionData(model, table)
         player = MotionPlayer(data.start_time, data.end_time, loop=loop)
 
@@ -495,7 +501,7 @@ def start_player(
         # visualizer's own light-grey background (see VTKVisualizer's
         # renderer) rather than clashing with a dark control panel.
         sv_ttk.set_theme("light")
-        root.title(model.getName() or "opensim-extensions")
+        root.title(model.getName() or "opensim-frameworks")
 
         style = ttk.Style()
         # Bigger glyphs for the Unicode icon buttons below -- sv_ttk's own
@@ -504,7 +510,9 @@ def start_player(
         style.configure("Icon.TButton", font=("Segoe UI", 12))
 
         default_width, default_height = DEFAULT_SIZE
-        viewer_frame = tk.Frame(root, bg="black", width=default_width, height=default_height)
+        viewer_frame = tk.Frame(
+            root, bg="black", width=default_width, height=default_height
+        )
         viewer_frame.pack(side="top", fill="both", expand=True)
         # has no Tk-managed children (the embedded VTK window is a raw
         # Win32 child, invisible to Tk's own geometry management) -- lock
@@ -532,11 +540,18 @@ def start_player(
                 _apply_time(model, data, player.time)
 
         slider = ttk.Scale(
-            controls_frame, from_=0, to=1000, orient="horizontal",
-            variable=slider_var, command=on_slider_drag, length=360,
+            controls_frame,
+            from_=0,
+            to=1000,
+            orient="horizontal",
+            variable=slider_var,
+            command=on_slider_drag,
+            length=360,
         )
         slider.bind("<Button-1>", lambda event: user_is_dragging.update(value=True))
-        slider.bind("<ButtonRelease-1>", lambda event: user_is_dragging.update(value=False))
+        slider.bind(
+            "<ButtonRelease-1>", lambda event: user_is_dragging.update(value=False)
+        )
         slider.grid(row=0, column=0, columnspan=3, padx=4, pady=(0, 2), sticky="ew")
 
         ttk.Label(controls_frame, textvariable=time_var).grid(
@@ -580,23 +595,42 @@ def start_player(
         export_group.grid(row=2, column=2, padx=(4, 0), pady=(0, 8), sticky="nsew")
 
         rew_button = ttk.Button(
-            playback_group, text="⏪", width=3, style="Icon.TButton", command=do_fast_backward,
+            playback_group,
+            text="⏪",
+            width=3,
+            style="Icon.TButton",
+            command=do_fast_backward,
         )
         rew_button.grid(row=0, column=0, padx=2)
         play_button = ttk.Button(
-            playback_group, text="▶", width=3, style="Icon.TButton", command=do_play_pause,
+            playback_group,
+            text="▶",
+            width=3,
+            style="Icon.TButton",
+            command=do_play_pause,
         )
         play_button.grid(row=0, column=1, padx=2)
         stop_button = ttk.Button(
-            playback_group, text="⏹", width=3, style="Icon.TButton", command=do_stop,
+            playback_group,
+            text="⏹",
+            width=3,
+            style="Icon.TButton",
+            command=do_stop,
         )
         stop_button.grid(row=0, column=2, padx=2)
         ff_button = ttk.Button(
-            playback_group, text="⏩", width=3, style="Icon.TButton", command=do_fast_forward,
+            playback_group,
+            text="⏩",
+            width=3,
+            style="Icon.TButton",
+            command=do_fast_forward,
         )
         ff_button.grid(row=0, column=3, padx=2)
         cycle_check = ttk.Checkbutton(
-            playback_group, text="Cycle", variable=cycle_var, command=do_toggle_loop,
+            playback_group,
+            text="Cycle",
+            variable=cycle_var,
+            command=do_toggle_loop,
         )
         cycle_check.grid(row=0, column=4, padx=(10, 2))
 
@@ -610,7 +644,10 @@ def start_player(
             model.visualizer.set_ground_visible(ground_var.get())
 
         ground_check = ttk.Checkbutton(
-            view_group, text="Ground", variable=ground_var, command=do_toggle_ground,
+            view_group,
+            text="Ground",
+            variable=ground_var,
+            command=do_toggle_ground,
         )
         ground_check.grid(row=0, column=0, padx=2, sticky="w")
 
@@ -622,7 +659,10 @@ def start_player(
             model.visualizer.set_muscles_visible(muscles_var.get())
 
         muscles_check = ttk.Checkbutton(
-            view_group, text="Muscles", variable=muscles_var, command=do_toggle_muscles,
+            view_group,
+            text="Muscles",
+            variable=muscles_var,
+            command=do_toggle_muscles,
         )
         muscles_check.grid(row=0, column=1, padx=2, sticky="w")
 
@@ -632,7 +672,10 @@ def start_player(
             model.visualizer.set_markers_visible(markers_var.get())
 
         markers_check = ttk.Checkbutton(
-            view_group, text="Markers", variable=markers_var, command=do_toggle_markers,
+            view_group,
+            text="Markers",
+            variable=markers_var,
+            command=do_toggle_markers,
         )
         markers_check.grid(row=0, column=2, padx=2, sticky="w")
 
@@ -642,7 +685,10 @@ def start_player(
             model.visualizer.set_axes_visible(axes_var.get())
 
         axes_check = ttk.Checkbutton(
-            view_group, text="Axes", variable=axes_var, command=do_toggle_axes,
+            view_group,
+            text="Axes",
+            variable=axes_var,
+            command=do_toggle_axes,
         )
         axes_check.grid(row=0, column=3, padx=2, sticky="w")
 
@@ -675,10 +721,15 @@ def start_player(
         def do_set_view(event: Any = None) -> None:
             model.visualizer.set_view(view_var.get().lower())
 
-        ttk.Label(view_group, text="Camera:").grid(row=1, column=0, pady=(6, 0), sticky="w")
+        ttk.Label(view_group, text="Camera:").grid(
+            row=1, column=0, pady=(6, 0), sticky="w"
+        )
         view_var = tk.StringVar(value=VIEW_NAMES[0].capitalize())
         view_combo = ttk.Combobox(
-            view_group, textvariable=view_var, state="readonly", width=9,
+            view_group,
+            textvariable=view_var,
+            state="readonly",
+            width=9,
             values=[name.capitalize() for name in VIEW_NAMES],
         )
         view_combo.bind("<<ComboboxSelected>>", do_set_view)
@@ -686,24 +737,34 @@ def start_player(
 
         def do_save_image() -> None:
             path = filedialog.asksaveasfilename(
-                parent=root, title="Save image", defaultextension=".png",
+                parent=root,
+                title="Save image",
+                defaultextension=".png",
                 filetypes=[("PNG image", "*.png")],
             )
             if not path:
                 return
             try:
                 _export.save_image(visualizer, path)
-            except Exception as error:  # noqa: BLE001 -- reported via a dialog, not swallowed
+            except (
+                Exception
+            ) as error:  # noqa: BLE001 -- reported via a dialog, not swallowed
                 messagebox.showerror("Export failed", str(error), parent=root)
 
         image_button = ttk.Button(
-            export_group, text="📷", width=3, style="Icon.TButton", command=do_save_image,
+            export_group,
+            text="📷",
+            width=3,
+            style="Icon.TButton",
+            command=do_save_image,
         )
         image_button.grid(row=0, column=0, padx=2)
 
         def do_save_animation() -> None:
             path = filedialog.asksaveasfilename(
-                parent=root, title="Save animation", defaultextension=".mp4",
+                parent=root,
+                title="Save animation",
+                defaultextension=".mp4",
                 filetypes=[("MP4 video", "*.mp4")],
             )
             if not path:
@@ -719,7 +780,9 @@ def start_player(
                 _export.render_motion_animation(
                     model, data, visualizer, _apply_time, path, fps=fps
                 )
-            except Exception as error:  # noqa: BLE001 -- reported via a dialog, not swallowed
+            except (
+                Exception
+            ) as error:  # noqa: BLE001 -- reported via a dialog, not swallowed
                 messagebox.showerror("Export failed", str(error), parent=root)
             finally:
                 root.config(cursor="")
@@ -729,11 +792,22 @@ def start_player(
                     play_button.config(text="⏸")
 
         animation_button = ttk.Button(
-            export_group, text="🎬", width=3, style="Icon.TButton", command=do_save_animation,
+            export_group,
+            text="🎬",
+            width=3,
+            style="Icon.TButton",
+            command=do_save_animation,
         )
         animation_button.grid(row=0, column=1, padx=2)
 
-        playback_widgets = (slider, rew_button, play_button, stop_button, ff_button, cycle_check)
+        playback_widgets = (
+            slider,
+            rew_button,
+            play_button,
+            stop_button,
+            ff_button,
+            cycle_check,
+        )
         if player is None:
             for widget in playback_widgets:
                 widget.config(state="disabled")
@@ -741,7 +815,7 @@ def start_player(
 
         # Floating hover tooltip (see module docstring): a borderless
         # window following the mouse, shown only while it is over a piece
-        # of geometry -- see opensim_extensions.viewer.tooltip.
+        # of geometry -- see opensim_frameworks.viewer.tooltip.
         tooltip = HoverTooltip(root)
 
         # winfo_id() alone realizes viewer_frame's native window without
@@ -771,7 +845,9 @@ def start_player(
 
         try:
             model.visualizer = VTKVisualizer(model, embed=embed)
-        except Exception as error:  # noqa: BLE001 -- reported via `failure`, not swallowed
+        except (
+            Exception
+        ) as error:  # noqa: BLE001 -- reported via `failure`, not swallowed
             failure["error"] = error
             ready.set()
             root.destroy()
@@ -790,13 +866,19 @@ def start_player(
             reachability_check.config(state="disabled")
 
         root.update_idletasks()
-        root.geometry(f"{default_width}x{default_height + controls_frame.winfo_reqheight()}")
+        root.geometry(
+            f"{default_width}x{default_height + controls_frame.winfo_reqheight()}"
+        )
         root.update()
 
         if "hwnd" in hwnd_box:
             hwnd = hwnd_box["hwnd"]
-            resize_embedded_window(hwnd, viewer_frame.winfo_width(), viewer_frame.winfo_height())
-            model.visualizer.resize(viewer_frame.winfo_width(), viewer_frame.winfo_height())
+            resize_embedded_window(
+                hwnd, viewer_frame.winfo_width(), viewer_frame.winfo_height()
+            )
+            model.visualizer.resize(
+                viewer_frame.winfo_width(), viewer_frame.winfo_height()
+            )
 
             def on_viewer_configure(event: Any) -> None:
                 if event.width > 1 and event.height > 1:
@@ -870,7 +952,7 @@ def start_player(
             "Timed out waiting for the 3D visualizer/playback window to "
             "initialize (60s). If this is running under a debugger that "
             "traces into library code (e.g. VS Code's debugpy with "
-            "\"justMyCode\": false), try disabling that for this run -- "
+            '"justMyCode": false), try disabling that for this run -- '
             "line-by-line tracing of VTK/Tk's own setup code can slow it "
             "down enough to hit this."
         )

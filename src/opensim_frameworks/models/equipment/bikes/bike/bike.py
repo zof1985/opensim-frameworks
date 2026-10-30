@@ -617,16 +617,10 @@ class Bike(Equipment):
         )
         return self._handlebar_tube_top_at(tube_step) + offset
 
-    def handlebar_position_at_m(
-        self, tube_step: int, slide_step: int
-    ) -> np.ndarray:
+    def handlebar_position_at_m(self, tube_step: int, slide_step: int) -> np.ndarray:
         """Return the handlebar centre in metres at the supplied adjustment steps."""
-        tube_step = _check_step(
-            "tube_step", tube_step, self._handlebar_tube_steps
-        )
-        slide_step = _check_step(
-            "slide_step", slide_step, self._handlebar_slide_steps
-        )
+        tube_step = _check_step("tube_step", tube_step, self._handlebar_tube_steps)
+        slide_step = _check_step("slide_step", slide_step, self._handlebar_slide_steps)
         return self._handlebar_position_at(tube_step, slide_step)
 
     @property
@@ -650,7 +644,10 @@ class Bike(Equipment):
             ``(x, y, z)`` seat-centre position in millimetres. The seat is
             centred on the selected seat-slide point.
         """
-        return self._seat_position_at(self._seat_tube_step, self._seat_slide_step) / MM_TO_M
+        return (
+            self._seat_position_at(self._seat_tube_step, self._seat_slide_step)
+            / MM_TO_M
+        )
 
     @property
     def handlebar_tube_base(self) -> np.ndarray:
@@ -717,7 +714,9 @@ class Bike(Equipment):
     def _screen_center_m(self) -> np.ndarray:
         angle = math.radians(self._screen_inclination_deg)
         up_the_panel = np.array([math.cos(angle), math.sin(angle), 0.0])
-        return self._screen_base_m + (self._screen_height_mm * MM_TO_M / 2) * up_the_panel
+        return (
+            self._screen_base_m + (self._screen_height_mm * MM_TO_M / 2) * up_the_panel
+        )
 
     @property
     def screen_center(self) -> np.ndarray:
@@ -831,9 +830,7 @@ class Bike(Equipment):
             screen settings, and crank/pedal angles.
         """
         parameters: dict[str, Any] = {}
-        for name, parameter in inspect.signature(
-            Bike.__init__
-        ).parameters.items():
+        for name, parameter in inspect.signature(Bike.__init__).parameters.items():
             if name == "self" or parameter.kind is inspect.Parameter.VAR_KEYWORD:
                 continue
             if name == "densities":
@@ -844,9 +841,7 @@ class Bike(Equipment):
                 parameters[name] = getattr(self, f"_{name}")
         clone = type(self).__new__(type(self))
         Bike.__init__(clone, **parameters)
-        clone._screen_horizontal_offset_min_mm = (
-            self._screen_horizontal_offset_min_mm
-        )
+        clone._screen_horizontal_offset_min_mm = self._screen_horizontal_offset_min_mm
         clone._screen_vertical_offset_min_mm = self._screen_vertical_offset_min_mm
         clone.set_crank_angle_deg(self.crank_angle_deg)
         clone.set_pedal_right_angle_deg(self.pedal_right_angle_deg)
@@ -1181,7 +1176,15 @@ class Bike(Equipment):
         self._add_static(
             "handlebar_slide",
             "handlebar_slide",
-            [Box(size=(max((high - low) * MM_TO_M, 1e-3), tube_radius, 2 * tube_radius))],
+            [
+                Box(
+                    size=(
+                        max((high - low) * MM_TO_M, 1e-3),
+                        tube_radius,
+                        2 * tube_radius,
+                    )
+                )
+            ],
             location=tube_top
             + self._along(self._handlebar_slide_angle_deg, (low + high) / 2),
             orientation=(0.0, 0.0, slide),
@@ -1301,14 +1304,14 @@ class Bike(Equipment):
         elbow_flexion_deg: float = 15.0,
         allow_ik_adjustment: bool = True,
     ):
-        """Fit ``user`` on the bike and return a :class:`~opensim_extensions.Framework`.
+        """Fit ``user`` on the bike and return a :class:`~opensim_frameworks.Framework`.
 
         The bike is adjusted in place (seat tube, seat slide, handlebar tube and
         slide steps, crank and pedal angles) and the user is posed on it; the
         returned framework contains ``user`` and ``bike`` with both feet welded
         to their pedals. If ``user`` is omitted, the 170 cm, 70 kg male
         reference user is fitted. See
-        :func:`opensim_extensions.models.equipment.bikes.bike.fitting.fit_user` for the full
+        :func:`opensim_frameworks.models.equipment.bikes.bike.fitting.fit_user` for the full
         procedure.
 
         Parameters
@@ -1375,7 +1378,9 @@ class Bike(Equipment):
         )
         self._component_masses["cranks"] = total + left_mass
 
-        pedal_length, pedal_width, pedal_height = (v * MM_TO_M for v in self._pedal_size_mm)
+        pedal_length, pedal_width, pedal_height = (
+            v * MM_TO_M for v in self._pedal_size_mm
+        )
         outward = self.pedal_spacing_mm * MM_TO_M / 2 + pedal_width / 2
         pedal_masses = 0.0
         # The left crank frame is rotated by pi; counter-rotating the pedal joint

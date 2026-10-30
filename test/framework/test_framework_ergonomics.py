@@ -5,11 +5,11 @@ import warnings
 import numpy as np
 import pytest
 
-from opensim_extensions import Bike, User
-from opensim_extensions.framework import VisualErgonomicsFramework
-from opensim_extensions.framework import Framework
-from opensim_extensions.viewer.viewer import _ViewerModel
-from opensim_extensions.viewer.visualizer import VTKVisualizer
+from opensim_frameworks import Bike, User
+from opensim_frameworks.framework import VisualErgonomicsFramework
+from opensim_frameworks.framework import Framework
+from opensim_frameworks.viewer.viewer import _ViewerModel
+from opensim_frameworks.viewer.visualizer import VTKVisualizer
 
 
 @pytest.fixture(scope="module")
@@ -64,15 +64,15 @@ def test_ergonomics_framework_is_renderable_and_reports_view_state(manager):
             if body.getName().startswith(("vision_cone", "reach_"))
         }
         assert len(overlay_actors) == 4
-        assert overlay_actors["vision_cone_shape0"].GetProperty().GetOpacity() == pytest.approx(
-            0.18
-        )
-        assert overlay_actors["vision_cone_axis_shape0"].GetProperty().GetColor() == pytest.approx(
-            (1.0, 0.8, 0.0)
-        )
-        assert overlay_actors["reach_r_shape0"].GetProperty().GetOpacity() == pytest.approx(
-            0.12
-        )
+        assert overlay_actors[
+            "vision_cone_shape0"
+        ].GetProperty().GetOpacity() == pytest.approx(0.18)
+        assert overlay_actors[
+            "vision_cone_axis_shape0"
+        ].GetProperty().GetColor() == pytest.approx((1.0, 0.8, 0.0))
+        assert overlay_actors[
+            "reach_r_shape0"
+        ].GetProperty().GetOpacity() == pytest.approx(0.12)
         visualizer.set_vision_cone_visible(False)
         visualizer.set_reachability_visible(False)
         assert not overlay_actors["vision_cone_shape0"].GetVisibility()
@@ -120,12 +120,9 @@ def test_ergonomics_framework_is_renderable_and_reports_view_state(manager):
     )
     assert view_state["head_flexion_deg"] == pytest.approx(manager.user.neck_flexion)
     centers = manager.user.joint_centers
-    hips = (
-        np.asarray(centers["right_hip"]) + np.asarray(centers["left_hip"])
-    ) / 2
+    hips = (np.asarray(centers["right_hip"]) + np.asarray(centers["left_hip"])) / 2
     shoulders = (
-        np.asarray(centers["right_shoulder"])
-        + np.asarray(centers["left_shoulder"])
+        np.asarray(centers["right_shoulder"]) + np.asarray(centers["left_shoulder"])
     ) / 2
     trunk_axis = shoulders - hips
     expected_trunk_angle = math.degrees(
@@ -153,9 +150,9 @@ def test_visual_cone_defaults_use_documented_ergonomic_values(manager):
     _, head_rotation = framework._eye_center_and_head_rotation()
     offset = math.radians(-25.0)
     assert configured_rotation[:, 0] == pytest.approx(
-        math.cos(offset) * head_rotation[:, 0]
-        + math.sin(offset) * head_rotation[:, 1]
+        math.cos(offset) * head_rotation[:, 0] + math.sin(offset) * head_rotation[:, 1]
     )
+
 
 def test_line_of_sight_is_tilted_down_from_head_plane(manager):
     _, head_rotation = manager._eye_center_and_head_rotation()
@@ -186,8 +183,7 @@ def test_visual_cone_starts_at_head_plane_independent_of_line_of_sight(manager):
         + math.sin(half_height) * cone_rotation[:, 1]
     )
     expected_line_of_sight = (
-        math.cos(offset) * head_rotation[:, 0]
-        + math.sin(offset) * head_rotation[:, 1]
+        math.cos(offset) * head_rotation[:, 0] + math.sin(offset) * head_rotation[:, 1]
     )
 
     assert upper_edge_direction == pytest.approx(head_rotation[:, 0])
@@ -198,22 +194,16 @@ def test_visual_cone_starts_at_head_plane_independent_of_line_of_sight(manager):
 def test_spherical_cap_mesh_uses_requested_axis_and_half_angle():
     from importlib import import_module
 
-    ergonomics = import_module("opensim_extensions.framework.ergonomics")
+    ergonomics = import_module("opensim_frameworks.framework.ergonomics")
     axis = np.array([1.0, 2.0, -3.0])
     original_axis = axis.copy()
     radius = 0.7
-    points, faces = ergonomics._spherical_cap_mesh(
-        radius, axis, half_angle_deg=45.0
-    )
+    points, faces = ergonomics._spherical_cap_mesh(radius, axis, half_angle_deg=45.0)
     unit_axis = axis / np.linalg.norm(axis)
 
     assert axis == pytest.approx(original_axis)
-    assert np.linalg.norm(points, axis=1) == pytest.approx(
-        np.full(len(points), radius)
-    )
-    assert np.all(
-        points @ unit_axis / radius >= math.cos(math.radians(45.0)) - 1e-12
-    )
+    assert np.linalg.norm(points, axis=1) == pytest.approx(np.full(len(points), radius))
+    assert np.all(points @ unit_axis / radius >= math.cos(math.radians(45.0)) - 1e-12)
     assert all(0 <= index < len(points) for face in faces for index in face)
 
 
@@ -299,15 +289,18 @@ def test_optimization_returns_independent_framework_and_respects_screen_bounds(
     )
     assert _coordinate_snapshot(screen_ready_manager) == user_before
     assert 40.0 <= optimized.equipment.screen_inclination_deg <= 80.0
-    assert min(
-        optimized._screen_constraints(
-            (
-                optimized.equipment.screen_horizontal_offset_mm,
-                optimized.equipment.screen_vertical_offset_mm,
-                optimized.equipment.screen_inclination_deg,
+    assert (
+        min(
+            optimized._screen_constraints(
+                (
+                    optimized.equipment.screen_horizontal_offset_mm,
+                    optimized.equipment.screen_vertical_offset_mm,
+                    optimized.equipment.screen_inclination_deg,
+                )
             )
         )
-    ) >= -1e-6
+        >= -1e-6
+    )
     eye, gaze_rotation = optimized._eye_center_and_line_of_sight_rotation()
     gaze = gaze_rotation[:, 0]
     screen_corners = optimized.equipment.screen.corners(
@@ -324,14 +317,15 @@ def test_optimization_returns_independent_framework_and_respects_screen_bounds(
     assert optimized.get_view_state()["incidence_angle_deg"] == pytest.approx(
         0.0, abs=1e-5
     )
-    reach_spheres = [
-        optimized._reachability_sphere(side) for side in ("r", "l")
-    ]
+    reach_spheres = [optimized._reachability_sphere(side) for side in ("r", "l")]
     for corner in screen_corners:
-        assert min(
-            np.linalg.norm(corner - shoulder) - radius
-            for shoulder, radius in reach_spheres
-        ) <= 1e-8
+        assert (
+            min(
+                np.linalg.norm(corner - shoulder) - radius
+                for shoulder, radius in reach_spheres
+            )
+            <= 1e-8
+        )
     assert (
         optimized.equipment.screen_horizontal_offset_mm,
         optimized.equipment.screen_vertical_offset_mm,
@@ -357,9 +351,9 @@ def test_inplace_optimization_changes_only_the_screen(screen_ready_manager):
 
     assert result is None
     assert _coordinate_snapshot(screen_ready_manager) == user_before
-    assert screen_ready_manager.get_view_state()["incidence_angle_deg"] == pytest.approx(
-        0.0, abs=1e-5
-    )
+    assert screen_ready_manager.get_view_state()[
+        "incidence_angle_deg"
+    ] == pytest.approx(0.0, abs=1e-5)
 
 
 def test_screen_pose_parameters_accept_fixed_values(screen_ready_manager):
@@ -451,15 +445,12 @@ def test_user_position_joint_arguments_match_user_properties():
         VisualErgonomicsFramework.optimize_user_position
     ).parameters
     joint_property_names = [
-        name.removesuffix("_deg")
-        for name in parameters
-        if name.endswith("_deg")
+        name.removesuffix("_deg") for name in parameters if name.endswith("_deg")
     ]
 
     assert joint_property_names
     assert all(
-        isinstance(getattr(User, name, None), property)
-        for name in joint_property_names
+        isinstance(getattr(User, name, None), property) for name in joint_property_names
     )
 
 
@@ -518,7 +509,7 @@ def test_optimize_user_position_aligns_gaze_without_neck_optimization(
 ):
     from importlib import import_module
 
-    ergonomics_module = import_module("opensim_extensions.framework.ergonomics")
+    ergonomics_module = import_module("opensim_frameworks.framework.ergonomics")
 
     def reject_optimization(*args, **kwargs):
         pytest.fail("neck alignment must not use the objective optimizer")

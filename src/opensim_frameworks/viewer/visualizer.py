@@ -1,7 +1,7 @@
 """An in-process, interactive VTK visualizer for an ``opensim.Model``.
 
 Replaces the native Simbody visualizer (``opensim.ModelVisualizer``) that
-:meth:`~opensim_extensions.viewer.show` used to open: that
+:meth:`~opensim_frameworks.viewer.show` used to open: that
 visualizer runs as a *separate process* (a bundled ``simbody-visualizer``
 executable) communicating over a pipe, and its own
 ``Visualizer.InputListener`` interface exposes exactly three callbacks --
@@ -19,7 +19,7 @@ component readout needs. The tradeoff is reimplementing geometry loading
 (meshes and the native ``Brick``/``Cylinder``/``Sphere`` primitives) and
 visuals that the Simbody visualizer provided for free; this module covers
 only what :meth:`opensim.Model.show` and the playback window
-(:mod:`opensim_extensions.viewer.player`) actually need.
+(:mod:`opensim_frameworks.viewer.player`) actually need.
 
 The interactor's own blocking ``Start()`` event loop is never used: it runs
 a native Win32 message loop in C++ that does not release the GIL, so even
@@ -28,7 +28,7 @@ process (confirmed directly -- a plain
 ``threading.Thread(target=interactor.Start).start()`` hangs the calling
 thread's very next line). Instead, :meth:`VTKVisualizer.process_events`
 wraps ``vtkRenderWindowInteractor.ProcessEvents()``, a single non-blocking
-pump of pending window messages; :mod:`opensim_extensions.viewer.player` calls it
+pump of pending window messages; :mod:`opensim_frameworks.viewer.player` calls it
 once per tick of its own Tk ``after()`` loop, on the same thread as Tk's
 event processing, so one thread drives both GUIs without contention.
 
@@ -36,12 +36,12 @@ For the same reason, a ``VTKVisualizer`` must be *constructed* on that
 same thread too, not handed over from another one afterward: its native
 window is thread-affine (a plain Win32 rule -- a window's messages are
 only ever delivered to the thread that created it), and
-:mod:`opensim_extensions.viewer.player` additionally reparents that window into its
+:mod:`opensim_frameworks.viewer.player` additionally reparents that window into its
 own Tk frame, a call that blocks waiting for the *creating* thread to
 process it -- which deadlocks if that thread is the caller's and has
 already moved on past ``show()``, as confirmed directly. ``_player.py``'s
 ``start_player`` is therefore what constructs every ``VTKVisualizer``,
-never :meth:`~opensim_extensions.viewer.show` itself.
+never :meth:`~opensim_frameworks.viewer.show` itself.
 
 A pure-white actor on a near-white background looks exactly like a blank/
 broken render at a glance -- confirmed the hard way, chasing a GL-context
@@ -63,7 +63,7 @@ from . import geometry as _geometry
 __all__ = ["VTKVisualizer", "DEFAULT_SIZE", "VIEW_NAMES"]
 
 #: Initial render window size in pixels, as (width, height). Exposed so
-#: :mod:`opensim_extensions.viewer.player` can size its viewer frame to match before
+#: :mod:`opensim_frameworks.viewer.player` can size its viewer frame to match before
 #: a ``VTKVisualizer`` even exists (it must embed that frame's handle
 #: *during* construction -- see ``VTKVisualizer.__init__``'s ``embed``
 #: parameter -- so construction can't happen first).
@@ -97,7 +97,9 @@ _MARKER_RADIUS = 0.02  # metres
 # not anatomical ones -- they happen to line up with a `User`'s own
 # forward(+X)/up(+Y)/right(+Z) convention since that is what the ground
 # frame is built against, but apply the same way to any model.
-_VIEW_DIRECTIONS: dict[str, tuple[tuple[float, float, float], tuple[float, float, float]]] = {
+_VIEW_DIRECTIONS: dict[
+    str, tuple[tuple[float, float, float], tuple[float, float, float]]
+] = {
     "front": ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0)),
     "back": ((-1.0, 0.0, 0.0), (0.0, 1.0, 0.0)),
     "right": ((0.0, 0.0, 1.0), (0.0, 1.0, 0.0)),
@@ -105,6 +107,7 @@ _VIEW_DIRECTIONS: dict[str, tuple[tuple[float, float, float], tuple[float, float
     "top": ((0.0, 1.0, 0.0), (0.0, 0.0, -1.0)),
     "bottom": ((0.0, -1.0, 0.0), (0.0, 0.0, 1.0)),
 }
+
 
 #: Names accepted by :meth:`VTKVisualizer.set_view`, in a stable display order.
 def _build_interactor_style(vtk: Any) -> Any:
@@ -159,15 +162,15 @@ class VTKVisualizer:
     once at construction; call :meth:`show` after any posture/structural
     change to re-sync every actor's transform and redraw (this mirrors
     ``opensim.ModelVisualizer.show(state)``'s own signature, so
-    :mod:`opensim_extensions.viewer.player` drives either one the same way).
+    :mod:`opensim_frameworks.viewer.player` drives either one the same way).
 
     Construction returns as soon as the first frame is rendered; the
     window stays interactive (camera orbit *and* hover tracking) only for
     as long as something calls :meth:`process_events` regularly (see that
     method, and the module docstring, for why that is a deliberate
     non-blocking pump rather than the interactor's own ``Start()``) --
-    :mod:`opensim_extensions.viewer.player` is what actually does this, once per
-    tick, for every ``VTKVisualizer`` :meth:`~opensim_extensions.viewer.show`
+    :mod:`opensim_frameworks.viewer.player` is what actually does this, once per
+    tick, for every ``VTKVisualizer`` :meth:`~opensim_frameworks.viewer.show`
     creates.
 
     Parameters
@@ -180,12 +183,12 @@ class VTKVisualizer:
     embed : callable or None, optional
         If given, called once, with this visualizer's native window
         handle (:meth:`get_window_id`'s value), after the window exists
-        but before its first paint -- :mod:`opensim_extensions.viewer.player`
+        but before its first paint -- :mod:`opensim_frameworks.viewer.player`
         passes a callback that reparents it into its own Tk frame right
         then.
     offscreen : bool, optional
         Render without creating an interactive render-window interactor.
-        Used by :func:`opensim_extensions.save_animation` to export video
+        Used by :func:`opensim_frameworks.save_animation` to export video
         without opening a window. Defaults to ``False``.
     size : tuple[int, int], optional
         Render-window dimensions in pixels as ``(width, height)``.
@@ -308,16 +311,14 @@ class VTKVisualizer:
             ``True`` when the model contains renderable geometry for both the
             visual cone and its central-axis line.
         """
-        names = {
-            body.getName().rsplit("/", 1)[-1] for body, _ in self._actor_bodies
-        }
+        names = {body.getName().rsplit("/", 1)[-1] for body, _ in self._actor_bodies}
         return any(name.startswith("vision_cone_shape") for name in names) and any(
             name.startswith("vision_cone_axis_shape") for name in names
         )
 
     def _window_title(self) -> str:
         name = self._model.getName()
-        return f"opensim-extensions: {name}" if name else "opensim-extensions"
+        return f"opensim-frameworks: {name}" if name else "opensim-frameworks"
 
     def _build_ground_actor(self) -> Any:
         """Build the ground reference plane actor (see the module-level constants)."""
@@ -599,9 +600,12 @@ class VTKVisualizer:
             direction[2] * view_up[0] - direction[0] * view_up[2],
             direction[0] * view_up[1] - direction[1] * view_up[0],
         )
-        if direction_length == 0 or up_length == 0 or sum(
-            value * value for value in cross
-        ) <= (direction_length * up_length * 1e-12) ** 2:
+        if (
+            direction_length == 0
+            or up_length == 0
+            or sum(value * value for value in cross)
+            <= (direction_length * up_length * 1e-12) ** 2
+        ):
             raise ValueError(
                 "camera position, focal point, and view-up direction must define "
                 "a non-degenerate view"
@@ -673,8 +677,8 @@ class VTKVisualizer:
         """Return a VTK source/reader for one attached ``DecorativeGeometry``.
 
         ``None`` for a mesh whose file can't be resolved, or a geometry
-        type not handled -- see :func:`opensim_extensions._geometry.build_source`,
-        shared with :class:`~opensim_extensions.components.Body`'s ``.corners``.
+        type not handled -- see :func:`opensim_frameworks._geometry.build_source`,
+        shared with :class:`~opensim_frameworks.components.Body`'s ``.corners``.
         """
         return _geometry.build_source(
             self._vtk, opensim, geometry, self._model._resolve_geometry_file
@@ -687,7 +691,12 @@ class VTKVisualizer:
         if actor in self._actor_components:
             model_name, component_name = self._actor_components[actor]
             position = self._picker.GetPickPosition()
-            info = (f"{model_name}-{component_name}", position[0], position[1], position[2])
+            info = (
+                f"{model_name}-{component_name}",
+                position[0],
+                position[1],
+                position[2],
+            )
         else:
             info = None
         with self._hover_lock:
@@ -707,9 +716,9 @@ class VTKVisualizer:
         design, now harmless rather than load-bearing: the mouse-move
         observer only ever fires inside :meth:`process_events`, called
         from the same thread that reads this back (see
-        :mod:`opensim_extensions.viewer.player`'s tick loop, which renders it as
+        :mod:`opensim_frameworks.viewer.player`'s tick loop, which renders it as
         a floating tooltip next to the cursor via
-        :class:`~opensim_extensions.viewer.tooltip.HoverTooltip`).
+        :class:`~opensim_frameworks.viewer.tooltip.HoverTooltip`).
 
         Returns
         -------
@@ -724,7 +733,7 @@ class VTKVisualizer:
     def capture_frame(self) -> Any:
         """Return the current 3D view as an ``(height, width, 3)`` uint8 RGB array.
 
-        Used by :mod:`opensim_extensions.viewer.export` to save the view as a
+        Used by :mod:`opensim_frameworks.viewer.export` to save the view as a
         PNG, or a sequence of these (one per sampled motion time) as an
         MP4. Captures whatever is in the render window *right now* -- call
         :meth:`show` first if ``state`` just changed. Row 0 is the top of
@@ -747,7 +756,9 @@ class VTKVisualizer:
         window_to_image.Update()
         image_data = window_to_image.GetOutput()
         width, height, _ = image_data.GetDimensions()
-        array = vtk_to_numpy(image_data.GetPointData().GetScalars()).reshape(height, width, 3)
+        array = vtk_to_numpy(image_data.GetPointData().GetScalars()).reshape(
+            height, width, 3
+        )
         return np.flipud(array)
 
     def save_svg(self, path: str | Path) -> Path:
@@ -772,7 +783,7 @@ class VTKVisualizer:
 
         Same signature as ``opensim.ModelVisualizer.show(state)``, so
         anything already written against that (e.g.
-        :mod:`opensim_extensions.viewer.player`) drives this the same way.
+        :mod:`opensim_frameworks.viewer.player`) drives this the same way.
 
         Parameters
         ----------
@@ -805,7 +816,7 @@ class VTKVisualizer:
         docstring for why that cannot run on a background thread here).
         Must be called repeatedly, from whatever thread owns this
         process's single native event-pump duty, for the window to stay
-        responsive at all; :mod:`opensim_extensions.viewer.player` calls it once per
+        responsive at all; :mod:`opensim_frameworks.viewer.player` calls it once per
         tick of its own Tk loop.
         """
         if self._interactor is not None:
@@ -825,7 +836,7 @@ class VTKVisualizer:
     def resize(self, width: int, height: int) -> None:
         """Resize the render window to ``(width, height)`` pixels and redraw.
 
-        Called by :mod:`opensim_extensions.viewer.player` whenever the Tk frame this
+        Called by :mod:`opensim_frameworks.viewer.player` whenever the Tk frame this
         window is embedded into is resized, to keep the two in sync.
 
         Parameters
@@ -841,7 +852,7 @@ class VTKVisualizer:
     def get_window_id(self) -> Any:
         """Return the native window handle (``HWND`` on Windows).
 
-        For :mod:`opensim_extensions.viewer.player` to embed this window directly
+        For :mod:`opensim_frameworks.viewer.player` to embed this window directly
         into its own Tk frame -- no window search needed (unlike the old
         Simbody visualizer, a separate process), since this window was
         created in this same process.
@@ -859,6 +870,6 @@ class VTKVisualizer:
 
         Idempotent. There is no interactor loop to stop (see the module
         docstring): :meth:`process_events` simply stops being called once
-        the owning :mod:`opensim_extensions.viewer.player` window closes.
+        the owning :mod:`opensim_frameworks.viewer.player` window closes.
         """
         self._render_window.Finalize()
