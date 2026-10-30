@@ -8,16 +8,13 @@ import pytest
 
 from opensim_extensions.models.equipment import (
     read_step,
-    read_step_components,
     weld_bodies,
 )
-from opensim_extensions.models.equipment.equipment import (
-    StepBodyImport,
-    opensim,
-)
+from opensim_extensions.models.equipment.equipment import opensim
+from opensim_extensions.utils.functions import StepBodyImport
 
-equipment_module = importlib.import_module(
-    "opensim_extensions.models.equipment.equipment"
+functions_module = importlib.import_module(
+    "opensim_extensions.utils.functions"
 )
 
 
@@ -51,10 +48,11 @@ def test_read_step_returns_body_with_mass_properties_and_mesh(tmp_path):
     _write_box_step(step_file)
     mesh_directory = tmp_path / "custom_meshes"
 
-    body, mesh_paths = read_step(
+    bodies, meshes = read_step(
         step_file, mesh_directory, density_kg_m3=1000.0
     )
 
+    body = bodies["box"]
     assert body.getName() == "box"
     assert body.getMass() == pytest.approx(0.006)
     np.testing.assert_allclose(
@@ -71,40 +69,20 @@ def test_read_step_returns_body_with_mass_properties_and_mesh(tmp_path):
 
     mesh_path = mesh_directory / "box.vtp"
     assert mesh_path.is_file()
-    assert mesh_paths == [mesh_path.resolve()]
+    assert meshes == {"box": mesh_path.resolve()}
     assert body.getPropertyByName("attached_geometry").size() == 1
     mesh = opensim.Mesh.safeDownCast(body.get_attached_geometry(0))
     assert Path(mesh.get_mesh_file()).resolve() == mesh_path.resolve()
 
 
-def test_read_step_can_return_nested_assembly_hierarchy(tmp_path):
-    asset_directory = tmp_path / "assets"
-    asset_directory.mkdir()
-    step_file = asset_directory / "box.step"
-    _write_box_step(step_file)
-
-    hierarchy = read_step(
-        step_file,
-        tmp_path / "hierarchical_meshes",
-        density_kg_m3=1000.0,
-        return_hierarchy=True,
-    )
-
-    assert set(hierarchy) == {"box"}
-    assert set(hierarchy["box"]) == {"box"}
-    body = hierarchy["box"]["box"]
-    assert body.getName() == "box"
-    assert body.getMass() == pytest.approx(0.006)
-
-
-def test_read_step_components_returns_parallel_body_and_mesh_trees(tmp_path):
+def test_read_step_returns_parallel_body_and_mesh_trees(tmp_path):
     asset_directory = tmp_path / "assets"
     asset_directory.mkdir()
     step_file = asset_directory / "box.step"
     _write_box_step(step_file)
     mesh_directory = tmp_path / "component_meshes"
 
-    bodies, meshes = read_step_components(
+    bodies, meshes = read_step(
         step_file,
         mesh_directory,
         density_kg_m3=1000.0,
@@ -115,7 +93,7 @@ def test_read_step_components_returns_parallel_body_and_mesh_trees(tmp_path):
     assert meshes == {"box": (mesh_directory / "box.vtp").resolve()}
 
 
-def test_read_step_components_preserves_nested_assembly_paths(
+def test_read_step_preserves_nested_assembly_paths(
     tmp_path, monkeypatch
 ):
     frame = opensim.Body(
@@ -136,19 +114,19 @@ def test_read_step_components_preserves_nested_assembly_paths(
         (tmp_path / "pad_2.vtp").resolve(),
     )
     monkeypatch.setattr(
-        equipment_module,
+        functions_module,
         "_read_step_imports",
         lambda *args, **kwargs: {
             "frame": StepBodyImport(
-                frame, (frame_mesh,), np.empty((0, 3)), ("machine", "assembly")
+                frame, (frame_mesh,), ("machine", "assembly")
             ),
             "pad": StepBodyImport(
-                pad, pad_meshes, np.empty((0, 3)), ("machine", "assembly")
+                pad, pad_meshes, ("machine", "assembly")
             ),
         },
     )
 
-    bodies, meshes = read_step_components("ignored.step", tmp_path)
+    bodies, meshes = read_step("ignored.step", tmp_path)
 
     assert bodies == {
         "machine": {

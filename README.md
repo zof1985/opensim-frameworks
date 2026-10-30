@@ -435,7 +435,7 @@ from opensim_extensions.models.equipment import read_step
 step_file = Path("cad/frame.step")
 mesh_directory = Path("output/meshes")
 
-body, mesh_paths = read_step(
+body_tree, mesh_tree = read_step(
     step_file,
     mesh_directory,
     density_kg_m3=7850.0,
@@ -446,25 +446,21 @@ Il valore di `density_kg_m3` è un fallback per i solidi senza una densità
 STEP utilizzabile; può essere un singolo valore o una mappa dai nomi esatti
 dei solidi alle rispettive densità. Se manca una densità sia nel file sia nei
 fallback, l'importazione segnala l'errore anziché assegnare una massa
-arbitraria. Per ottenere una struttura annidata di corpi distinti per
-assemblaggi e componenti, usare `read_step(..., return_hierarchy=True)`.
-`read_step_components()` restituisce due alberi ricorsivi paralleli: il primo
-contiene corpi OpenSim, il secondo i percorsi assoluti delle mesh VTP. I nodi
-possono essere ulteriori dizionari per rappresentare assiemi annidati; le
-foglie mesh sono un `Path`, oppure una tupla di `Path` quando i colori
-richiedono più file.
+arbitraria. `read_step()` restituisce sempre due alberi ricorsivi paralleli:
+il primo contiene corpi OpenSim, il secondo i percorsi assoluti delle mesh
+VTP. I nodi possono essere ulteriori dizionari per rappresentare assiemi
+annidati; le foglie mesh sono un `Path`, oppure una tupla di `Path` quando i
+colori richiedono più file.
 
 ```python
 from opensim_extensions.models.equipment import (
-    read_step_components,
+    read_step,
     weld_bodies,
 )
 
-body_tree, mesh_tree = read_step_components(
+body_tree, mesh_tree = read_step(
     "cad/frame.step",
     "output/meshes",
-    component_names=("pad_toracico",),
-    root_body_name="telaio",
     density_kg_m3=7850.0,
 )
 ```
@@ -635,14 +631,12 @@ Gli elementi inclusi nell'API di wildcard `opensim_extensions` (`__all__`) sono:
 `User`, `Bike`, `IRON_DENSITY_KG_M3`, `Framework`, `save_animation`,
 `VTKViewer`, `VTKVisualizer`, `MotionData`, `MotionPlayer`, `PlayerWindow`,
 `DEFAULT_SIZE` e `VIEW_NAMES`.
-`Equipment` e `Screen` sono disponibili nel sottopackage
-`opensim_extensions.models.equipment`; `VisualErgonomicsFramework` è esposto
-da `opensim_extensions.framework`. Le primitive geometriche e gli helper per
+`Equipment`, `Screen`, `read_step` e `weld_bodies` sono disponibili nel
+sottopackage `opensim_extensions.models.equipment`; `VisualErgonomicsFramework`
+è esposto da `opensim_extensions.framework`. Le primitive geometriche e gli helper per
 creare corpi OpenSim sono esposti nel sottopackage `opensim_extensions.bodies`, ad esempio
 `Box`, `Cylinder`, `Disk`, `Ellipsoid`, `Sphere`, `Tube` e
-`mass_properties`. `read_step`, `read_step_components` e `StepBodyImport` sono
-disponibili da `opensim_extensions.models.equipment`; anche `weld_bodies`
-combina corpi OpenSim rigidamente connessi.
+`mass_properties`. `weld_bodies` combina corpi OpenSim rigidamente connessi.
 Le primitive sono espresse in unità SI e i builder forniscono helper per
 calcolare proprietà di massa e aggiungere corpi saldati o articolati a modelli
 OpenSim.

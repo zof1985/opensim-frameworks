@@ -90,7 +90,7 @@ _AXES_LENGTH = 0.5  # metres, per arm
 _MUSCLE_COLOR = (0.75, 0.1, 0.1)
 _MUSCLE_RADIUS = 0.004  # metres; cosmetic tube thickness, not a real diameter
 _MARKER_COLOR = (1.0, 0.85, 0.0)
-_MARKER_RADIUS = 0.008  # metres
+_MARKER_RADIUS = 0.02  # metres
 
 # Axis-aligned preset camera views: (direction to place the camera from the
 # model's centre, in ground frame) -> view-up. Generic ground-frame axes,

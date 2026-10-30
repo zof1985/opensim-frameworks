@@ -101,6 +101,32 @@ def test_visualizer_skips_geometry_marked_invisible():
         visualizer.close()
 
 
+def test_visualizer_renders_visible_marker_spheres():
+    model = make_model()
+    model.addMarker(
+        opensim.Marker(
+            "marker",
+            model.getBodySet().get("body"),
+            opensim.Vec3(0.0, 0.1, 0.0),
+        )
+    )
+    model.finalizeConnections()
+    model.initSystem()
+
+    visualizer = VTKVisualizer(_ViewerModel(model), offscreen=True)
+    try:
+        assert len(visualizer._marker_items) == 1
+        marker, actor = visualizer._marker_items[0]
+        assert marker.getName() == "marker"
+        assert actor.GetVisibility()
+        bounds = actor.GetBounds()
+        assert bounds[1] - bounds[0] == pytest.approx(0.04, rel=0.02)
+        assert bounds[3] - bounds[2] == pytest.approx(0.04, rel=0.02)
+        assert bounds[5] - bounds[4] == pytest.approx(0.04, rel=0.02)
+    finally:
+        visualizer.close()
+
+
 def make_pin_model() -> opensim.Model:
     model = opensim.Model()
     body = opensim.Body("body", 1.0, opensim.Vec3(0), opensim.Inertia(1))
