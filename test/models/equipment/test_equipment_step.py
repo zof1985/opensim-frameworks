@@ -149,14 +149,14 @@ def test_weld_bodies_combines_mass_properties_and_fuses_meshes(tmp_path):
     assert writer.Write()
 
     body = opensim.Body(
-        "first",
+        "first_" + "x" * 160,
         0.006,
         opensim.Vec3(0.005, 0.01, 0.015),
         opensim.Inertia(6.5e-7, 5e-7, 2.5e-7, 0.0, 0.0, 0.0),
     )
     body.attachGeometry(opensim.Mesh(mesh_path.as_posix()))
     second_body = opensim.Body(
-        "second",
+        "second_" + "y" * 160,
         0.004,
         opensim.Vec3(0.015, 0.01, 0.015),
         opensim.Inertia(2e-7, 3e-7, 4e-7, 0.0, 0.0, 0.0),
@@ -187,6 +187,7 @@ def test_weld_bodies_combines_mass_properties_and_fuses_meshes(tmp_path):
     assert Path(fused_mesh.get_mesh_file()).resolve() == fused_mesh_path
     assert fused_mesh_path.parent == tmp_path.resolve()
     assert fused_mesh_path.is_file()
+    assert len(fused_mesh_path.name) < 255
     from vtkmodules.vtkIOXML import vtkXMLPolyDataReader
 
     source_reader = vtkXMLPolyDataReader()
@@ -232,6 +233,14 @@ def test_weld_bodies_keeps_meshes_with_different_colors_separate(tmp_path):
     body_only = weld_bodies(bodies)
     assert isinstance(body_only, opensim.Body)
     assert body_only.getPropertyByName("attached_geometry").size() == 2
+
+    unfused, unfused_mesh_paths = weld_bodies(
+        bodies,
+        [mesh_path, mesh_path],
+        fuse_meshes=False,
+    )
+    assert unfused.getPropertyByName("attached_geometry").size() == 2
+    assert unfused_mesh_paths == (mesh_path.resolve(), mesh_path.resolve())
 
     combined, fused_mesh_paths = weld_bodies(bodies, [mesh_path, mesh_path])
 

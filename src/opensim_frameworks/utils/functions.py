@@ -133,13 +133,16 @@ def _step_name(value: str, used: set[str]) -> str:
 def weld_bodies(
     bodies: list[Any],
     meshes: list[str | Path | list[str | Path] | tuple[str | Path, ...]] | None = None,
+    fuse_meshes: bool = True,
 ) -> Any:
     """Combine bodies and optionally fuse their corresponding mesh files.
 
     All bodies and mesh coordinates must use the same reference frame. When
     ``meshes`` is omitted, attached OpenSim mesh geometry is copied. When
     supplied, each entry contains the mesh path(s) corresponding to the body
-    at the same index; compatible meshes are fused by visual style.
+    at the same index. Compatible meshes are fused by visual style unless
+    ``fuse_meshes`` is ``False``, in which case each mesh is attached separately
+    and the original resolved paths are returned as a tuple.
 
     Parameters
     ----------
@@ -148,12 +151,16 @@ def weld_bodies(
     meshes
         Optional list with one entry per body. An entry can be a single path
         or a list/tuple of paths.
+    fuse_meshes
+        Whether to fuse explicitly supplied meshes. This option has no effect
+        when ``meshes`` is omitted.
 
     Returns
     -------
-    opensim.Body or tuple[opensim.Body, Path | list[Path]]
+    opensim.Body or tuple[opensim.Body, Path | list[Path] | tuple[Path, ...]]
         The combined body alone when ``meshes`` is ``None``; otherwise a pair
-        containing the body and its fused mesh path(s).
+        containing the body and either fused mesh path(s) or, when
+        ``fuse_meshes`` is ``False``, the tuple of original mesh paths.
 
     Raises
     ------
@@ -169,6 +176,8 @@ def weld_bodies(
         If VTK fails to read or write a fused mesh.
     """
     opensim = import_opensim()
+    if not isinstance(fuse_meshes, bool):
+        raise TypeError("fuse_meshes must be a bool")
     if not isinstance(bodies, list):
         raise TypeError("bodies must be a list of opensim.Body instances")
     if not bodies:
@@ -289,7 +298,7 @@ def weld_bodies(
                 return source
         return opensim.Mesh(mesh_path.as_posix())
 
-    def fuse_meshes(
+    def fuse_mesh_sources(
         sources: list[tuple[Path, Any]],
     ) -> tuple[Any, Path]:
         import vtk
@@ -339,7 +348,7 @@ def weld_bodies(
         digest = hashlib.sha256(repr((signature, style)).encode("utf-8")).hexdigest()[
             :12
         ]
-        output_path = source_paths[0].parent / f"{name}_mesh_{digest}.vtp"
+        output_path = source_paths[0].parent / f"welded_mesh_{digest}.vtp"
 
         writer = vtk.vtkXMLPolyDataWriter()
         writer.SetFileName(str(output_path))
@@ -416,11 +425,15 @@ def weld_bodies(
                     if not mesh_path.is_file():
                         raise FileNotFoundError(f"Mesh file was not found: {mesh_path}")
                     source = source_mesh_for_path(body, mesh_path)
-                    styled_meshes.setdefault(mesh_style(source), []).append(
-                        (mesh_path, source)
-                    )
+                    if fuse_meshes:
+                        styled_meshes.setdefault(mesh_style(source), []).append(
+                            (mesh_path, source)
+                        )
+                    else:
+                        result.attachGeometry(copy_mesh(source))
+                        output_mesh_paths.append(mesh_path)
             for sources in styled_meshes.values():
-                fused_mesh, output_path = fuse_meshes(sources)
+                fused_mesh, output_path = fuse_mesh_sources(sources)
                 result.attachGeometry(fused_mesh)
                 output_mesh_paths.append(output_path)
     finally:
@@ -428,6 +441,8 @@ def weld_bodies(
 
     if mesh_paths_by_body is None:
         return result
+    if not fuse_meshes:
+        return result, tuple(output_mesh_paths)
     if len(output_mesh_paths) == 1:
         return result, output_mesh_paths[0]
     return result, output_mesh_paths
