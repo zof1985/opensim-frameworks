@@ -22,6 +22,8 @@ __all__ = [
     "import_opensim",
     "register_geometry_search_path",
     "resolve_geometry_file",
+    "local_to_global",
+    "global_to_local",
     "read_step",
     "weld_bodies",
 ]
@@ -118,6 +120,62 @@ def import_opensim() -> Any:
     opensim.Logger.removeFileSink()
     opensim.Logger.setLevelString("Warn")
     return opensim
+
+
+def _as_vec3(point: Any, opensim: Any) -> Any:
+    is_vec3 = isinstance(point, opensim.Vec3)
+    coordinates = np.asarray(
+        [point.get(index) for index in range(3)] if is_vec3 else point,
+        dtype=float,
+    )
+    if coordinates.shape != (3,) or not np.all(np.isfinite(coordinates)):
+        raise ValueError("point must contain three finite coordinates")
+    return point if is_vec3 else opensim.Vec3(*map(float, coordinates))
+
+
+def local_to_global(frame: Any, state: Any, point: Any) -> Any:
+    """Express a point from a frame's local coordinates in OpenSim Ground.
+
+    Parameters
+    ----------
+    frame
+        OpenSim physical frame in which ``point`` is expressed.
+    state
+        State belonging to the frame's model, realized to the required pose.
+    point
+        Local point as an OpenSim ``Vec3`` or a sequence of three coordinates,
+        in metres.
+
+    Returns
+    -------
+    opensim.Vec3
+        Point coordinates expressed in Ground, in metres.
+    """
+    opensim = import_opensim()
+    return frame.findStationLocationInGround(state, _as_vec3(point, opensim))
+
+
+def global_to_local(frame: Any, state: Any, point: Any) -> Any:
+    """Express a point from OpenSim Ground in a frame's local coordinates.
+
+    Parameters
+    ----------
+    frame
+        OpenSim physical frame in which to express the result.
+    state
+        State belonging to the frame's model, realized to the required pose.
+    point
+        Ground point as an OpenSim ``Vec3`` or a sequence of three
+        coordinates, in metres.
+
+    Returns
+    -------
+    opensim.Vec3
+        Point coordinates expressed in ``frame``, in metres.
+    """
+    opensim = import_opensim()
+    ground_point = _as_vec3(point, opensim)
+    return frame.getTransformInGround(state).shiftBaseStationToFrame(ground_point)
 
 
 def _step_name(value: str, used: set[str]) -> str:
