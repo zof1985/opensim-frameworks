@@ -1,12 +1,24 @@
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from opensim_extensions.models.equipment import read_step
-from opensim_extensions.models.equipment.equipment import opensim
+from opensim_extensions.models.equipment import (
+    read_step,
+    read_step_components,
+    weld_bodies,
+)
+from opensim_extensions.models.equipment.equipment import (
+    StepBodyImport,
+    opensim,
+)
+
+equipment_module = importlib.import_module(
+    "opensim_extensions.models.equipment.equipment"
+)
 
 
 def _write_box_step(path):
@@ -83,3 +95,207 @@ def test_read_step_can_return_nested_assembly_hierarchy(tmp_path):
     body = hierarchy["box"]["box"]
     assert body.getName() == "box"
     assert body.getMass() == pytest.approx(0.006)
+
+
+def test_read_step_components_returns_parallel_body_and_mesh_trees(tmp_path):
+    asset_directory = tmp_path / "assets"
+    asset_directory.mkdir()
+    step_file = asset_directory / "box.step"
+    _write_box_step(step_file)
+    mesh_directory = tmp_path / "component_meshes"
+
+    bodies, meshes = read_step_components(
+        step_file,
+        mesh_directory,
+        density_kg_m3=1000.0,
+    )
+
+    assert set(bodies) == {"box"}
+    assert isinstance(bodies["box"], opensim.Body)
+    assert meshes == {"box": (mesh_directory / "box.vtp").resolve()}
+
+
+def test_read_step_components_preserves_nested_assembly_paths(
+    tmp_path, monkeypatch
+):
+    frame = opensim.Body(
+        "frame",
+        1.0,
+        opensim.Vec3(0, 0, 0),
+        opensim.Inertia(1, 1, 1, 0, 0, 0),
+    )
+    pad = opensim.Body(
+        "pad",
+        1.0,
+        opensim.Vec3(0, 0, 0),
+        opensim.Inertia(1, 1, 1, 0, 0, 0),
+    )
+    frame_mesh = (tmp_path / "frame.vtp").resolve()
+    pad_meshes = (
+        (tmp_path / "pad_1.vtp").resolve(),
+        (tmp_path / "pad_2.vtp").resolve(),
+    )
+    monkeypatch.setattr(
+        equipment_module,
+        "_read_step_imports",
+        lambda *args, **kwargs: {
+            "frame": StepBodyImport(
+                frame, (frame_mesh,), np.empty((0, 3)), ("machine", "assembly")
+            ),
+            "pad": StepBodyImport(
+                pad, pad_meshes, np.empty((0, 3)), ("machine", "assembly")
+            ),
+        },
+    )
+
+    bodies, meshes = read_step_components("ignored.step", tmp_path)
+
+    assert bodies == {
+        "machine": {
+            "assembly": {
+                "frame": frame,
+                "pad": pad,
+            }
+        }
+    }
+    assert meshes == {
+        "machine": {
+            "assembly": {
+                "frame": frame_mesh,
+                "pad": pad_meshes,
+            }
+        }
+    }
+
+
+def test_weld_bodies_combines_mass_properties_and_fuses_meshes(tmp_path):
+    import vtk
+
+    mesh_path = tmp_path / "box.vtp"
+    box = vtk.vtkCubeSource()
+    box.SetCenter(0.005, 0.01, 0.015)
+    box.SetXLength(0.01)
+    box.SetYLength(0.02)
+    box.SetZLength(0.03)
+    writer = vtk.vtkXMLPolyDataWriter()
+    writer.SetFileName(str(mesh_path))
+    writer.SetInputConnection(box.GetOutputPort())
+    writer.SetDataModeToAscii()
+    assert writer.Write()
+
+    body = opensim.Body(
+        "first",
+        0.006,
+        opensim.Vec3(0.005, 0.01, 0.015),
+        opensim.Inertia(6.5e-7, 5e-7, 2.5e-7, 0.0, 0.0, 0.0),
+    )
+    body.attachGeometry(opensim.Mesh(mesh_path.as_posix()))
+    second_body = opensim.Body(
+        "second",
+        0.004,
+        opensim.Vec3(0.015, 0.01, 0.015),
+        opensim.Inertia(2e-7, 3e-7, 4e-7, 0.0, 0.0, 0.0),
+    )
+    source_mesh = opensim.Mesh.safeDownCast(body.get_attached_geometry(0))
+    second_mesh = opensim.Mesh(mesh_path.as_posix())
+    second_mesh.setColor(source_mesh.getColor())
+    second_mesh.setOpacity(source_mesh.getOpacity())
+    second_mesh.setRepresentation(source_mesh.getRepresentation())
+    second_mesh.set_scale_factors(opensim.Vec3(2.0, 1.0, 1.0))
+    second_body.attachGeometry(second_mesh)
+    combined, fused_mesh_path = weld_bodies(
+        [body, second_body],
+        [mesh_path, (mesh_path,)],
+    )
+
+    assert combined.getMass() == pytest.approx(0.01)
+    np.testing.assert_allclose(
+        [combined.getMassCenter().get(index) for index in range(3)],
+        [0.009, 0.01, 0.015],
+    )
+    np.testing.assert_allclose(
+        [combined.getInertia().getMoments().get(index) for index in range(3)],
+        [8.5e-7, 1.04e-6, 8.9e-7],
+    )
+    assert combined.getPropertyByName("attached_geometry").size() == 1
+    fused_mesh = opensim.Mesh.safeDownCast(combined.get_attached_geometry(0))
+    assert Path(fused_mesh.get_mesh_file()).resolve() == fused_mesh_path
+    assert fused_mesh_path.parent == tmp_path.resolve()
+    assert fused_mesh_path.is_file()
+    from vtkmodules.vtkIOXML import vtkXMLPolyDataReader
+
+    source_reader = vtkXMLPolyDataReader()
+    source_reader.SetFileName(str(mesh_path))
+    source_reader.Update()
+    fused_reader = vtkXMLPolyDataReader()
+    fused_reader.SetFileName(str(fused_mesh_path))
+    fused_reader.Update()
+    assert fused_reader.GetOutput().GetNumberOfPoints() == (
+        source_reader.GetOutput().GetNumberOfPoints() * 2
+    )
+    assert fused_reader.GetOutput().GetBounds()[1] == pytest.approx(0.02)
+    assert body.getPropertyByName("attached_geometry").size() == 1
+    assert second_body.getPropertyByName("attached_geometry").size() == 1
+
+
+def test_weld_bodies_keeps_meshes_with_different_colors_separate(tmp_path):
+    import vtk
+
+    mesh_path = tmp_path / "box.vtp"
+    box = vtk.vtkCubeSource()
+    writer = vtk.vtkXMLPolyDataWriter()
+    writer.SetFileName(str(mesh_path))
+    writer.SetInputConnection(box.GetOutputPort())
+    writer.SetDataModeToAscii()
+    assert writer.Write()
+
+    bodies = [
+        opensim.Body(
+            name,
+            1.0,
+            opensim.Vec3(0, 0, 0),
+            opensim.Inertia(1, 1, 1, 0, 0, 0),
+        )
+        for name in ("first", "second")
+    ]
+    first_mesh = opensim.Mesh(mesh_path.as_posix())
+    second_mesh = opensim.Mesh(mesh_path.as_posix())
+    second_mesh.setColor(opensim.Vec3(1.0, 0.0, 0.0))
+    bodies[0].attachGeometry(first_mesh)
+    bodies[1].attachGeometry(second_mesh)
+
+    body_only = weld_bodies(bodies)
+    assert isinstance(body_only, opensim.Body)
+    assert body_only.getPropertyByName("attached_geometry").size() == 2
+
+    combined, fused_mesh_paths = weld_bodies(
+        bodies, [mesh_path, mesh_path]
+    )
+
+    assert combined.getPropertyByName("attached_geometry").size() == 2
+    assert len(fused_mesh_paths) == 2
+    assert all(path.is_file() for path in fused_mesh_paths)
+    colors = {
+        tuple(
+            opensim.Mesh.safeDownCast(combined.get_attached_geometry(index))
+            .getColor()
+            .get(axis)
+            for axis in range(3)
+        )
+        for index in range(2)
+    }
+    assert colors == {(1.0, 1.0, 1.0), (1.0, 0.0, 0.0)}
+
+
+def test_weld_bodies_requires_at_least_one_body():
+    with pytest.raises(ValueError, match="at least one body"):
+        weld_bodies([])
+
+    body = opensim.Body(
+        "body",
+        1.0,
+        opensim.Vec3(0, 0, 0),
+        opensim.Inertia(1, 1, 1, 0, 0, 0),
+    )
+    with pytest.raises(ValueError, match="same length as bodies"):
+        weld_bodies([body], [])

@@ -448,10 +448,43 @@ dei solidi alle rispettive densità. Se manca una densità sia nel file sia nei
 fallback, l'importazione segnala l'errore anziché assegnare una massa
 arbitraria. Per ottenere una struttura annidata di corpi distinti per
 assemblaggi e componenti, usare `read_step(..., return_hierarchy=True)`.
-`read_step_components()` consente invece di selezionare i nomi di componenti
-e solidi da separare; restituisce per ciascun corpo un `StepBodyImport` con
-mesh, percorso nell'assieme e, su richiesta, i vertici CAD trasformati in
-metri.
+`read_step_components()` restituisce due alberi ricorsivi paralleli: il primo
+contiene corpi OpenSim, il secondo i percorsi assoluti delle mesh VTP. I nodi
+possono essere ulteriori dizionari per rappresentare assiemi annidati; le
+foglie mesh sono un `Path`, oppure una tupla di `Path` quando i colori
+richiedono più file.
+
+```python
+from opensim_extensions.models.equipment import (
+    read_step_components,
+    weld_bodies,
+)
+
+body_tree, mesh_tree = read_step_components(
+    "cad/frame.step",
+    "output/meshes",
+    component_names=("pad_toracico",),
+    root_body_name="telaio",
+    density_kg_m3=7850.0,
+)
+```
+
+`weld_bodies(bodies, meshes=None)` combina massa, centro di massa e inerzia di
+corpi espressi nello stesso sistema di riferimento. Se `meshes` è fornito,
+deve contenere un path (o una lista/tupla di path) per ogni corpo, nello stesso
+ordine. Le mesh sono fuse per colore, opacità e rappresentazione; le scale
+sono incorporate nei file VTP risultanti, salvati accanto alle mesh sorgenti.
+La funzione restituisce il solo `Body` quando `meshes` è `None`, altrimenti
+`(Body, Path | list[Path])`. Gli oggetti sorgente non vengono modificati. In
+`HighRowPlateloaded` i componenti che devono muoversi separatamente restano
+corpi distinti e vengono collegati con `WeldJoint`.
+
+```python
+combined_body, fused_meshes = weld_bodies(
+    [body_a, body_b],
+    ["meshes/a.vtp", ("meshes/b1.vtp", "meshes/b2.vtp")],
+)
+```
 
 ## Composizione con `Framework`
 
@@ -608,7 +641,8 @@ da `opensim_extensions.framework`. Le primitive geometriche e gli helper per
 creare corpi OpenSim sono esposti nel sottopackage `opensim_extensions.bodies`, ad esempio
 `Box`, `Cylinder`, `Disk`, `Ellipsoid`, `Sphere`, `Tube` e
 `mass_properties`. `read_step`, `read_step_components` e `StepBodyImport` sono
-disponibili da `opensim_extensions.models.equipment`.
+disponibili da `opensim_extensions.models.equipment`; anche `weld_bodies`
+combina corpi OpenSim rigidamente connessi.
 Le primitive sono espresse in unità SI e i builder forniscono helper per
 calcolare proprietà di massa e aggiungere corpi saldati o articolati a modelli
 OpenSim.
