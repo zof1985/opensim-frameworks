@@ -221,29 +221,73 @@ class Equipment(opensim.Model, ABC):
     parameter-specific models in memory can provide their own initializer.
     """
 
-    _model_path: ClassVar[Path]
+    _model_path: ClassVar[Path | None] = None
     _model_filename: ClassVar[str] = "model.osim"
     _rebuild_model_on_init: ClassVar[bool] = False
 
     def __init__(self) -> None:
         self.opensim = opensim
-        model_directory = getattr(type(self), "_model_path", None)
-        if not isinstance(model_directory, Path):
+        model_directory = self.model_path
+        mesh_directory = self.mesh_path
+        model_file = self.model_file
+        if model_directory is None:
             raise NotImplementedError(
                 f"{type(self).__name__} must define its _model_path"
             )
-        model_path = model_directory / self._model_filename
-        if not model_path.is_file() or self._rebuild_model_on_init:
+        if not isinstance(model_directory, Path):
+            raise TypeError("model_path must be a pathlib.Path")
+        if not isinstance(mesh_directory, Path):
+            raise TypeError("mesh_path must be a pathlib.Path")
+        if not isinstance(model_file, Path):
+            raise TypeError("model_file must be a pathlib.Path")
+
+        self._model_path = model_directory
+        self._mesh_path = mesh_directory
+        self._model_file = model_file
+        if not self.model_file.is_file() or self._rebuild_model_on_init:
             model_directory.mkdir(parents=True, exist_ok=True)
+            mesh_directory.mkdir(parents=True, exist_ok=True)
             self._build()
-        if not model_path.is_file():
+        model_file = self.model_file
+        if model_file is None or not model_file.is_file():
             raise FileNotFoundError(
-                f"{type(self).__name__}._build did not create {model_path}"
+                f"{type(self).__name__}._build did not create {self.model_file}"
             )
-        opensim.Model.__init__(self, str(model_path))
+        opensim.Model.__init__(self, str(model_file))
         self.finalizeConnections()
         self.state = self.initSystem()
         self.realizePosition(self.state)
+
+    @property
+    def model_path(self) -> Path | None:
+        """Path to the assets directory."""
+        return getattr(self, "_model_path", None)
+
+    @property
+    def mesh_path(self) -> Path | None:
+        """Path to the mesh directory."""
+        mesh_path = getattr(self, "_mesh_path", None)
+        if mesh_path is not None:
+            return mesh_path
+        model_path = self.model_path
+        return None if model_path is None else model_path / "meshes"
+
+    @property
+    def meshes(self) -> list[Path]:
+        """List of all mesh files in the mesh directory."""
+        mesh_path = self.mesh_path
+        if mesh_path is None:
+            return []
+        return sorted(mesh_path.glob("*.vtp"))
+
+    @property
+    def model_file(self) -> Path | None:
+        """Path to the model file."""
+        model_file = getattr(self, "_model_file", None)
+        if model_file is not None:
+            return model_file
+        model_path = self.model_path
+        return None if model_path is None else model_path / self._model_filename
 
     @property
     def screen(self) -> Screen | None:
