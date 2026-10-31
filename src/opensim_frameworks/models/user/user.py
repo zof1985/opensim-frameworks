@@ -9,7 +9,11 @@ from typing import Any, Literal
 import numpy as np
 
 from ...bodies.shapes import MESHES_DIR
-from ...utils.functions import import_opensim, register_geometry_search_path
+from ...utils.opensim import (
+    get_referenced_meshes,
+    import_opensim,
+    register_geometry_search_path,
+)
 from .data import DEFAULT_DATASET, resolve_reference
 from .joint_center_table import JOINT_CENTER_NAMES as _JOINT_CENTER_NAMES
 from .joint_centers_generated import _JointCenterMixin
@@ -46,6 +50,16 @@ def _validate_mass_kg(mass_kg: float) -> None:
     Shared by the constructor's ``mass_kg`` parameter and
     :meth:`User.set_mass_kg`, so both reject the same values with the same
     message.
+
+    Parameters
+    ----------
+    mass_kg : float
+        Requested body mass in kilograms.
+
+    Raises
+    ------
+    ValueError
+        If the mass is not finite and strictly positive.
     """
     if not math.isfinite(mass_kg) or mass_kg <= 0:
         raise ValueError("mass_kg must be a positive finite value in kilograms")
@@ -62,7 +76,23 @@ def _axis_scale_factors(
 
 
 def _remove_segment_mass(body: Any, mass: float, center: np.ndarray) -> None:
-    """Split a rigid segment's mass into a new body while preserving its first moment."""
+    """Split a rigid segment's mass while preserving its first moment.
+
+    Parameters
+    ----------
+    body : opensim.Body
+        Body whose mass and centre of mass are updated in place.
+    mass : float
+        Mass in kilograms to remove from the body.
+    center : numpy.ndarray, shape (3,)
+        Centre of mass of the removed mass in metres, in the body frame.
+
+    Raises
+    ------
+    ValueError
+        If removing ``mass`` would leave the original body with no positive
+        mass.
+    """
     original_mass = body.getMass()
     remaining_mass = original_mass - mass
     if remaining_mass <= 0:
@@ -81,7 +111,7 @@ class User(opensim.Model, _MeasurementMixin, _PostureMixin, _JointCenterMixin):
     Built from the Rajagopal-Lai-Uhlrich full-body OpenSim model
     (``rajagopalaiulrich2023.osim``, bundled under ``assets/``), scaled
     per-body to the requested anthropometry using ANSUR II reference data
-    (see "Scaling antropometrico" in the package README), then calibrated
+    (see the README's "Anthropometric scaling" section), then calibrated
     so the model's total mass matches a real anthropometric mass reference
     (``mass_kg``, if given, otherwise the resolved ANSUR ``weight_kg`` --
     see :attr:`mass_kg`) rather than whatever the geometric scaling alone
@@ -125,8 +155,8 @@ class User(opensim.Model, _MeasurementMixin, _PostureMixin, _JointCenterMixin):
     mass_kg : float or None, optional
         Requested total body mass, in kilograms. If provided, it is used
         as an *independent* scaling input, exactly like ``height_cm``: once
-        every body has been scaled geometrically (see "Scaling
-        antropometrico" in the README), every body's mass *and* inertia
+        every body has been scaled geometrically (see the README's
+        "Anthropometric scaling" section), every body's mass *and* inertia
         tensor are uniformly rescaled (a single scalar factor, via
         ``opensim.Body.scaleMass``) so the whole model's total mass
         (``self.getTotalMass(self.state)``) matches ``mass_kg`` exactly --
@@ -160,21 +190,35 @@ class User(opensim.Model, _MeasurementMixin, _PostureMixin, _JointCenterMixin):
         *,
         dataset: str | Path = DEFAULT_DATASET,
     ):
-        """Resolve anthropometry, load the base model, scale it, and calibrate its total mass.
+        """Resolve anthropometry, scale the base model, and calibrate its mass.
 
-        See the class docstring for the full description of ``gender``,
-        ``height_cm``, ``percentile``, ``mass_kg``, and ``dataset``, and of
-        the conditions under which a
-        :class:`ValueError` or :class:`UserWarning` is raised. After
-        resolving the anthropometric reference, this loads the bundled model
-        (unlocking every coordinate -- see ``User._unlock_coordinates``),
-        registers the bundled mesh directory for rendering, scales every
-        body via :meth:`scale_bodies` using per-segment factors derived by
-        comparing the resolved reference against the 50th-percentile
-        baseline for the same ``gender`` (see "Scaling antropometrico" in
-        the README), and finally calibrates the whole model's total mass
-        (see :meth:`_rescale_total_mass`) to ``mass_kg`` if given, or to the
-        resolved ANSUR ``weight_kg`` otherwise.
+        The resolved reference determines segment scaling relative to the
+        50th-percentile baseline for the same gender. The model's total mass
+        is then calibrated to ``mass_kg`` or, when omitted, to the resolved
+        ANSUR ``weight_kg``.
+
+        Parameters
+        ----------
+        gender : {"M", "F"}
+            ANSUR population used to resolve anthropometric measurements.
+        height_cm : float or None, optional
+            Requested stature in centimetres. When omitted, ``percentile``
+            selects the reference.
+        percentile : float, optional
+            ANSUR percentile used when resolving the reference. Defaults to
+            50.
+        mass_kg : float or None, optional
+            Target total model mass in kilograms. Defaults to the resolved
+            ANSUR body mass.
+        dataset : str or pathlib.Path, optional
+            Path to an alternative ANSUR II reference CSV.
+
+        Raises
+        ------
+        ValueError
+            If the supplied gender, stature, percentile, or mass is invalid.
+        UserWarning
+            If the requested stature lies outside the ANSUR range.
         """
         if mass_kg is not None:
             _validate_mass_kg(mass_kg)
@@ -563,7 +607,7 @@ class User(opensim.Model, _MeasurementMixin, _PostureMixin, _JointCenterMixin):
             raise ValueError("mesh_dir must be a safe relative directory path")
 
         self._sync_coordinate_defaults()
-        mesh_files = self._referenced_mesh_files() if with_meshes else []
+        mesh_files = get_referenced_meshes(self) if with_meshes else []
         if with_meshes:
             self._export_mesh_files(destination.parent / mesh_subdirectory, mesh_files)
 
@@ -619,21 +663,6 @@ class User(opensim.Model, _MeasurementMixin, _PostureMixin, _JointCenterMixin):
             destination = destination_dir / filename
             if source.resolve() != destination.resolve():
                 shutil.copy2(source, destination)
-
-    def _referenced_mesh_files(self) -> list[tuple[Any, str]]:
-        meshes: list[tuple[Any, str]] = []
-        for component in self.getComponentsList():
-            frame = opensim.PhysicalFrame.safeDownCast(component)
-            if frame is None:
-                continue
-            geometry_property = frame.getPropertyByName("attached_geometry")
-            for geometry_index in range(geometry_property.size()):
-                mesh = opensim.Mesh.safeDownCast(
-                    frame.get_attached_geometry(geometry_index)
-                )
-                if mesh is not None:
-                    meshes.append((mesh, mesh.get_mesh_file()))
-        return meshes
 
     def _set_coordinate_degrees(self, name: str, degrees: float) -> None:
         if not math.isfinite(degrees):
@@ -828,7 +857,20 @@ class User(opensim.Model, _MeasurementMixin, _PostureMixin, _JointCenterMixin):
         *,
         source_multiplier: float,
     ) -> None:
-        """Update one symmetric ANSUR input and apply its scale delta."""
+        """Update one symmetric ANSUR input and apply its scale delta.
+
+        Parameters
+        ----------
+        property_name : str
+            Name of the ``User`` measurement property to update.
+        source_measure : str
+            ANSUR reference column backing the property.
+        value : float
+            New measurement in the property's units.
+        source_multiplier : float
+            Conversion factor from the property value to the ANSUR column
+            units.
+        """
         measurement = self._validate_measurement(property_name, value)
         updated_values = self._reference.values.copy()
         updated_values[source_measure] = measurement * source_multiplier
@@ -844,7 +886,26 @@ class User(opensim.Model, _MeasurementMixin, _PostureMixin, _JointCenterMixin):
         body_axes: tuple[tuple[str, tuple[str, ...]], ...],
         store_override: bool,
     ) -> None:
-        """Apply a side-specific measurement without changing its opposite."""
+        """Apply a side-specific measurement without changing its opposite.
+
+        Parameters
+        ----------
+        property_name : str
+            Name of the side-specific ``User`` measurement property.
+        value : float
+            New measurement in the property's units.
+        body_axes : tuple
+            Body names and axes affected by the measurement scale.
+        store_override : bool
+            Whether to retain the new side-specific value as an override.
+
+        Raises
+        ------
+        RuntimeError
+            If a body required for scaling is absent from the model.
+        ValueError
+            If the measurement is invalid.
+        """
         measurement = self._validate_measurement(property_name, value)
         body_set = self.getBodySet()
         for body_name, _ in body_axes:
@@ -998,7 +1059,7 @@ class User(opensim.Model, _MeasurementMixin, _PostureMixin, _JointCenterMixin):
             ``values`` (a ``dict`` mapping every numeric ANSUR II column
             resolved for this user to its value in the dataset's original
             units -- predominantly millimetres, with ``values["stature_m"]``
-            in metres; see "Dati ANSUR risolti" in the README), and the
+            in metres; see "ANSUR-resolved values" in the README), and the
             convenience properties ``height_m``/``height_cm`` (stature only,
             derived from ``values["stature_m"]``). This type is an internal
             implementation detail (not part of the package's re-exported
@@ -1442,7 +1503,7 @@ class User(opensim.Model, _MeasurementMixin, _PostureMixin, _JointCenterMixin):
         geometric measurement, not read from ANSUR. See
         :attr:`biacromial_breadth` for the ANSUR-measured equivalent; the
         two are independent and generally do not coincide numerically (see
-        the README's "Centri articolari e misure derivate" section for why).
+        the README's "Joint centres and derived measurements" section).
 
         Returns
         -------

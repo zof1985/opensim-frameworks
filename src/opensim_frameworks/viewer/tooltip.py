@@ -32,7 +32,21 @@ _LINE_SPACING = 4
 def _rounded_rect_points(
     x1: float, y1: float, x2: float, y2: float, radius: float
 ) -> list[float]:
-    """Return the point list for a rounded-rectangle ``create_polygon(..., smooth=True)``."""
+    """Return points for a rounded rectangle drawn with a smoothed polygon.
+
+    Parameters
+    ----------
+    x1, y1, x2, y2 : float
+        Rectangle bounds in canvas coordinates.
+    radius : float
+        Requested corner radius in canvas units; it is clamped to the
+        rectangle dimensions and to zero.
+
+    Returns
+    -------
+    list of float
+        Flattened sequence of x/y polygon coordinates.
+    """
     radius = max(0.0, min(radius, (x2 - x1) / 2, (y2 - y1) / 2))
     return [
         x1 + radius,

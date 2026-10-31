@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-__all__ = ["JOINT_CENTER_ENTRIES", "JOINT_CENTER_NAMES"]
-
 from dataclasses import dataclass
+
+__all__ = ["JOINT_CENTER_ENTRIES", "JOINT_CENTER_NAMES"]
 
 
 @dataclass(frozen=True)
@@ -14,6 +14,15 @@ class JointCenterEntry:
     cross-reference sentence beyond the standard template, e.g. a
     CoordinateCouplerConstraint caveat for the patella, so the whole
     paragraph is stored rather than decomposed).
+
+    Attributes
+    ----------
+    attr_name : str
+        Public property name for the joint centre.
+    joint_name : str
+        OpenSim joint name used to locate the centre.
+    docstring : str
+        Public documentation text for the property.
     """
 
     attr_name: str
@@ -120,7 +129,7 @@ JOINT_CENTER_ENTRIES: tuple[JointCenterEntry, ...] = (
         coupling is only resolved by ``realizePosition``/``assemble``-level
         updates, not by a plain :meth:`update_state` after a mid-edit knee
         angle change (see :meth:`set_left_knee_flexionextension` and the
-        README's "Limiti noti di update_state()").
+        README's "Known update_state() limitation").
 
         Returns
         -------
@@ -142,7 +151,7 @@ JOINT_CENTER_ENTRIES: tuple[JointCenterEntry, ...] = (
         coupling is only resolved by ``realizePosition``/``assemble``-level
         updates, not by a plain :meth:`update_state` after a mid-edit knee
         angle change (see :meth:`set_right_knee_flexionextension` and the
-        README's "Limiti noti di update_state()").
+        README's "Known update_state() limitation").
 
         Returns
         -------

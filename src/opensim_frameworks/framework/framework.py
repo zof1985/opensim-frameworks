@@ -10,7 +10,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Self, TypeGuard
 
 from ..bodies.shapes import MESHES_DIR
-from ..utils.functions import import_opensim
+from ..utils.opensim import import_opensim
 from .couplings import ComponentRef, Coupling, normalize_reference
 
 if TYPE_CHECKING:
@@ -455,6 +455,16 @@ class Framework(dict[str, opensim.Model]):
 
         OpenSim's model copy constructor returns a native ``opensim.Model``;
         specialized Python subclasses are therefore copied as native models.
+
+        Parameters
+        ----------
+        memo : dict
+            Deep-copy memo dictionary used to preserve object identity.
+
+        Returns
+        -------
+        Framework
+            Independent framework containing copies of the native models.
         """
         existing = memo.get(id(self))
         if existing is not None:

@@ -17,7 +17,7 @@ class _PostureMixin:
         real anatomical asymmetry between hip flexion and extension.
 
         Like every posture setter, this only writes the raw coordinate
-        value (see "Setter grezzi sullo stato" in the project README):
+        value (see "Raw posture setters" in the project README):
         call :meth:`update_state` before reading anything derived from the
         new posture (joint centres, ``com``, muscle lengths/forces...).
 
@@ -73,7 +73,7 @@ class _PostureMixin:
         real anatomical asymmetry between hip flexion and extension.
 
         Like every posture setter, this only writes the raw coordinate
-        value (see "Setter grezzi sullo stato" in the project README):
+        value (see "Raw posture setters" in the project README):
         call :meth:`update_state` before reading anything derived from the
         new posture (joint centres, ``com``, muscle lengths/forces...).
 
@@ -592,7 +592,7 @@ class _PostureMixin:
         (``<locked>true</locked>``); it accepts values here regardless,
         because every ``User`` instance force-unlocks every coordinate at
         construction time (see ``User._unlock_coordinates`` and
-        the README's "Modificare la postura" section), overriding whatever
+        the README's "Changing posture" section), overriding whatever
         the base file specifies.
 
         Like every posture setter, this only writes the raw coordinate
@@ -651,7 +651,7 @@ class _PostureMixin:
         (``<locked>true</locked>``); it accepts values here regardless,
         because every ``User`` instance force-unlocks every coordinate at
         construction time (see ``User._unlock_coordinates`` and
-        the README's "Modificare la postura" section), overriding whatever
+        the README's "Changing posture" section), overriding whatever
         the base file specifies.
 
         Like every posture setter, this only writes the raw coordinate

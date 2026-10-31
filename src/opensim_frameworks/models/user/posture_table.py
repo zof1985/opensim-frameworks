@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-__all__ = ["POSTURE_ENTRIES", "POSTURE_COORDINATE_NAMES"]
-
 from dataclasses import dataclass
+
+__all__ = ["POSTURE_ENTRIES", "POSTURE_COORDINATE_NAMES"]
 
 
 @dataclass(frozen=True)
@@ -14,6 +14,17 @@ class PostureEntry:
     one's own anatomical-direction/range paragraph, not reproducible from a
     generic template, which is why it's stored whole rather than decomposed
     into smaller fields).
+
+    Attributes
+    ----------
+    attr_suffix : str
+        Suffix used by the public posture setter and getter names.
+    coordinate : str
+        Corresponding OpenSim coordinate name.
+    setter_docstring : str
+        Public documentation text for the setter.
+    getter_docstring : str
+        Public documentation text for the getter.
     """
 
     attr_suffix: str
@@ -37,7 +48,7 @@ POSTURE_ENTRIES: tuple[PostureEntry, ...] = (
         real anatomical asymmetry between hip flexion and extension.
 
         Like every posture setter, this only writes the raw coordinate
-        value (see "Setter grezzi sullo stato" in the project README):
+        value (see "Raw posture setters" in the project README):
         call :meth:`update_state` before reading anything derived from the
         new posture (joint centres, ``com``, muscle lengths/forces...).
 
@@ -94,7 +105,7 @@ POSTURE_ENTRIES: tuple[PostureEntry, ...] = (
         real anatomical asymmetry between hip flexion and extension.
 
         Like every posture setter, this only writes the raw coordinate
-        value (see "Setter grezzi sullo stato" in the project README):
+        value (see "Raw posture setters" in the project README):
         call :meth:`update_state` before reading anything derived from the
         new posture (joint centres, ``com``, muscle lengths/forces...).
 
@@ -622,7 +633,7 @@ POSTURE_ENTRIES: tuple[PostureEntry, ...] = (
         (``<locked>true</locked>``); it accepts values here regardless,
         because every ``User`` instance force-unlocks every coordinate at
         construction time (see ``User._unlock_coordinates`` and
-        the README's "Modificare la postura" section), overriding whatever
+        the README's "Changing posture" section), overriding whatever
         the base file specifies.
 
         Like every posture setter, this only writes the raw coordinate
@@ -682,7 +693,7 @@ POSTURE_ENTRIES: tuple[PostureEntry, ...] = (
         (``<locked>true</locked>``); it accepts values here regardless,
         because every ``User`` instance force-unlocks every coordinate at
         construction time (see ``User._unlock_coordinates`` and
-        the README's "Modificare la postura" section), overriding whatever
+        the README's "Changing posture" section), overriding whatever
         the base file specifies.
 
         Like every posture setter, this only writes the raw coordinate

@@ -133,6 +133,16 @@ def _build_interactor_style(vtk: Any) -> Any:
     dispatch for a virtual method like ``OnLeftButtonDown`` requires the
     Python wrapper object itself to still be alive, independently of the
     underlying C++ object's own reference count.
+
+    Parameters
+    ----------
+    vtk : module
+        VTK namespace providing the camera interactor-style base class.
+
+    Returns
+    -------
+    vtk.vtkInteractorStyleTrackballCamera
+        Custom interactor style with the modified pan gesture.
     """
 
     class _CameraInteractorStyle(vtk.vtkInteractorStyleTrackballCamera):
@@ -375,6 +385,11 @@ class VTKVisualizer:
         directly) and is accepted by ``vtkRenderer.AddActor`` the same
         way, so it slots into this module's existing per-layer pattern
         without any special-casing.
+
+        Returns
+        -------
+        vtk.vtkAxesActor
+            Labelled XYZ axes actor at the world origin.
         """
         axes = self._vtk.vtkAxesActor()
         axes.SetTotalLength(_AXES_LENGTH, _AXES_LENGTH, _AXES_LENGTH)
@@ -679,6 +694,19 @@ class VTKVisualizer:
         ``None`` for a mesh whose file can't be resolved, or a geometry
         type not handled -- see :func:`opensim_frameworks._geometry.build_source`,
         shared with :class:`~opensim_frameworks.components.Body`'s ``.corners``.
+
+        Parameters
+        ----------
+        geometry : opensim.DecorativeGeometry
+            Geometry component to render.
+        opensim : module
+            OpenSim namespace used to identify geometry types.
+
+        Returns
+        -------
+        object or None
+            VTK source or reader for supported geometry, or ``None`` when the
+            geometry is unsupported or its mesh file cannot be resolved.
         """
         return _geometry.build_source(
             self._vtk, opensim, geometry, self._model._resolve_geometry_file

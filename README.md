@@ -1,119 +1,117 @@
 # opensim-frameworks
 
-`opensim-frameworks` è un package Python che estende [OpenSim](https://opensim.stanford.edu/)
-con modelli antropometrici, una bike da indoor cycling regolabile, composizione
-di modelli e strumenti di visualizzazione ed esportazione.
+`opensim-frameworks` is a Python package that extends
+[OpenSim](https://opensim.stanford.edu/) with anthropometric models, adjustable
+indoor-cycling equipment, model composition, and visualization and export
+tools.
 
-## Funzionalità
+## Features
 
-- **`User`**: modello full-body OpenSim basato sul modello
-  Rajagopal-Lai-Uhlrich 2023, scalato con riferimenti antropometrici ANSUR II.
-  Espone misure, centri articolari, marker e setter espliciti per le misure e
-  la postura.
-- **`Bike`**: modello OpenSim di una bike regolabile, con fitting di un utente,
-  pedali, manubrio, schermo, supporto e sella arrotondata e rastremata.
-- **Importazione STEP**: converte geometrie STEP in corpi OpenSim e mesh VTP,
-  usando densità e colori dei materiali quando disponibili.
-- **`Framework`**: contenitore nominativo di modelli OpenSim distinti, con
-  snapshot composito, accoppiamenti e strumenti per simulare o creare un
-  modello OpenSim indipendente.
-- **Visualizzazione**: `VTKViewer` e `VTKVisualizer` mostrano i modelli; il
-  player interattivo gestisce le motion `.mot`/`.sto`; l'esportazione salva
-  snapshot SVG e animazioni MP4.
+- **`User`**: full-body OpenSim model based on the Rajagopal-Lai-Uhlrich 2023
+  model and scaled using ANSUR II anthropometric references. It exposes
+  measurements, joint centres, markers, and explicit measurement and posture
+  setters.
+- **`Bike`**: adjustable indoor-cycling bike model with rider fitting, pedals,
+  handlebar, screen and support, and a rounded, tapered saddle.
+- **STEP import**: converts STEP geometry into OpenSim bodies and VTP meshes,
+  using material densities and colours when available.
+- **`Framework`**: named container for separate OpenSim models, with composite
+  snapshots, couplings, and tools for simulation or standalone model creation.
+- **Visualization**: `VTKViewer` and `VTKVisualizer` display models. The
+  interactive player supports `.mot` and `.sto` motions; export tools save SVG
+  snapshots and MP4 animations.
 
-## Architettura
+## Architecture
 
-La struttura attuale del package separa modelli, composizione e
-visualizzazione:
+The package separates models, composition, and visualization:
 
 ```text
 src/opensim_frameworks/
 ├── models/
-│   ├── user/       User, riferimenti ANSUR II, scaling e asset anatomici
+│   ├── user/       User, ANSUR II references, scaling, and anatomical assets
 │   └── equipment/
-│       ├── equipment.py    Equipment, Screen e importazione STEP
+│       ├── equipment.py    Equipment, Screen, and STEP import
 │       └── bikes/
-│           └── bike/       Bike parametrica e fitting cinematico
-├── bodies/         primitive geometriche e builder per corpi OpenSim
-├── framework/      composizione di modelli e accoppiamenti
-├── viewer/         scena VTK, player, animazione off-screen ed export SVG
+│           └── bike/       Parametric Bike and kinematic fitting
+├── bodies/         Geometric primitives and OpenSim body builders
+├── framework/      Model composition and couplings
+├── viewer/         VTK scene, player, off-screen animation, and SVG export
 └── utils/
-    ├── functions.py  caricamento binding OpenSim e risoluzione mesh
-    └── constants.py costanti condivise dal package
+    ├── opensim.py    OpenSim, frame, and geometry utilities
+    ├── step.py       STEP parsing, tessellation, and tree utilities
+    └── constants.py Shared package constants
 ```
 
-`User` e `Bike` sono modelli nativi OpenSim. `Framework` li mantiene come
-modelli distinti e costruisce uno snapshot composito quando serve simulare,
-accoppiare componenti o visualizzare l'insieme. I vincoli registrati nel
-framework appartengono allo snapshot, non modificano i modelli sorgente.
-`VTKViewer` è la facciata pubblica per modelli o framework; `VTKVisualizer`
-gestisce la scena VTK e il player interattivo offre controlli di riproduzione.
+`User` and `Bike` are native OpenSim models. `Framework` keeps its members as
+separate models and builds a composite snapshot when simulation, coupling, or
+visualization is needed. Framework couplings belong to the snapshot and do not
+modify the source models. `VTKViewer` is the public facade for models and
+frameworks; `VTKVisualizer` manages the VTK scene, and the interactive player
+provides playback controls.
 
-## Requisiti e installazione
+## Requirements and installation
 
-Il progetto dichiara **Python 3.10 o successivo**. Per usare i modelli occorre
-anche disporre dei binding Python di OpenSim compatibili con l'interprete
-selezionato. La versione OpenSim va verificata nell'ambiente di installazione:
-il package non definisce una matrice di compatibilità Python/OpenSim.
+The project requires **Python 3.10 or later**. Using the models also requires
+Python bindings for OpenSim that are compatible with the selected interpreter.
+Check the OpenSim version in the target environment; the package does not
+define a Python/OpenSim compatibility matrix.
 
-Il nome della distribuzione è `opensim-frameworks`; il namespace Python da
-importare è `opensim_frameworks`.
+The distribution name is `opensim-frameworks`; import the Python namespace as
+`opensim_frameworks`.
 
-Da una copia locale del repository, installare il package con l'extra OpenSim:
+Install the package with the OpenSim extra from a local repository checkout:
 
 ```powershell
 python -m pip install -e ".[opensim]"
 ```
 
-Per importare file STEP, installare anche l'extra `step`, che aggiunge
-`pythonocc-core`:
+To import STEP files, install the `step` extra, which adds `pythonocc-core`:
 
 ```powershell
 python -m pip install -e ".[opensim,step]"
 ```
 
-Per installare anche le dipendenze di test:
+To install the test dependencies as well:
 
 ```powershell
 python -m pip install -e ".[opensim,step,test]"
 ```
 
-L'extra `opensim` richiede un binding installabile con `pip` nell'ambiente
-corrente. Se OpenSim è già gestito da un ambiente Conda o da un'installazione
-separata, usare quell'ambiente e assicurarsi che `import opensim` funzioni
-prima di importare `opensim_frameworks`. Su Windows il package prepara il
-percorso delle librerie native dell'ambiente Python prima di caricare OpenSim.
-Il file `requirements.txt` include anche `pythonocc-core>=7.7` per abilitare
-l'importazione STEP.
+The `opensim` extra requires bindings that can be installed with `pip` in the
+current environment. If OpenSim is managed by Conda or a separate
+installation, use that environment and confirm that `import opensim` works
+before importing `opensim_frameworks`. On Windows, the package prepares the
+current Python environment's native-library paths before loading OpenSim.
+`requirements.txt` also includes `pythonocc-core>=7.7` for STEP import.
 
-Il modello OpenSim, i dati ANSUR II e le mesh usate da `User` sono inclusi nel
-package. La geometria di `Bike` usa primitive e mesh incluse nel package.
+The OpenSim model, ANSUR II data, and meshes used by `User` are included in the
+package. `Bike` uses bundled primitives and meshes.
 
-## Esempio rapido
+## Quick start
 
 ```python
 from pathlib import Path
 
 from opensim_frameworks import Bike, VTKViewer
 
-# Crea e adatta la bike al rider di riferimento.
+# Create and fit the bike to the reference rider.
 bike = Bike()
 framework = bike.fit_user()
 user = framework["user"]
 
 print(user.height_cm, user.mass_kg)
-print(bike.screen_center)  # coordinate mondo in mm
+print(bike.screen_center)  # World coordinates in mm.
 
 viewer = VTKViewer()
 viewer.save_snapshot(framework, path=Path("output") / "bike_user.svg")
 ```
 
-Se l'utente non viene passato a `fit_user()`, viene creato un riferimento
-maschile di **170 cm e 70 kg**. Il percorso fornito a `save_snapshot()` può
-essere una stringa o un `pathlib.Path`; le directory di destinazione vengono
-create automaticamente.
+If no user is passed to `fit_user()`, the method creates a male reference user
+with a stature of **170 cm** and a mass of **70 kg**. The path passed to
+`save_snapshot()` can be a string or `pathlib.Path`; destination directories
+are created automatically.
 
-## Modello antropometrico `User`
+## Anthropometric `User` model
 
 ```python
 from pathlib import Path
@@ -128,61 +126,95 @@ output.mkdir(exist_ok=True)
 user.to_osim(output / "user.osim")
 ```
 
-Il costruttore accetta `gender` (`"M"` o `"F"`), `height_cm` oppure
-`percentile` (default 50), un eventuale `mass_kg` e, facoltativamente, il
-percorso a un dataset ANSUR II alternativo. Quando viene specificata
-`height_cm`, le misure antropometriche vengono risolte in funzione
-dell'altezza; altrimenti si usa il percentile indicato. Se `mass_kg` non è
-fornito, il modello calibra la massa totale sul peso risolto dai riferimenti
-ANSUR II. Un'altezza esterna all'intervallo osservato può essere estrapolata e
-genera un `UserWarning`.
+The constructor accepts `gender` (`"M"` or `"F"`), `height_cm` or
+`percentile` (default 50), an optional `mass_kg`, and optionally a path to an
+alternative ANSUR II dataset. When `height_cm` is supplied, anthropometric
+measurements are resolved from stature; otherwise, the requested percentile is
+used. If `mass_kg` is omitted, the model's total mass is calibrated to the
+weight resolved from ANSUR II. A stature outside the observed range can be
+extrapolated and raises a `UserWarning`.
 
-Con `height_cm`, ogni misura viene ricavata con una regressione PCHIP per
-misura rispetto alla statura ANSUR; il percentile empirico risultante è
-informativo e non sostituisce l'altezza richiesta. Senza `height_cm`, il
-percentile comune viene calcolato indipendentemente per ciascuna misura
-numerica, non scegliendo un singolo individuo ANSUR. La scala di ogni segmento
-usa le misure ANSUR associate agli assi disponibili e il rapporto di statura
-come fallback per gli assi restanti. Dopo la scala geometrica, le masse e le
-inerzie sono ricalibrate uniformemente affinché la massa totale corrisponda a
-`mass_kg` o al peso risolto dai dati ANSUR.
+### Anthropometric scaling
 
-La property `height_cm` è espressa in centimetri; `mass_kg` è in
-chilogrammi. Le lunghezze e le circonferenze antropometriche esposte dalle
-property, i marker e le coordinate spaziali del modello seguono le unità SI di
-OpenSim (metri). Le misure destra e sinistra sono indipendenti: ad esempio,
-`set_left_arm_length()` modifica il lato sinistro senza scalare quello destro.
+With `height_cm`, each measurement is estimated using a per-measurement PCHIP
+regression against ANSUR stature. The resulting empirical percentile is
+informational and does not replace the requested height. Without `height_cm`,
+the common percentile is calculated independently for each numeric
+measurement; a single ANSUR subject is not selected. Each segment is scaled
+using ANSUR measurements associated with its available axes, with the stature
+ratio used for the remaining axes. After geometric scaling, body masses and
+inertias are rescaled uniformly so the model's total mass matches `mass_kg` or
+the weight resolved from ANSUR data.
 
-Le articolazioni cervicali includono flesso-estensione e flessione laterale
-della base del collo (`neck_base_flexion`,
-`neck_base_lateral_flexion`) e flesso-estensione, flessione laterale e
-rotazione del cranio (`neck_flexion`, `neck_lateral_flexion`,
-`neck_rotation`). I polsi consentono flesso-estensione e deviazione
-radiale-ulnare. I marker `REYE`/`LEYE` individuano le orbite, `RPALM`/`LPALM`
-il centro dei palmi e i marker del piede descrivono tallone, primo metatarso e
-quinto metatarso. Il joint subtalare fornisce un grado di libertà di
-inversione/eversione per ciascun piede.
+### ANSUR-resolved values
 
-`to_osim()` esporta il modello scalato nella posa corrente. Per default copia
-anche le mesh referenziate in una cartella `Geometry` accanto al file `.osim`.
-Il metodo `show()` apre il visualizzatore interattivo per il modello.
+The `anthropometry` property exposes the resolved ANSUR reference, including
+its `gender`, `percentile`, and `values`. The `values` mapping contains numeric
+ANSUR columns in their original dataset units, predominantly millimetres,
+with `stature_m` in metres. Its `height_m` and `height_cm` convenience
+properties are derived from `stature_m`.
 
-## Bike e fitting
+The `height_cm` property is in centimetres and `mass_kg` is in kilograms.
+Anthropometric lengths and circumferences exposed by properties, markers, and
+model spatial coordinates use OpenSim SI units (metres). Right- and
+left-side measurements are independent: for example,
+`set_left_arm_length()` changes the left side without scaling the right.
 
-La bike usa il riferimento mondo con `x` in avanti, `y` verso l'alto e `z`
-verso destra. Le lunghezze e le posizioni dell'API pubblica di `Bike` sono in
-**millimetri**, gli angoli in **gradi**, le forze in newton e le densità in
-kg/m³; i calcoli interni OpenSim restano in unità SI. Telaio, sella, attacchi e
-manubrio sono fissi; ruotano la guarnitura e i due pedali.
+### Changing posture
 
-`Bike(...)` consente di configurare gli intervalli e gli indici di sella,
-attacco e scorrimento del manubrio, la posizione dell'asse della guarnitura,
-la lunghezza delle pedivelle, le dimensioni dei pedali, le dimensioni del
-manubrio, le densità dei componenti e la forza frenante.
-Per esempio, `seat_tube_steps=20` definisce 21 posizioni (indici 0-20), mentre
-`seat_tube_step` seleziona una posizione; se omesso, parte dall'indice centrale.
+The cervical joints provide neck-base flexion/extension and lateral flexion
+(`neck_base_flexion`, `neck_base_lateral_flexion`), and head flexion/extension,
+lateral flexion, and rotation (`neck_flexion`, `neck_lateral_flexion`,
+`neck_rotation`). The wrists support flexion/extension and radial/ulnar
+deviation. `REYE`/`LEYE` mark the eye sockets, `RPALM`/`LPALM` mark the palm
+centres, and foot markers identify the heel, first metatarsal, and fifth
+metatarsal. Each foot has a subtalar degree of freedom for inversion/eversion.
 
-Per avviare il fitting:
+`to_osim()` exports the scaled model in its current pose. By default, it also
+copies referenced meshes into a `Geometry` directory next to the `.osim` file.
+`show()` opens the interactive viewer for the model.
+
+#### Raw posture setters
+
+Posture setters write the raw OpenSim coordinate value. Call
+`update_state()` before reading values derived from the new posture, such as
+joint centres, centre of mass, or muscle lengths and forces. Posture getters
+read the coordinate directly and do not require `update_state()`; they return
+the value actually held by OpenSim, including any coordinate clamping.
+
+### Joint centres and derived measurements
+
+Joint-centre properties return the current child-frame origin in the ground
+frame, in metres. Derived geometric measurements are calculated from those
+centres at the current posture and are not ANSUR measurements. For example,
+`shoulder_width` is the distance between the shoulder joint centres, whereas
+`biacromial_breadth` is an ANSUR measurement; they are independent and
+generally do not have the same value.
+
+### Known update_state() limitation
+
+The patella coordinates (`knee_angle_l_beta` and `knee_angle_r_beta`) are
+coupled to the corresponding knee coordinates by
+`CoordinateCouplerConstraint`. After changing a knee angle, a plain
+`update_state()` does not resolve that coupling. Use OpenSim assembly to
+enforce the constraint before relying on the resulting patella joint-centre
+positions.
+
+## Bike and fitting
+
+The bike's world frame uses `x` forward, `y` upward, and `z` to the right.
+Lengths and positions in the public `Bike` API are in **millimetres**, angles
+in **degrees**, forces in newtons, and densities in kg/m³; OpenSim calculations
+remain in SI units. The frame, saddle, mounts, and handlebar are fixed; the
+crankset and pedals rotate.
+
+`Bike(...)` configures the seat-tube, handlebar-tube, and slide ranges and
+steps; crank-axis position and crank length; pedal and handlebar dimensions;
+component densities; and braking force. For example, `seat_tube_steps=20`
+defines 21 positions (indices 0–20), while `seat_tube_step` selects one
+position. If omitted, the middle index is selected.
+
+To run the fitting procedure:
 
 ```python
 from opensim_frameworks import Bike, User
@@ -198,73 +230,70 @@ framework = bike.fit_user(
 )
 ```
 
-`fit_user()` modifica la bike e l'utente e restituisce un `Framework` con i
-due modelli e i piedi accoppiati ai pedali. I valori predefiniti della posa
-sono busto a 45°, spalle a 75° e gomiti a 15°. L'utente predefinito è il
-riferimento maschile di 170 cm e 70 kg.
-Durante l'IK, flessione delle spalle e dei gomiti sono condivise tra i due
-lati; l'adduzione della spalla resta regolabile indipendentemente per lato.
-La relazione finale è disponibile in `bike.fit_report`; se la geometria
-selezionata non consente di raggiungere insieme gli obiettivi di altezza e
-posizione delle mani sul manubrio, il fitting mantiene il risultato ottenuto e
-genera un `UserWarning` con gli scostamenti.
+`fit_user()` modifies the bike and user, then returns a `Framework` containing
+both models and the feet coupled to the pedals. Default posture targets are a
+45° trunk angle, 75° shoulder flexion, and 15° elbow flexion. The default user
+is the male reference at 170 cm and 70 kg. During inverse kinematics, shoulder
+and elbow flexion are shared bilaterally, while shoulder adduction remains
+independent on each side. The final fit is available in `bike.fit_report`. If
+the selected geometry cannot satisfy both the target height and hand position,
+fitting retains the best result and emits a `UserWarning` describing the
+residuals.
 
-Gli angoli dei piantoni di `Bike` non si specificano: per piantone sella e
-piantone manubrio si indicano la tupla di inizio e fine dell'escursione
-(`seat_tube_range_mm`, `handlebar_tube_range_mm`, ciascuna `((x0, y0), (x1, y1))`
-in mm, coordinate globali, z sempre 0) e il numero di step (`seat_tube_steps`,
-`handlebar_tube_steps`). Le guide di sella e manubrio sono relative alla cima del
-rispettivo piantone: `seat_slide_range_mm` e `handlebar_slide_range_mm` sono
-intervalli 1D `(inizio, fine)` in mm, con `*_slide_steps` e `*_slide_angle_deg`
-(angolo della guida nel piano XY). `seat_tube_angle_deg` e
-`handlebar_tube_angle_deg` sono proprietà di sola lettura calcolate dai punti.
-`frame_tube_diameter_mm` è il diametro dei tubi del telaio.
-Gli angoli geometrici orientati nel piano XY sono misurati da +X
-verso +Y secondo la regola della mano destra (rotazione positiva attorno a +Z):
-un piantone della sella che sale all'indietro ha un angolo maggiore di 90°
-(default circa 104°); la parte alta
-dello schermo si inclina con `screen_inclination_deg` (default 40).
-`horn_pitch_deg`
-inclina i corni verso l'alto quando positivo; `horn_roll_deg` positivo li
-ruota medialmente, verso il piano centrale della bike. Questi angoli orientano
-i due corni individualmente: non è previsto un tilt globale del manubrio.
-Il default di `crank_axis_position_mm` è `(0, 322, 0)` mm.
+Tube angles are derived from the start and end points of their ranges rather
+than specified directly. `seat_tube_range_mm` and
+`handlebar_tube_range_mm` each use `((x0, y0), (x1, y1))` in global
+coordinates (millimetres, with z always zero); `seat_tube_steps` and
+`handlebar_tube_steps` specify the number of intervals. Seat and handlebar
+slides are relative to the top of their tube: `seat_slide_range_mm` and
+`handlebar_slide_range_mm` are one-dimensional `(start, end)` ranges in
+millimetres, with `*_slide_steps` and `*_slide_angle_deg` defining their
+positions and direction in the XY plane. `seat_tube_angle_deg` and
+`handlebar_tube_angle_deg` are read-only properties derived from these points.
+`frame_tube_diameter_mm` defines the frame-tube diameter.
 
-Il fitting centra il punto medio tra i marker `TOE` e `MT5` sul centro del
-pedale e ne imposta la distanza dalla superficie del pedale, misurata lungo
-la normale, a `shoe_height_mm`. In coordinate locali del pedale il punto medio
-è centrato lungo la superficie e la sua distanza dall'asse del pedale è pari a
-metà dello spessore del pedale più `shoe_height_mm`. I piedi sono
-accoppiati rigidamente ai rispettivi pedali: il punto medio mantiene quindi
-questa distanza mentre pedivella e pedali ruotano. Il piede destro e il
-relativo pedale restano orizzontali; il pedale sinistro segue l'inclinazione
-del piede con caviglia sinistra neutra. L'IK minimizza inoltre l'errore tra il
-piano della suola e la faccia superiore del pedale, e tra gli assi longitudinali
-di piede e pedale. La rotazione subtalare è una delle coordinate disponibili
-per correggere l'inclinazione della suola; questi obiettivi di orientamento
-restano subordinati al posizionamento dei marker sul pedale. Il risultato e gli
-scostamenti raggiunti sono disponibili in `bike.fit_report`.
+Directed angles in the XY plane are measured from +X toward +Y by the
+right-hand rule (positive rotation about +Z). A seat tube that rises backward
+has an angle greater than 90° (about 104° by default). The top of the screen
+tilts according to `screen_inclination_deg` (40° by default).
+`horn_pitch_deg` raises the horns when positive; positive `horn_roll_deg`
+rotates them medially, toward the bike's centre plane. The two horns are
+oriented independently; the handlebar has no global tilt. The default
+`crank_axis_position_mm` is `(0, 322, 0)`.
 
-Con `allow_ik_adjustment=False`, gli angoli richiesti di busto, spalle e
-gomiti restano fissi; il fitting può continuare a regolare gli altri gradi di
-libertà. Passare `trunk_angle_deg=None` usa la postura lombare iniziale come
-riferimento, ma consente all'IK di adattarla per raggiungere le corna del
-manubrio. In questa modalità, la posizione verticale del manubrio viene scelta
-per avvicinarsi all'altezza della sella.
+Fitting centres the midpoint between the `TOE` and `MT5` markers on the pedal
+and sets its distance from the pedal surface, measured along the surface
+normal, to `shoe_height_mm`. In pedal-local coordinates, the midpoint is
+centred along the surface, and its distance from the pedal axle is half the
+pedal thickness plus `shoe_height_mm`. The feet are rigidly coupled to their
+pedals, so this distance is maintained as the crank and pedals rotate. The
+right foot and pedal remain horizontal; the left pedal follows the foot
+inclination while the left ankle remains neutral. Inverse kinematics also
+minimizes the alignment error between the sole plane and pedal top, and
+between the longitudinal axes of the foot and pedal. Subtalar rotation can
+correct sole inclination, but orientation targets remain subordinate to
+placing the markers on the pedal. The fit and residuals are available in
+`bike.fit_report`.
 
-### Ergonomia visiva
+With `allow_ik_adjustment=False`, the requested trunk, shoulder, and elbow
+angles remain fixed while the fitting procedure can adjust other degrees of
+freedom. Setting `trunk_angle_deg=None` uses the initial lumbar posture as a
+reference but allows inverse kinematics to adjust it to reach the handlebar
+horns. In this mode, the handlebar height is selected to approach the saddle
+height.
 
-`VisualErgonomicsFramework`, esportata da `opensim_frameworks.framework`, estende
-`Framework` con un cono visivo a base rettangolare ancorato al punto medio
-degli occhi e con le superfici dello spazio di raggiungimento delle mani.
-Ogni mano è un corpo articolato rispetto al radio da un giunto che consente
-flessione-estensione e deviazione radiale-ulnare del polso. I marker `RPALM` e
-`LPALM`, vincolati ai rispettivi corpi della mano, identificano il centro del
-palmo e vengono aggiornati in base alla lunghezza antropometrica del palmo. Il
-cono si apre in avanti; il suo margine superiore è parallelo al piano della
-testa passante per gli occhi e la sua altezza angolare si estende verso il
-basso. La linea di visione è orientata separatamente. Gli overlay sono inclusi
-nel framework e appaiono quando viene mostrato nel viewer.
+## Visual ergonomics
+
+`VisualErgonomicsFramework`, exported from `opensim_frameworks.framework`,
+extends `Framework` with a rectangular visual cone anchored at the midpoint
+between the eyes and surfaces representing hand reachability. Each hand is
+articulated relative to the radius by a joint supporting wrist flexion/
+extension and radial/ulnar deviation. The `RPALM` and `LPALM` markers are
+attached to the hand bodies, identify the palm centres, and are positioned
+using anthropometric palm length. The cone opens forward; its upper edge is
+parallel to the head plane through the eyes and its vertical extent points
+downward. The line of sight has a separate orientation. Overlays are included
+in the framework and appear in the viewer.
 
 ```python
 from opensim_frameworks import Bike, User
@@ -292,171 +321,132 @@ optimized = posture_optimized.optimize_screen_position(
 view_state = optimized.get_view_state()
 ```
 
-`line_of_sight_offset_deg` configura l'angolo della linea di visione rispetto
-al piano della testa passante per gli occhi; il default `-15°` indica una
-direzione verso il basso. È indipendente dall'ampiezza del cono: il margine
-superiore del cono coincide sempre con il piano della testa, mentre
-`cone_height_angle_deg` ne stabilisce l'estensione verso il basso. In
-`optimize_screen_position` non modifica la posa di `User`: orienta lo schermo
-perpendicolarmente alla linea di visione corrente e lo trasla lungo quella
-linea fino alla posizione più vicina che soddisfa i vincoli di raggiungibilità
-e di posizionamento dell'attrezzatura. Se l'inclinazione richiesta è fuori dal
-range fornito, usa l'inclinazione ammessa più vicina e genera un `UserWarning`,
-quindi prosegue con il posizionamento. Può comunque sollevare `ValueError` se
-la linea di visione non è rappresentabile dal modello dello schermo o se non
-esiste una posizione che soddisfi gli altri vincoli.
+`line_of_sight_offset_deg` sets the line-of-sight angle relative to the head
+plane through the eyes; the default `-15°` points downward. It is independent
+of the cone's size: the upper edge always coincides with the head plane, while
+`cone_height_angle_deg` sets the downward extent. `optimize_screen_position`
+does not change the `User` posture. It makes the screen perpendicular to the
+current line of sight and moves it along that line to the nearest position
+satisfying reachability and equipment-position constraints. If the requested
+inclination is outside the supplied range, the nearest allowed inclination is
+used and a `UserWarning` is emitted before positioning continues. A
+`ValueError` may still be raised if the line of sight cannot be represented by
+the screen model or if no position satisfies the other constraints.
 
-`optimize_user_position` esegue fasi sequenziali per massimizzare la
-raggiungibilità, ripristinare i palmi e allineare la linea di visione al centro
-dello schermo. Se i range di braccia o collo non consentono il ripristino o
-l'allineamento esatto, mantiene la posa ammessa più vicina trovata, genera un
-`UserWarning` e continua invece di interrompere l'ottimizzazione. Il
-posizionamento dei palmi usa una soluzione ai minimi quadrati vincolata ai
-range articolari; per lo sguardo vengono ottimizzate entro i propri limiti le
-coordinate del collo con gli effetti più indipendenti.
+`optimize_user_position` runs sequential stages to maximize reachability,
+restore the palm positions, and align the line of sight with the screen
+centre. If arm or neck ranges prevent exact restoration or alignment, the
+closest allowed posture is retained and a `UserWarning` is emitted instead of
+aborting. Palm positioning uses bounded least squares; gaze optimization
+selects the neck coordinates with the most independent effects and optimizes
+them within their bounds.
 
-Per i parametri dello schermo, un numero fissa l'offset o l'inclinazione e una
-tupla di due numeri definisce un range; gli offset non specificati restano
-liberi entro i vincoli dell'attrezzatura, mentre l'inclinazione viene
-determinata dalla perpendicolarità alla linea di visione. `inplace=False`
-restituisce un framework indipendente; `inplace=True` aggiorna solo lo schermo
-del framework corrente e restituisce `None`. Per le coordinate di `User`,
-`None` mantiene il valore corrente, un numero fissa il valore e una tupla di
-due numeri definisce il range ottimizzabile. `optimize_user_position` espone
-esplicitamente le articolazioni di collo, braccia, gomiti, avambracci e polsi,
-oltre alla flesso-estensione lombare; mantiene fisso lo schermo e, per
-default, ottimizza la flesso-estensione della base del collo e la flessione
-del cranio da -45° a 45°, e la rotazione del cranio da -30° a 30°. Se un
-valore o un range supera i limiti attuali di un parametro, i limiti vengono
-ampliati e viene emesso un warning. Se i range articolari impediscono di
-raggiungere il target di ripristino dei palmi o di allineamento dello sguardo,
-viene mantenuta la soluzione ammissibile con lo scarto più basso e viene
-emesso un warning; i valori restano entro i range richiesti. Le condizioni di
-input non valide e l'assenza di posizioni dello schermo che rispettino i
-vincoli geometrici continuano invece a produrre `ValueError`.
-Durante `optimize_user_position`, il busto si flette fino a quando l'intero
-schermo rientra in almeno una sfera di raggiungibilità o fino al limite
-consentito. La sfera è centrata sul giunto della spalla e il raggio è la
-massima distanza spalla-palmo campionata con il gomito completamente esteso.
-Successivamente i palmi vengono riportati alle posizioni iniziali mediante
-flessione di spalle, gomiti, avambracci e polsi; se i limiti lo impediscono,
-viene mantenuta la posa entro i limiti che minimizza lo scarto. Infine il collo
-viene regolato per allineare la linea di visione al centro dello schermo tramite
-un'ottimizzazione ai minimi quadrati vincolata ai range. Vengono selezionate le
-due coordinate libere con effetti più indipendenti sullo sguardo e le altre
-restano invariate. Le metriche vengono calcolate sulla posa finale; per la
-raggiungibilità del contatto con lo schermo si considera l'estensione della
-mano dal centro del palmo fino all'estremità distale. La fase lombare continua
-invece a usare il raggio spalla-centro palmo definito al punto 1.
+For screen parameters, a number fixes an offset or inclination, while a
+two-number tuple defines a range. Unspecified offsets remain free within the
+equipment constraints; inclination is determined by perpendicularity to the
+line of sight. With `inplace=False`, the method returns an independent
+framework; with `inplace=True`, it updates only the current framework's screen
+and returns `None`. For `User` coordinates, `None` preserves the current value,
+a number fixes it, and a two-number tuple defines an optimization range.
+`optimize_user_position` exposes neck, arm, elbow, forearm, wrist, and lumbar
+flexion coordinates while keeping the screen fixed. By default, neck-base
+flexion and head flexion are optimized from -45° to 45°, and head rotation
+from -30° to 30°. If a value or range exceeds a parameter's current limits,
+the limits are expanded and a warning is emitted. If joint ranges prevent the
+palm-restoration or gaze-alignment target, the admissible solution with the
+smallest residual is kept and a warning is emitted; the resulting values
+remain within the requested ranges. Invalid inputs and the absence of a screen
+position satisfying geometric constraints still raise `ValueError`.
 
-Il raggio di raggiungibilità spalla-palmo viene stimato con il gomito esteso,
-campionando un range di flessione della spalla 0–180° e di
-adduzione/abduzione −30–30°; avambraccio e polso mantengono i range definiti
-dal modello.
+During `optimize_user_position`, the trunk flexes until the entire screen is
+inside at least one reachability sphere or the permitted limit is reached.
+Each sphere is centred at a shoulder joint, with a radius equal to the
+maximum shoulder-to-palm distance sampled with the elbow fully extended.
+Next, shoulder, elbow, forearm, and wrist flexion return the palms to their
+initial positions; when bounds prevent this, the in-range posture with the
+smallest residual is kept. Finally, neck coordinates are adjusted with
+bounded least squares to align the line of sight with the screen centre. The
+two most independent coordinates are selected and the others remain
+unchanged. Metrics are calculated for the final posture. Screen-contact
+reachability extends the palm-centre reach by the distance to the hand's
+distal endpoint; the lumbar stage continues to use the shoulder-to-palm
+radius.
 
-Per impostazione predefinita, la linea di visione è inclinata di 15° verso il
-basso rispetto al piano della testa passante per gli occhi. Il cono ha
-un'ampiezza verticale totale di 30° e copre quindi da 0° a 30° sotto il piano
-degli occhi, indipendentemente dall'offset della linea di visione. In
-orizzontale copre 30° totali (15° per lato). Gli studi di Turville et al.
-(1998) e Burgess-Limerick et al. (2000)
-supportano il posizionamento del display al di sotto del livello degli occhi e
-segnalano i compromessi posturali a inclinazioni maggiori. Le fonti non
-definiscono un limite numerico orizzontale equivalente: i 30° totali sono
-un'approssimazione simmetrica conservativa del modello, non una soglia
-ergonomica universale.
+The shoulder-to-palm reach radius is estimated with the elbow extended,
+sampling shoulder flexion from 0° to 180° and adduction/abduction from -30° to
+30°. Forearm and wrist remain within the ranges defined by the model.
 
-Riferimenti: Turville et al., *Applied Ergonomics*, 29(4), 239-246 (1998),
+By default, the line of sight is angled 15° downward from the head plane
+through the eyes. The cone spans 30° vertically, from 0° to 30° below the eye
+plane, independently of the line-of-sight offset. Its horizontal span is 30°
+total (15° on each side). Turville et al. (1998) and Burgess-Limerick et al.
+(2000) support placing displays below eye level and report postural trade-offs
+at greater inclinations. The sources do not define an equivalent numerical
+horizontal limit; the 30° total width is a conservative symmetric
+approximation in this model, not a universal ergonomic threshold.
+
+References: Turville et al., *Applied Ergonomics*, 29(4), 239–246 (1998),
 DOI: 10.1016/S0003-6870(97)00048-3
-([PubMed/NLM](https://pubmed.ncbi.nlm.nih.gov/9701537/)); Burgess-Limerick
-et al., *Human Factors*, 42(1), 140-150 (2000),
+([PubMed/NLM](https://pubmed.ncbi.nlm.nih.gov/9701537/));
+Burgess-Limerick et al., *Human Factors*, 42(1), 140–150 (2000),
 DOI: 10.1518/001872000779656598
 ([PubMed/NLM](https://pubmed.ncbi.nlm.nih.gov/10917150/)); Canadian Centre
 for Occupational Health and Safety, [Monitor Positioning](https://www.ccohs.ca/oshanswers/ergonomics/office/monitor_positioning.html).
 
-`get_view_state()` restituisce
-l'angolo di incidenza (0° è perpendicolare allo schermo) e le percentuali di
-schermo visibile nel cono e raggiungibile. Le percentuali sono stimate su una
-griglia regolare. Include inoltre gli angoli in gradi
+`get_view_state()` returns the incidence angle (0° is perpendicular to the
+screen) and the percentages of the screen visible in the cone and reachable
+by the hands. Percentages are estimated on a regular grid. It also reports
 `trunk_angle_from_horizontal_deg`, `right_shoulder_flexion_deg`,
 `left_shoulder_flexion_deg`, `right_elbow_flexion_deg`,
-`left_elbow_flexion_deg`, `neck_base_flexion_deg` e `head_flexion_deg`.
-L'angolo del busto è misurato rispetto al piano orizzontale (90° in posizione
-eretta); `neck_base_flexion_deg` è la flessione del collo rispetto al busto,
-mentre `head_flexion_deg` è la flessione della testa rispetto alla base del
-collo. Per stimare la raggiungibilità si confronta la distanza dei punti dello
-schermo dai centri delle spalle con il raggio del braccio esteso,
-prolungato dal centro del palmo fino all'estremità distale della mano usando le
-misure antropometriche `handlength` e `palmlength`. Il viewer mostra solo una
-porzione sferica orientata dalla spalla al centro dello schermo, con semiangolo
-di 45°; questa limitazione è solo grafica e non si applica alla metrica.
-Le coordinate articolari aggiuntive si limitano tramite gli argomenti
-espliciti di `optimize_user_position`, per esempio
-`right_shoulder_flexion_deg=(60.0, 90.0)` e
-`right_elbow_flexion_deg=(10.0, 35.0)`. Questi limiti modificano la postura
-ottimizzata per mantenere la presa; il raggio di raggiungibilità è invece
-calcolato con le braccia distese, mentre busto e bacino restano nella postura
-corrente. Gli offset dello schermo si limitano con
-`screen_horizontal_offset_range_mm` e `screen_vertical_offset_range_mm`. Il
-vincolo è verificato sull'intera superficie: lo schermo non può avvicinarsi al
-rider oltre il centro del manubrio né scendere sotto la sua altezza.
+`left_elbow_flexion_deg`, `neck_base_flexion_deg`, and
+`head_flexion_deg`, all in degrees. Trunk angle is measured from the
+horizontal (90° when upright); `neck_base_flexion_deg` is neck flexion
+relative to the trunk, and `head_flexion_deg` is head flexion relative to the
+neck base. Reachability compares screen points against shoulder-centred
+reach spheres extended from the palm centre to the hand's distal endpoint
+using `handlength` and `palmlength`. The viewer displays only a spherical
+surface oriented from the shoulder toward the screen centre, with a 45°
+half-angle; this is a visual limitation and does not apply to the metric.
 
-Altri parametri e proprietà:
+Additional arm and neck coordinates can be bounded through the explicit
+`optimize_user_position` arguments, for example
+`right_shoulder_flexion_deg=(60.0, 90.0)` and
+`right_elbow_flexion_deg=(10.0, 35.0)`. These limits affect the optimized
+posture used to maintain the grip. Reachability radius is instead calculated
+with the arms extended, while trunk and pelvis remain in their current
+posture. Screen offsets are bounded with
+`screen_horizontal_offset_range_mm` and `screen_vertical_offset_range_mm`.
+The constraint is checked over the entire screen surface: the screen cannot
+move closer to the rider than the handlebar centre or lower than the
+handlebar.
 
-- `crank_spacing_mm` è la distanza tra i piani centrali delle pedivelle.
-- `pedal_spacing_mm` è la distanza tra le facce interne dei pedali; il default
-  è 185 mm ed è indipendente da `crank_spacing_mm`.
-- `screen_width_mm`, `screen_height_mm` e `screen_inclination_deg` definiscono
-  dimensioni e inclinazione dello schermo.
-- `screen_vertical_offset_mm` e `screen_horizontal_offset_mm` definiscono la
-  posizione della base dello schermo rispetto al centro del manubrio; devono
-  essere positivi e spostano lo schermo verso l'alto e in avanti.
-- `screen_base` e `screen_center` restituiscono le coordinate mondo della
-  base e del centro dello schermo, in millimetri. Schermo e supporto sono
-  collegati.
-- La sella è formata da mesh ellissoidali arrotondate: la coda è larga e la
-  punta anteriore è rastremata. `seat_length_mm`, `seat_width_mm` e
-  `seat_height_mm` ne controllano l'ingombro.
+Other bike parameters and properties:
 
-## Importazione STEP
+- `crank_spacing_mm` is the distance between the crank centre planes.
+- `pedal_spacing_mm` is the distance between the pedals' inner faces. Its
+  default is 185 mm and it is independent of `crank_spacing_mm`.
+- `screen_width_mm`, `screen_height_mm`, and `screen_inclination_deg` define
+  the screen dimensions and inclination.
+- `screen_vertical_offset_mm` and `screen_horizontal_offset_mm` position the
+  screen base relative to the handlebar centre. They must be positive and move
+  the screen upward and forward.
+- `screen_base` and `screen_center` return world coordinates for the screen
+  base and centre in millimetres. The screen and its support are connected.
+- The saddle uses rounded ellipsoidal meshes: its rear is wide and its front
+  tip tapers. `seat_length_mm`, `seat_width_mm`, and `seat_height_mm` control
+  its dimensions.
 
-L'importazione STEP è disponibile da
-`opensim_frameworks.models.equipment`. Il parser crea corpi OpenSim con massa,
-centro di massa e inerzia ricavati dalla geometria e dalle densità dei
-materiali STEP; mantiene inoltre i colori delle superfici nelle mesh VTP.
-Le mesh vengono scritte nella directory indicata e collegate ai corpi
-importati.
+## STEP import
 
-```python
-from pathlib import Path
-
-from opensim_frameworks.models.equipment import read_step
-
-step_file = Path("cad/frame.step")
-mesh_directory = Path("output/meshes")
-
-body_tree, mesh_tree = read_step(
-    step_file,
-    mesh_directory,
-    density_kg_m3=7850.0,
-)
-```
-
-Il valore di `density_kg_m3` è un fallback per i solidi senza una densità
-STEP utilizzabile; può essere un singolo valore o una mappa dai nomi esatti
-dei solidi alle rispettive densità. Se manca una densità sia nel file sia nei
-fallback, l'importazione segnala l'errore anziché assegnare una massa
-arbitraria. `read_step()` restituisce sempre due alberi ricorsivi paralleli:
-il primo contiene corpi OpenSim, il secondo i percorsi assoluti delle mesh
-VTP. I nodi possono essere ulteriori dizionari per rappresentare assiemi
-annidati; le foglie mesh sono un `Path`, oppure una tupla di `Path` quando i
-colori richiedono più file.
+STEP import is available from `opensim_frameworks.models.equipment`. The
+parser creates OpenSim bodies with mass, centre of mass, and inertia derived
+from geometry and STEP material densities; surface colours are preserved in
+VTP meshes. Nodes can be nested dictionaries representing assemblies. Mesh
+leaves are a `Path`, or a tuple of `Path` objects when colour preservation
+requires multiple files.
 
 ```python
-from opensim_frameworks.models.equipment import (
-    read_step,
-    weld_bodies,
-)
+from opensim_frameworks.models.equipment import read_step, weld_bodies
 
 body_tree, mesh_tree = read_step(
     "cad/frame.step",
@@ -465,15 +455,15 @@ body_tree, mesh_tree = read_step(
 )
 ```
 
-`weld_bodies(bodies, meshes=None)` combina massa, centro di massa e inerzia di
-corpi espressi nello stesso sistema di riferimento. Se `meshes` è fornito,
-deve contenere un path (o una lista/tupla di path) per ogni corpo, nello stesso
-ordine. Le mesh sono fuse per colore, opacità e rappresentazione; le scale
-sono incorporate nei file VTP risultanti, salvati accanto alle mesh sorgenti.
-La funzione restituisce il solo `Body` quando `meshes` è `None`, altrimenti
-`(Body, Path | list[Path])`. Gli oggetti sorgente non vengono modificati. In
-`HighRowPlateloaded` i componenti che devono muoversi separatamente restano
-corpi distinti e vengono collegati con `WeldJoint`.
+`weld_bodies(bodies, meshes=None)` combines the mass, centre of mass, and
+inertia of bodies expressed in the same reference frame. If `meshes` is
+provided, it must contain one path (or a list/tuple of paths) per body in the
+same order. Meshes are fused by colour, opacity, and representation; scales
+are applied to the resulting VTP files, which are written next to the source
+meshes. The function returns only the `Body` when `meshes` is `None`;
+otherwise it returns `(Body, Path | list[Path])`. Source objects are not
+modified. In `HighRowPlateloaded`, components that must move independently
+remain separate bodies connected by `WeldJoint`.
 
 ```python
 combined_body, fused_meshes = weld_bodies(
@@ -482,12 +472,43 @@ combined_body, fused_meshes = weld_bodies(
 )
 ```
 
-## Composizione con `Framework`
+STEP-tree utilities weld a complete tree or extract one component with its
+descendants:
 
-`Framework` è un contenitore simile a un dizionario, con modelli OpenSim
-distinti associati a nomi. I modelli possono essere raggiunti sia con la
-sintassi `framework["user"]` sia, quando il nome non è riservato, con
-`framework.user`.
+```python
+from opensim_frameworks.models.equipment import (
+    extract_step_body_and_mesh,
+    read_step,
+    weld_step_body_mesh_tree,
+)
+
+body_tree, mesh_tree = read_step(
+    "cad/frame.step",
+    "output/meshes",
+    density_kg_m3=7850.0,
+)
+part_body, part_meshes = extract_step_body_and_mesh(
+    body_tree,
+    mesh_tree,
+    "part_name",
+    remove=False,
+)
+frame_body, frame_meshes = weld_step_body_mesh_tree(body_tree, mesh_tree)
+```
+
+`extract_step_body_and_mesh()` removes the extracted node from both trees by
+default and prunes empty ancestor assemblies; set `remove=False` to preserve
+the input trees. `read_vtp_vertices()` reads vertex coordinates from one or
+more VTP files. `body_mass_center_array()` converts an OpenSim body's centre
+of mass to a NumPy array, while `get_referenced_meshes()` returns the meshes
+attached to a model and their referenced file names. These utilities are
+also available from the top-level `opensim_frameworks` namespace.
+
+## Composition with `Framework`
+
+`Framework` is a dictionary-like container of separate OpenSim models
+associated with names. Members can be accessed with either
+`framework["user"]` or, when the name is not reserved, `framework.user`.
 
 ```python
 from opensim_frameworks import Bike
@@ -498,44 +519,41 @@ composite = framework.composite
 standalone_model = framework.merge_to_model()
 ```
 
-`initSystem()` ricostruisce e inizializza uno snapshot composito: i modelli
-conservati nel framework restano separati. Modifiche applicate direttamente a un membro, ad esempio
-`framework["user"].set_neck_flexion(30)`, aggiornano quel modello; una nuova
-chiamata a `merge_to_model()` legge lo stato corrente dei membri e crea un
-nuovo `opensim.Model` indipendente. Uno snapshot composito già inizializzato
-non riceve invece notifiche automatiche: chiamare nuovamente `initSystem()`
-per ricostruirlo. `forward()` e `settle_under_gravity()` sincronizzano i
-risultati sui modelli membri; dopo aver modificato manualmente lo stato del
-composito, chiamare `update_state()` per trasferire coordinate e velocità.
-I parametri `only`,
-`exclude` e `include_couplings` di `merge_to_model()` permettono di selezionare
-i membri e gli accoppiamenti da includere.
+`initSystem()` rebuilds and initializes a composite snapshot; models stored
+in the framework remain separate. Direct changes to a member, for example
+`framework["user"].set_neck_flexion(30)`, update that model. A subsequent
+`merge_to_model()` reads the current member states and creates a new,
+independent `opensim.Model`. An already initialized composite snapshot is not
+updated automatically; call `initSystem()` again to rebuild it. `forward()`
+and `settle_under_gravity()` synchronize results back to member models. After
+manually changing the composite state, call `update_state()` to transfer
+coordinates and speeds. The `only`, `exclude`, and `include_couplings`
+parameters of `merge_to_model()` select which members and couplings to
+include.
 
-Gli accoppiamenti registrati con il framework vengono ricreati negli snapshot
-compositi e non modificano direttamente i modelli membri. Le operazioni
-principali sono:
+Framework couplings are recreated in composite snapshots and do not directly
+modify member models. The main operations are:
 
-- `couple_weld()` per saldare due frame;
-- `couple_point()` per coincidere due punti di frame;
-- `couple_coordinate()` per pilotare una coordinata tramite altre coordinate;
-- `couple_joint()` per collegare a un frame una giunzione di un modello
-  altrimenti radicato al suolo;
-- `add_force()`, `add_constraint()` e `add_controller()` per aggiungere
-  componenti OpenSim al composito;
-- `uncouple()` per rimuovere un accoppiamento.
+- `couple_weld()` to weld two frames;
+- `couple_point()` to make two frame points coincide;
+- `couple_coordinate()` to drive a coordinate from other coordinates;
+- `couple_joint()` to connect a joint in an otherwise ground-rooted model to
+  a frame;
+- `add_force()`, `add_constraint()`, and `add_controller()` to add OpenSim
+  components to the composite;
+- `uncouple()` to remove a coupling.
 
-I riferimenti ai componenti sono tuple `(nome_modello, percorso_OpenSim)`, ad
-esempio `("user", "/bodyset/hand_r")`. I modelli che compongono un framework
-devono avere gravità coerente. `set_gravity((0.0, -9.81, 0.0))` imposta una
-gravità comune, espressa in m/s².
+Component references are `(model_name, OpenSim_path)` tuples, for example
+`("user", "/bodyset/hand_r")`. All models in a framework must use consistent
+gravity. `set_gravity((0.0, -9.81, 0.0))` sets a common gravity vector in m/s².
 
-`forward(final_time)` integra fino al tempo assoluto indicato in secondi;
-`settle_under_gravity(duration_s)` integra per la durata specificata a partire
-dal tempo corrente, ma non verifica che il sistema abbia raggiunto
-l'equilibrio. L'integrazione tramite `opensim.Manager` rifiuta esplicitamente
-i modelli che contengono un `opensim.FreeJoint`.
+`forward(final_time)` integrates to the specified absolute time in seconds.
+`settle_under_gravity(duration_s)` integrates for the specified duration from
+the current time but does not check whether the system has reached
+equilibrium. Integration through `opensim.Manager` explicitly rejects models
+containing an `opensim.FreeJoint`.
 
-## Visualizzazione ed esportazione
+## Visualization and export
 
 ```python
 from opensim_frameworks import VTKViewer
@@ -573,70 +591,71 @@ viewer.save_animation(
 )
 ```
 
-`show()` apre il visualizzatore interattivo e restituisce una finestra di
-controllo della riproduzione. Sono supportati i modelli OpenSim e gli oggetti
-`Framework`; un framework viene visualizzato come snapshot composito. Le
-tabelle di movimento possono essere passate come percorso `.mot`/`.sto` o
-come `opensim.TimeSeriesTable` con almeno due campioni. I controlli della
-finestra permettono di riprodurre, fermare, scorrere e ripetere la motion,
-selezionare viste camera preimpostate e mostrare/nascondere terreno, muscoli,
-marker, assi XYZ, cono visivo e regioni di raggiungibilità. I controlli degli
-overlay non disponibili sono disabilitati quando il modello non li contiene.
+`show()` opens the interactive viewer and returns a playback-control window.
+It supports OpenSim models and `Framework` objects; a framework is rendered
+as a composite snapshot. Motion tables can be supplied as `.mot`/`.sto` paths
+or as an `opensim.TimeSeriesTable` with at least two samples. The window
+provides playback, stop, seek, and repeat controls; preset camera views; and
+visibility toggles for ground, muscles, markers, XYZ axes, the visual cone,
+and reachability regions. Unavailable overlay controls are disabled when a
+model does not contain those overlays.
 
-`save_snapshot()` esporta un'immagine **SVG** o **PNG** senza aprire una
-finestra, in base all'estensione del percorso. Per i PNG, `dpi` imposta i DPI
-registrati nei metadati (default 300); non cambia le dimensioni in pixel,
-configurabili con `size`. `frame` seleziona una riga della tabella di movimento
-e `time_s` interpola la posa al tempo indicato. Senza una tabella, viene usata
-la posa corrente; se sono forniti entrambi, `frame` ha precedenza su `time_s`.
-L'esportazione non modifica la posa del modello sorgente.
-`camera_position`, `camera_focal_point` e `camera_view_up`
-posizionano la camera e il suo punto di osservazione in coordinate mondo
-espresse in metri; se omessi, viene usata la vista inquadrata automaticamente.
-I flag booleani `show_ground`, `show_axes`, `show_muscles`, `show_markers`,
-`show_reachability` e `show_vision_cone` controllano la griglia del terreno,
-il sistema di riferimento XYZ, i percorsi muscolari, i marker e gli overlay;
-sono tutti attivi per default. Le altre estensioni non sono supportate.
-`save_animation()` esporta un video **MP4** off-screen e ripristina i valori
-delle coordinate del modello dopo il rendering. Accetta le stesse opzioni di
-camera e visibilità di `save_snapshot()`; `size` configura le dimensioni dei
-fotogrammi e larghezza/altezza devono essere interi positivi pari. Il frame
-rate è derivato dall'intervallo temporale della motion, che viene campionata
-uniformemente; sono applicate le colonne corrispondenti a coordinate del
-modello, comprese le etichette `/coordinate/value` delle states table.
-`save_animation()` è anche una funzione pubblica di primo livello:
-`save_animation(model, table, path, ...)` accetta un modello OpenSim, una
-tabella o un percorso motion e la destinazione MP4. Il metodo
-`VTKViewer.save_animation()` accetta inoltre un `Framework`. Se si specifica
-una qualsiasi opzione di camera, i vettori omessi mantengono i valori
-automatici correnti. Anche `User.show()` e `Framework.show()` offrono
-l'apertura rapida del visualizzatore.
+`save_snapshot()` exports an **SVG** or **PNG** image without opening a
+window, based on the destination extension. For PNG output, `dpi` sets the
+DPI recorded in the metadata (300 by default) and does not change pixel
+dimensions; use `size` to configure those dimensions. `frame` selects a row
+from a motion table and `time_s` interpolates the pose at the requested time.
+Without a motion table, the current pose is used; if both are supplied,
+`frame` takes precedence over `time_s`. Export does not modify the source
+model pose.
 
-## Test
+`camera_position`, `camera_focal_point`, and `camera_view_up` configure the
+camera and focal point in world coordinates (metres). If omitted, the camera
+is fitted automatically. The Boolean options `show_ground`, `show_axes`,
+`show_muscles`, `show_markers`, `show_reachability`, and `show_vision_cone`
+control the ground grid, XYZ axes, muscle paths, markers, and overlays; they
+are all enabled by default. Other image extensions are not supported.
 
-Il repository configura pytest tramite `pyproject.toml`; i test sono organizzati
-in sottocartelle che rispecchiano le aree del package (`framework`, `models`,
-`viewer` e `package`). Dopo aver installato l'extra di test, eseguire:
+`save_animation()` exports an off-screen **MP4** and restores the model's
+coordinate values after rendering. It accepts the same camera and visibility
+options as `save_snapshot()`. `size` configures frame dimensions, which must
+be positive even integers. The frame rate is derived from the motion time
+interval, and the motion is sampled uniformly. Columns matching model
+coordinates are applied, including `/coordinate/value` labels in a states
+table. The top-level `save_animation(model, table, path, ...)` function also
+accepts an OpenSim model, a table, or a motion path. `VTKViewer.save_animation()`
+additionally accepts a `Framework`. If any camera option is supplied, omitted
+vectors retain their current automatic values. `User.show()` and
+`Framework.show()` also provide a shortcut to open the viewer.
+
+## Tests
+
+The repository configures pytest through `pyproject.toml`; tests are grouped
+by package area (`framework`, `models`, `viewer`, and `package`). After
+installing the test extra, run:
 
 ```powershell
 python -m pytest
 ```
 
-In VS Code selezionare l'interprete dell'ambiente che contiene OpenSim e
-impostare pytest come framework di test Python.
+In VS Code, select the interpreter containing OpenSim and configure pytest as
+the Python test framework.
 
-## API pubblica
+## Public API
 
-Gli elementi inclusi nell'API di wildcard `opensim_frameworks` (`__all__`) sono:
-`User`, `Bike`, `IRON_DENSITY_KG_M3`, `Framework`, `save_animation`,
-`VTKViewer`, `VTKVisualizer`, `MotionData`, `MotionPlayer`, `PlayerWindow`,
-`DEFAULT_SIZE` e `VIEW_NAMES`.
-`Equipment`, `Screen`, `read_step` e `weld_bodies` sono disponibili nel
-sottopackage `opensim_frameworks.models.equipment`; `VisualErgonomicsFramework`
-è esposto da `opensim_frameworks.framework`. Le primitive geometriche e gli helper per
-creare corpi OpenSim sono esposti nel sottopackage `opensim_frameworks.bodies`, ad esempio
-`Box`, `Cylinder`, `Disk`, `Ellipsoid`, `Sphere`, `Tube` e
-`mass_properties`. `weld_bodies` combina corpi OpenSim rigidamente connessi.
-Le primitive sono espresse in unità SI e i builder forniscono helper per
-calcolare proprietà di massa e aggiungere corpi saldati o articolati a modelli
-OpenSim.
+The top-level `opensim_frameworks` namespace exposes `User`, `Bike`,
+`IRON_DENSITY_KG_M3`, `Framework`, `save_animation`, `VTKViewer`,
+`VTKVisualizer`, `MotionData`, `MotionPlayer`, `PlayerWindow`, `DEFAULT_SIZE`,
+and `VIEW_NAMES`.
+
+`Equipment`, `Screen`, `read_step`, `weld_bodies`,
+`extract_step_body_and_mesh`, and `weld_step_body_mesh_tree` are available
+from `opensim_frameworks.models.equipment`. `read_vtp_vertices`,
+`body_mass_center_array`, and `get_referenced_meshes` are also exposed from
+the top-level namespace. `VisualErgonomicsFramework` is available from
+`opensim_frameworks.framework`. Geometric primitives and OpenSim body
+builders are exposed from `opensim_frameworks.bodies`, including `Box`,
+`Cylinder`, `Disk`, `Ellipsoid`, `Sphere`, `Tube`, and `mass_properties`.
+`weld_bodies` combines rigidly connected OpenSim bodies. Primitives use SI
+units, and their builders provide helpers for calculating mass properties
+and adding welded or articulated bodies to OpenSim models.

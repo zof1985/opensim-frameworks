@@ -11,7 +11,7 @@ from scipy.optimize import least_squares, minimize_scalar
 
 from .....bodies.shapes import matrix_to_euler_xyz
 from .....framework import Framework
-from .....utils.functions import import_opensim
+from .....utils.opensim import import_opensim
 from .bike import horn_direction
 
 __all__ = ["fit_user"]
@@ -47,7 +47,20 @@ def _vec(value: Any) -> np.ndarray:
 
 
 def _pitch(rotation: np.ndarray, neutral: np.ndarray) -> float:
-    """Rotation about z of ``rotation`` relative to the ``neutral`` (flat foot) orientation."""
+    """Return rotation about z relative to the neutral foot orientation.
+
+    Parameters
+    ----------
+    rotation : numpy.ndarray, shape (3, 3)
+        Current foot rotation matrix.
+    neutral : numpy.ndarray, shape (3, 3)
+        Neutral, flat-foot rotation matrix.
+
+    Returns
+    -------
+    float
+        Relative rotation about z in radians.
+    """
     relative = rotation @ neutral.T
     return math.atan2(relative[1, 0], relative[0, 0])
 
@@ -127,7 +140,18 @@ class _Rider:
         self.set(dict(zip(("pelvis_tx", "pelvis_ty", "pelvis_tz"), translation)))
 
     def trunk_angle(self, lumbar: float) -> float:
-        """Forward inclination (rad) from the vertical of the mid-hip to mid-shoulder line."""
+        """Measure forward trunk inclination from the vertical.
+
+        Parameters
+        ----------
+        lumbar : float
+            Lumbar-extension coordinate value in radians.
+
+        Returns
+        -------
+        float
+            Mid-hip to mid-shoulder inclination from vertical in radians.
+        """
         self.set({"lumbar_extension": lumbar})
         centers = self.user.joint_centers
         hips = (np.asarray(centers["right_hip"]) + np.asarray(centers["left_hip"])) / 2
@@ -138,7 +162,18 @@ class _Rider:
         return math.atan2(line[0], line[1])
 
     def lumbar_for_trunk(self, angle: float) -> float:
-        """Lumbar extension giving a trunk inclination of ``angle`` (rad), pelvis upright."""
+        """Find lumbar extension for a target trunk inclination.
+
+        Parameters
+        ----------
+        angle : float
+            Target trunk inclination from vertical in radians.
+
+        Returns
+        -------
+        float
+            Lumbar-extension coordinate in radians with the pelvis upright.
+        """
         low, high = self.bounds("lumbar_extension")
         grid = np.linspace(low, high, 41)
         errors = [abs(self.trunk_angle(q) - angle) for q in grid]
@@ -212,6 +247,17 @@ class _LegFit:
             pedal's top plane, and the heel-to-forefoot axis with its
             longitudinal axis. The subtalar coordinate can correct sole roll.
             The left ankle is neutral: the left pedal takes the foot pitch.
+
+            Parameters
+            ----------
+            side : {"r", "l"}
+                Leg side.
+
+            Returns
+            -------
+            tuple
+                Coordinate names, a residual function combining contact and
+                orientation errors, and a contact-only residual function.
             """
             sign = 1.0 if side == "r" else -1.0
             names = [
@@ -339,7 +385,22 @@ def _handlebar_pose(
 
 
 def _horn_local(bike: Any, side: str, hand_breadth_mm: float) -> np.ndarray:
-    """Return the palm-centre target tangent to a horn at its length midpoint."""
+    """Return the palm-centre target tangent to a horn at its midpoint.
+
+    Parameters
+    ----------
+    bike : Bike
+        Bike providing horn and handlebar dimensions.
+    side : {"r", "l"}
+        Side of the horn.
+    hand_breadth_mm : float
+        Rider hand breadth in millimetres.
+
+    Returns
+    -------
+    numpy.ndarray, shape (3,)
+        Palm-centre target in metres, in the handlebar-local frame.
+    """
     sign = 1.0 if side == "r" else -1.0
     start = np.array([0.0, 0.0, sign * bike.handlebar_width_mm * 1e-3 / 2])
     direction = horn_direction(bike.horn_pitch_deg, bike.horn_roll_deg, side)
@@ -464,7 +525,19 @@ class _ArmFit:
         }
 
     def solve_with_fixed_flexions(self, grips: np.ndarray) -> dict[str, Any]:
-        """Keep requested flexion coordinates fixed while fitting shoulder adduction."""
+        """Keep flexion coordinates fixed while fitting shoulder adduction.
+
+        Parameters
+        ----------
+        grips : numpy.ndarray, shape (2, 3)
+            Right and left target hand positions in metres.
+
+        Returns
+        -------
+        dict
+            Fitted coordinate values, maximum hand-position residual in
+            metres, and mean shoulder and elbow flexion in degrees.
+        """
         reference = np.clip(self.reference, self.lower, self.upper)
         free_indices = np.array([1, 4])
         lower = self.lower[free_indices]
@@ -499,7 +572,19 @@ class _ArmFit:
 def _mount(
     parent_body: Any, name: str, rotation: np.ndarray, position: np.ndarray
 ) -> None:
-    """Add (or update) a physical offset frame on ``parent_body``."""
+    """Add or update a physical offset frame on ``parent_body``.
+
+    Parameters
+    ----------
+    parent_body : opensim.Body
+        Body that owns the offset frame.
+    name : str
+        Component name of the frame.
+    rotation : numpy.ndarray, shape (3, 3)
+        Frame rotation matrix relative to the parent body.
+    position : numpy.ndarray, shape (3,)
+        Frame translation in metres relative to the parent body.
+    """
     frame = opensim.PhysicalOffsetFrame.safeDownCast(
         next((c for c in parent_body.getComponentsList() if c.getName() == name), None)
     )

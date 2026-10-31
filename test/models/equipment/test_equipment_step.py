@@ -11,9 +11,9 @@ from opensim_frameworks.models.equipment import (
     weld_bodies,
 )
 from opensim_frameworks.models.equipment.equipment import opensim
-from opensim_frameworks.utils.functions import StepBodyImport
+from opensim_frameworks.utils.step import StepBodyImport
 
-functions_module = importlib.import_module("opensim_frameworks.utils.functions")
+step_module = importlib.import_module("opensim_frameworks.utils.step")
 
 
 def _write_box_step(path):
@@ -105,7 +105,7 @@ def test_read_step_preserves_nested_assembly_paths(tmp_path, monkeypatch):
         (tmp_path / "pad_2.vtp").resolve(),
     )
     monkeypatch.setattr(
-        functions_module,
+        step_module,
         "_read_step_imports",
         lambda *args, **kwargs: {
             "frame": StepBodyImport(frame, (frame_mesh,), ("machine", "assembly")),

@@ -11,7 +11,7 @@ import numpy as np
 from ..bodies.shapes import MESHES_DIR
 from ..framework import Framework
 from ..utils.constants import DEFAULT_SIZE
-from ..utils.functions import import_opensim, resolve_geometry_file
+from ..utils.opensim import import_opensim, resolve_geometry_file
 from .animation import save_animation as _render_animation
 from .export import save_image as _save_image
 from .player import MotionData, PlayerWindow, _apply_time, start_player

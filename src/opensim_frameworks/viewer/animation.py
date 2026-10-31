@@ -9,8 +9,8 @@ from typing import Any
 import numpy as np
 
 from ..utils.constants import DEFAULT_SIZE, MESHES_DIR
-from ..utils.functions import import_opensim
-from ..utils.functions import resolve_geometry_file as _resolve_geometry_file
+from ..utils.opensim import import_opensim
+from ..utils.opensim import resolve_geometry_file as _resolve_geometry_file
 
 
 def _user_dirs(model: Any) -> tuple:

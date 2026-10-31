@@ -1,12 +1,8 @@
-"""Utilities for OpenSim bindings, geometry, and model import helpers."""
+"""STEP parsing, tessellation, and recursive body/mesh tree utilities."""
 
 from __future__ import annotations
 
-import hashlib
 import math
-import os
-import re
-import sys
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,495 +11,162 @@ from typing import Any, Mapping
 import numpy as np
 
 from .constants import MM_TO_M
-
-_STEP_DEFAULT_COLOR = (0.7, 0.7, 0.7)
+from .opensim import _step_name, import_opensim, weld_bodies
 
 __all__ = [
-    "import_opensim",
-    "register_geometry_search_path",
-    "resolve_geometry_file",
-    "local_to_global",
-    "global_to_local",
     "read_step",
-    "weld_bodies",
+    "weld_step_body_mesh_tree",
+    "extract_step_body_and_mesh",
 ]
 
 
-def _ensure_visualizer_dll_path() -> None:
-    if not sys.platform.startswith("win"):
-        return
-    library_bin = Path(sys.prefix) / "Library" / "bin"
-    if not library_bin.is_dir():
-        return
-    path_entries = os.environ.get("PATH", "").split(os.pathsep)
-    if str(library_bin) not in path_entries:
-        os.environ["PATH"] = str(library_bin) + os.pathsep + os.environ.get("PATH", "")
+_STEP_DEFAULT_COLOR = (0.7, 0.7, 0.7)
 
 
-def register_geometry_search_path(opensim: Any, directory: str | Path) -> None:
-    """Register a directory with OpenSim's native mesh search paths.
+def weld_step_body_mesh_tree(
+    bodies: dict[str, Any],
+    meshes: dict[str, Any],
+) -> tuple[Any, Any]:
+    """Weld matching body and mesh leaves from a recursive ``read_step`` tree.
 
-    Parameters
-    ----------
-    opensim : module
-        Imported OpenSim Python bindings exposing ``ModelVisualizer``.
-    directory : str or pathlib.Path
-        Directory containing geometry files. User-home markers are expanded
-        and the path is resolved before registration.
-    """
-    opensim.ModelVisualizer.addDirToGeometrySearchPaths(
-        str(Path(directory).expanduser().resolve())
-    )
-
-
-def resolve_geometry_file(
-    opensim: Any, model: Any, filename: str, directories: Any = ()
-) -> Path | None:
-    """Resolve a mesh file against local and OpenSim geometry search paths.
+    The input trees must have matching dictionary structure. They are not
+    modified; mesh leaves are returned as the tuple produced by
+    ``weld_bodies(..., fuse_meshes=False)``.
 
     Parameters
     ----------
-    opensim : module
-        Imported OpenSim Python bindings.
-    model : opensim.Model
-        Model used by OpenSim's native geometry resolver.
-    filename : str
-        Mesh filename or path stored in a model geometry component.
-    directories : iterable of str or pathlib.Path, optional
-        Directories searched in order before consulting OpenSim's registered
-        geometry paths.
+    bodies : dict
+        Recursive body tree returned by :func:`read_step`.
+    meshes : dict
+        Matching recursive mesh tree returned by :func:`read_step`.
 
     Returns
     -------
-    pathlib.Path or None
-        First matching local path, or the native resolved path. Returns
-        ``None`` if the file cannot be resolved.
-    """
-    for directory in directories:
-        candidate = Path(directory) / filename
-        if candidate.is_file():
-            return candidate
-    try:
-        resolved = opensim.ModelVisualizer.findGeometryFile(
-            model, filename, False, opensim.ArrayStr()
-        )
-    except (RuntimeError, TypeError):
-        return None
-    return Path(str(resolved)) if resolved else None
-
-
-def import_opensim() -> Any:
-    """Import and return the OpenSim Python bindings.
-
-    On Windows, makes the active environment's native libraries available
-    before importing OpenSim. Routine OpenSim informational logs are
-    suppressed while warnings and errors remain visible.
-
-    Returns
-    -------
-    module
-        The imported ``opensim`` module.
+    tuple
+        Welded OpenSim body and its mesh paths.
 
     Raises
     ------
-    RuntimeError
-        If the OpenSim Python bindings are unavailable.
-    """
-    _ensure_visualizer_dll_path()
-    try:
-        import opensim
-    except ImportError as error:
-        raise RuntimeError(
-            "OpenSim Python bindings are required. "
-            "Install a compatible OpenSim/Conda environment first."
-        ) from error
-    opensim.Logger.removeFileSink()
-    opensim.Logger.setLevelString("Warn")
-    return opensim
-
-
-def _as_vec3(point: Any, opensim: Any) -> Any:
-    is_vec3 = isinstance(point, opensim.Vec3)
-    coordinates = np.asarray(
-        [point.get(index) for index in range(3)] if is_vec3 else point,
-        dtype=float,
-    )
-    if coordinates.shape != (3,) or not np.all(np.isfinite(coordinates)):
-        raise ValueError("point must contain three finite coordinates")
-    return point if is_vec3 else opensim.Vec3(*map(float, coordinates))
-
-
-def local_to_global(frame: Any, state: Any, point: Any) -> Any:
-    """Express a point from a frame's local coordinates in OpenSim Ground.
-
-    Parameters
-    ----------
-    frame
-        OpenSim physical frame in which ``point`` is expressed.
-    state
-        State belonging to the frame's model, realized to the required pose.
-    point
-        Local point as an OpenSim ``Vec3`` or a sequence of three coordinates,
-        in metres.
-
-    Returns
-    -------
-    opensim.Vec3
-        Point coordinates expressed in Ground, in metres.
-    """
-    opensim = import_opensim()
-    return frame.findStationLocationInGround(state, _as_vec3(point, opensim))
-
-
-def global_to_local(frame: Any, state: Any, point: Any) -> Any:
-    """Express a point from OpenSim Ground in a frame's local coordinates.
-
-    Parameters
-    ----------
-    frame
-        OpenSim physical frame in which to express the result.
-    state
-        State belonging to the frame's model, realized to the required pose.
-    point
-        Ground point as an OpenSim ``Vec3`` or a sequence of three
-        coordinates, in metres.
-
-    Returns
-    -------
-    opensim.Vec3
-        Point coordinates expressed in ``frame``, in metres.
-    """
-    opensim = import_opensim()
-    ground_point = _as_vec3(point, opensim)
-    return frame.getTransformInGround(state).shiftBaseStationToFrame(ground_point)
-
-
-def _step_name(value: str, used: set[str]) -> str:
-    base = re.sub(r"\W", "_", value).strip("_") or "body"
-    name, index = base, 1
-    while name in used:
-        index += 1
-        name = f"{base}_{index}"
-    used.add(name)
-    return name
-
-
-def weld_bodies(
-    bodies: list[Any],
-    meshes: list[str | Path | list[str | Path] | tuple[str | Path, ...]] | None = None,
-    fuse_meshes: bool = True,
-) -> Any:
-    """Combine bodies and optionally fuse their corresponding mesh files.
-
-    All bodies and mesh coordinates must use the same reference frame. When
-    ``meshes`` is omitted, attached OpenSim mesh geometry is copied. When
-    supplied, each entry contains the mesh path(s) corresponding to the body
-    at the same index. Compatible meshes are fused by visual style unless
-    ``fuse_meshes`` is ``False``, in which case each mesh is attached separately
-    and the original resolved paths are returned as a tuple.
-
-    Parameters
-    ----------
-    bodies
-        OpenSim bodies to combine.
-    meshes
-        Optional list with one entry per body. An entry can be a single path
-        or a list/tuple of paths.
-    fuse_meshes
-        Whether to fuse explicitly supplied meshes. This option has no effect
-        when ``meshes`` is omitted.
-
-    Returns
-    -------
-    opensim.Body or tuple[opensim.Body, Path | list[Path] | tuple[Path, ...]]
-        The combined body alone when ``meshes`` is ``None``; otherwise a pair
-        containing the body and either fused mesh path(s) or, when
-        ``fuse_meshes`` is ``False``, the tuple of original mesh paths.
-
-    Raises
-    ------
-    ValueError
-        If no bodies are provided, mesh counts differ from the body count, or
-        the combined mass is not positive.
     TypeError
-        If bodies or mesh paths have unsupported types, or body geometry is
-        not mesh geometry when ``meshes`` is omitted.
-    FileNotFoundError
-        If a source mesh cannot be found.
-    RuntimeError
-        If VTK fails to read or write a fused mesh.
+        If a body assembly does not correspond to a mesh assembly.
+    ValueError
+        If the trees have different keys or contain no bodies.
     """
-    opensim = import_opensim()
-    if not isinstance(fuse_meshes, bool):
-        raise TypeError("fuse_meshes must be a bool")
-    if not isinstance(bodies, list):
-        raise TypeError("bodies must be a list of opensim.Body instances")
-    if not bodies:
-        raise ValueError("at least one body is required")
-    if any(not isinstance(body, opensim.Body) for body in bodies):
-        raise TypeError("all bodies must be opensim.Body instances")
+    if not isinstance(bodies, dict) or not isinstance(meshes, dict):
+        raise TypeError("bodies and meshes must be dictionaries")
+    if bodies.keys() != meshes.keys():
+        raise ValueError("STEP body and mesh trees must have matching keys")
 
-    mesh_paths_by_body: list[tuple[Path, ...]] | None = None
-    if meshes is not None:
-        if not isinstance(meshes, list):
-            raise TypeError("meshes must be a list or None")
-        if len(meshes) != len(bodies):
-            raise ValueError("meshes must have the same length as bodies")
-        mesh_paths_by_body = []
-        for body_meshes in meshes:
-            if isinstance(body_meshes, (str, Path)):
-                paths = (body_meshes,)
-            elif isinstance(body_meshes, (list, tuple)):
-                paths = body_meshes
-            else:
-                raise TypeError(
-                    "each meshes entry must be a path or a list/tuple of paths"
-                )
-            if any(not isinstance(path, (str, Path)) for path in paths):
-                raise TypeError("mesh paths must be strings or pathlib.Path")
-            mesh_paths_by_body.append(
-                tuple(Path(path).expanduser().resolve() for path in paths)
-            )
+    body_nodes = []
+    mesh_nodes = []
+    for name, body_node in bodies.items():
+        mesh_node = meshes[name]
+        if isinstance(body_node, dict):
+            if not isinstance(mesh_node, dict):
+                raise TypeError(f"STEP mesh subtree for {name!r} is not a dict")
+            body_node, mesh_node = weld_step_body_mesh_tree(body_node, mesh_node)
+        elif isinstance(mesh_node, dict):
+            raise TypeError(f"STEP body subtree for {name!r} is not a dict")
+        body_nodes.append(body_node)
+        mesh_nodes.append(mesh_node)
+    return weld_bodies(body_nodes, mesh_nodes, fuse_meshes=False)
 
-    masses = np.array([body.getMass() for body in bodies], dtype=float)
-    centers = np.array(
-        [[body.getMassCenter().get(index) for index in range(3)] for body in bodies],
-        dtype=float,
-    )
-    total_mass = float(masses.sum())
-    if (
-        not math.isfinite(total_mass)
-        or total_mass <= 0
-        or not np.all(np.isfinite(masses))
-        or not np.all(np.isfinite(centers))
-    ):
-        raise ValueError("body mass properties must be finite with positive mass")
 
-    center = np.average(centers, axis=0, weights=masses)
-    inertia = np.zeros((3, 3), dtype=float)
-    for mass, body, body_center in zip(masses, bodies, centers):
-        source_inertia = body.getInertia()
-        moments = source_inertia.getMoments()
-        products = source_inertia.getProducts()
-        tensor = np.array(
-            [
-                [moments.get(0), products.get(0), products.get(1)],
-                [products.get(0), moments.get(1), products.get(2)],
-                [products.get(1), products.get(2), moments.get(2)],
-            ],
-            dtype=float,
-        )
-        offset = body_center - center
-        inertia += tensor + mass * (
-            np.dot(offset, offset) * np.eye(3) - np.outer(offset, offset)
-        )
+def extract_step_body_and_mesh(
+    bodies: dict[str, Any],
+    meshes: dict[str, Any],
+    key: str,
+    remove: bool = True,
+) -> tuple[Any, Any]:
+    """Find and weld a named STEP body subtree and its corresponding meshes.
 
-    name = _step_name("welded_" + "_".join(body.getName() for body in bodies), set())
-    result = opensim.Body(
-        name,
-        total_mass,
-        opensim.Vec3(*map(float, center)),
-        opensim.Inertia(
-            float(inertia[0, 0]),
-            float(inertia[1, 1]),
-            float(inertia[2, 2]),
-            float(inertia[0, 1]),
-            float(inertia[0, 2]),
-            float(inertia[1, 2]),
-        ),
-    )
-    used_geometry_names: set[str] = set()
+    ``bodies`` and ``meshes`` are matching recursive trees returned by
+    :func:`read_step`. The selected node and all descendant body/mesh leaves
+    are welded into a single body and mesh-path tuple. By default, the selected
+    node is removed from both input trees; empty ancestor assemblies are also
+    pruned. Set ``remove=False`` to leave both trees unchanged.
 
-    def copy_mesh(source: Any) -> Any:
-        mesh = opensim.Mesh(source.get_mesh_file())
-        mesh.setName(
-            _step_name(
-                f"{source.getName()}_{source.get_mesh_file()}", used_geometry_names
-            )
-        )
-        mesh.set_scale_factors(source.get_scale_factors())
-        mesh.setColor(source.getColor())
-        mesh.setOpacity(source.getOpacity())
-        mesh.setRepresentation(source.getRepresentation())
-        return mesh
+    Parameters
+    ----------
+    bodies, meshes
+        Parallel recursive STEP body and mesh trees.
+    key
+        Name of the body or assembly to extract. The first matching key in
+        traversal order is selected.
+    remove
+        Whether to remove the extracted node from both trees. Defaults to
+        ``True``.
 
-    def mesh_style(source: Any) -> tuple[tuple[float, ...], float, int]:
-        color = source.getColor()
-        return (
-            tuple(float(color.get(index)) for index in range(3)),
-            float(source.getOpacity()),
-            int(source.getRepresentation()),
-        )
+    Returns
+    -------
+    tuple
+        The welded OpenSim body and its mesh paths.
 
-    def source_mesh_for_path(body: Any, mesh_path: Path) -> Any:
-        candidates = []
-        geometry_property = body.getPropertyByName("attached_geometry")
-        for index in range(geometry_property.size()):
-            candidates.append(body.get_attached_geometry(index))
-        for component in body.getComponentsList():
-            frame = opensim.PhysicalOffsetFrame.safeDownCast(component)
-            if frame is None:
-                continue
-            geometry = frame.getPropertyByName("attached_geometry")
-            candidates.extend(
-                frame.get_attached_geometry(index) for index in range(geometry.size())
-            )
-        for candidate in candidates:
-            source = opensim.Mesh.safeDownCast(candidate)
-            if source is None:
-                continue
-            if Path(source.get_mesh_file()).expanduser().resolve() == mesh_path:
-                return source
-        return opensim.Mesh(mesh_path.as_posix())
+    Raises
+    ------
+    KeyError
+        If the key is absent or body and mesh keys do not match during search.
+    TypeError
+        If the inputs are not dictionaries, ``remove`` is not a bool, or a
+        body assembly does not correspond to a mesh assembly.
+    ValueError
+        If the extracted assembly's body and mesh trees have different keys.
+    """
+    if not isinstance(bodies, dict) or not isinstance(meshes, dict):
+        raise TypeError("bodies and meshes must be dictionaries")
+    if not isinstance(key, str) or not key:
+        raise ValueError("key must be a non-empty string")
+    if not isinstance(remove, bool):
+        raise TypeError("remove must be a bool")
 
-    def fuse_mesh_sources(
-        sources: list[tuple[Path, Any]],
-    ) -> tuple[Any, Path]:
-        import vtk
-
-        reader_types = {
-            ".obj": vtk.vtkOBJReader,
-            ".ply": vtk.vtkPLYReader,
-            ".stl": vtk.vtkSTLReader,
-            ".vtp": vtk.vtkXMLPolyDataReader,
-        }
-        source_paths = [path for path, _ in sources]
-        append = vtk.vtkAppendPolyData()
-        filters = []
-        for source_path, source in sources:
-            if not source_path.is_file():
-                raise FileNotFoundError(f"Mesh file was not found: {source_path}")
-            reader_type = reader_types.get(source_path.suffix.lower())
-            if reader_type is None:
-                raise ValueError(
-                    f"Unsupported mesh format for fusion: {source_path.suffix}"
-                )
-            reader = reader_type()
-            reader.SetFileName(str(source_path))
-            reader.Update()
-            if reader.GetErrorCode() or reader.GetOutput().GetNumberOfPoints() == 0:
-                raise RuntimeError(f"Unable to read mesh: {source_path}")
-
-            scale = source.get_scale_factors()
-            transform = vtk.vtkTransform()
-            transform.Scale(*(float(scale.get(index)) for index in range(3)))
-            transform_filter = vtk.vtkTransformFilter()
-            transform_filter.SetTransform(transform)
-            transform_filter.SetInputConnection(reader.GetOutputPort())
-            transform_filter.Update()
-            append.AddInputData(transform_filter.GetOutput())
-            filters.append((reader, transform_filter))
-
-        append.Update()
-        style = mesh_style(sources[0][1])
-        signature = tuple(
-            (
-                source_path.as_posix(),
-                tuple(float(source.get_scale_factors().get(axis)) for axis in range(3)),
-            )
-            for source_path, source in sources
-        )
-        digest = hashlib.sha256(repr((signature, style)).encode("utf-8")).hexdigest()[
-            :12
-        ]
-        output_path = source_paths[0].parent / f"welded_mesh_{digest}.vtp"
-
-        writer = vtk.vtkXMLPolyDataWriter()
-        writer.SetFileName(str(output_path))
-        writer.SetInputConnection(append.GetOutputPort())
-        writer.SetDataModeToAscii()
-        if not writer.Write():
-            raise RuntimeError(f"Unable to write fused VTP mesh: {output_path}")
-
-        mesh = opensim.Mesh(output_path.as_posix())
-        mesh.setName(_step_name(f"{name}_mesh_{digest}", used_geometry_names))
-        mesh.set_scale_factors(opensim.Vec3(1.0, 1.0, 1.0))
-        mesh.setColor(sources[0][1].getColor())
-        mesh.setOpacity(sources[0][1].getOpacity())
-        mesh.setRepresentation(sources[0][1].getRepresentation())
-        return mesh, output_path
-
-    previous_log_level = opensim.Logger.getLevelString()
-    opensim.Logger.setLevelString("Off")
-    output_mesh_paths: list[Path] = []
-    try:
-        if mesh_paths_by_body is None:
-            for body in bodies:
-                geometry_property = body.getPropertyByName("attached_geometry")
-                for index in range(geometry_property.size()):
-                    source = body.get_attached_geometry(index)
-                    mesh = opensim.Mesh.safeDownCast(source)
-                    if mesh is None:
-                        raise TypeError(
-                            "weld_bodies only supports mesh geometry; "
-                            f"{source.getName()!r} is {source.getConcreteClassName()}"
-                        )
-                    result.attachGeometry(copy_mesh(mesh))
-
-                for component in body.getComponentsList():
-                    source_frame = opensim.PhysicalOffsetFrame.safeDownCast(component)
-                    if source_frame is None:
-                        continue
-                    frame_geometry = source_frame.getPropertyByName("attached_geometry")
-                    if not frame_geometry.size():
-                        continue
-                    parent = source_frame.getParentFrame()
-                    if parent.getName() != body.getName():
-                        raise ValueError(
-                            "weld_bodies cannot merge geometry attached to "
-                            "nested offset frames"
-                        )
-                    frame = opensim.PhysicalOffsetFrame()
-                    frame.setName(
-                        _step_name(
-                            f"{body.getName()}_{source_frame.getName()}",
-                            used_geometry_names,
-                        )
+    def find_node(
+        body_tree: dict[str, Any],
+        mesh_tree: dict[str, Any],
+        ancestors: list[tuple[dict[str, Any], dict[str, Any], str]],
+    ) -> Any:
+        if body_tree.keys() != mesh_tree.keys():
+            raise KeyError("STEP body and mesh trees do not have matching keys")
+        for name, body_node in body_tree.items():
+            mesh_node = mesh_tree[name]
+            if name == key:
+                if isinstance(body_node, dict) != isinstance(mesh_node, dict):
+                    raise TypeError(
+                        f"STEP body and mesh subtrees for {key!r} do not match"
                     )
-                    frame.setParentFrame(result)
-                    frame.set_translation(source_frame.get_translation())
-                    frame.set_orientation(source_frame.get_orientation())
-                    for index in range(frame_geometry.size()):
-                        source = source_frame.get_attached_geometry(index)
-                        mesh = opensim.Mesh.safeDownCast(source)
-                        if mesh is None:
-                            raise TypeError(
-                                "weld_bodies only supports mesh geometry; "
-                                f"{source.getName()!r} is "
-                                f"{source.getConcreteClassName()}"
-                            )
-                        frame.attachGeometry(copy_mesh(mesh))
-                    result.addComponent(frame)
-        else:
-            styled_meshes: dict[
-                tuple[tuple[float, ...], float, int], list[tuple[Path, Any]]
-            ] = {}
-            for body, body_paths in zip(bodies, mesh_paths_by_body):
-                for mesh_path in body_paths:
-                    if not mesh_path.is_file():
-                        raise FileNotFoundError(f"Mesh file was not found: {mesh_path}")
-                    source = source_mesh_for_path(body, mesh_path)
-                    if fuse_meshes:
-                        styled_meshes.setdefault(mesh_style(source), []).append(
-                            (mesh_path, source)
-                        )
-                    else:
-                        result.attachGeometry(copy_mesh(source))
-                        output_mesh_paths.append(mesh_path)
-            for sources in styled_meshes.values():
-                fused_mesh, output_path = fuse_mesh_sources(sources)
-                result.attachGeometry(fused_mesh)
-                output_mesh_paths.append(output_path)
-    finally:
-        opensim.Logger.setLevelString(previous_log_level)
+                return body_tree, mesh_tree, body_node, mesh_node, ancestors, name
+            if isinstance(body_node, dict):
+                if not isinstance(mesh_node, dict):
+                    raise TypeError(f"STEP mesh subtree for {name!r} is not a dict")
+                result = find_node(
+                    body_node,
+                    mesh_node,
+                    [*ancestors, (body_tree, mesh_tree, name)],
+                )
+                if result is not None:
+                    return result
+            elif isinstance(mesh_node, dict):
+                raise TypeError(f"STEP body subtree for {name!r} is not a dict")
+        return None
 
-    if mesh_paths_by_body is None:
-        return result
-    if not fuse_meshes:
-        return result, tuple(output_mesh_paths)
-    if len(output_mesh_paths) == 1:
-        return result, output_mesh_paths[0]
-    return result, output_mesh_paths
+    result = find_node(bodies, meshes, [])
+    if result is None:
+        raise KeyError(f"STEP assembly or body {key!r} was not imported")
+    parent_bodies, parent_meshes, body_node, mesh_node, ancestors, name = result
+
+    if isinstance(body_node, dict):
+        welded = weld_step_body_mesh_tree(body_node, mesh_node)
+    else:
+        welded = weld_bodies([body_node], [mesh_node], fuse_meshes=False)
+
+    if remove:
+        del parent_bodies[name]
+        del parent_meshes[name]
+        for ancestor_bodies, ancestor_meshes, ancestor_name in reversed(ancestors):
+            if ancestor_bodies[ancestor_name]:
+                break
+            del ancestor_bodies[ancestor_name]
+            del ancestor_meshes[ancestor_name]
+    return welded
 
 
 def _step_triangulate(shape, linear_mm: float, angular_rad: float):
@@ -633,7 +296,37 @@ def _read_step_imports(
     linear_deflection_mm: float = 0.5,
     angular_deflection_deg: float = 20.0,
 ) -> dict[str, StepBodyImport]:
-    """Build rigid bodies for STEP components and preserve their hierarchy."""
+    """Build rigid bodies for STEP components and preserve their hierarchy.
+
+    Parameters
+    ----------
+    file : str or pathlib.Path
+        STEP file to import.
+    meshes_dir : pathlib.Path
+        Directory where generated VTP meshes are written.
+    density_kg_m3 : float, mapping of str to float, or None, optional
+        Fallback density in kg/m³, either for all solids or keyed by STEP part
+        name. Material densities embedded in the STEP document take precedence.
+    linear_deflection_mm : float, optional
+        Maximum linear tessellation deflection in millimetres.
+    angular_deflection_deg : float, optional
+        Maximum angular tessellation deflection in degrees.
+
+    Returns
+    -------
+    dict of str to StepBodyImport
+        Imported bodies and their corresponding mesh paths and assembly paths.
+
+    Raises
+    ------
+    ImportError
+        If ``pythonocc-core`` is unavailable.
+    FileNotFoundError
+        If the STEP file does not exist.
+    ValueError
+        If the file, tessellation settings, material densities, or STEP
+        geometry are invalid.
+    """
     opensim = import_opensim()
     try:
         from OCC.Core.BRepGProp import brepgprop

@@ -16,7 +16,7 @@ from .....bodies import (
 )
 from ...equipment import Equipment, Screen
 from .....utils.constants import IRON_DENSITY_KG_M3, MM_TO_M
-from .....utils.functions import import_opensim
+from .....utils.opensim import import_opensim
 
 __all__ = ["Bike", "IRON_DENSITY_KG_M3"]
 
@@ -42,7 +42,27 @@ _AXLE_RADIUS = 0.012
 
 
 def horn_direction(pitch_deg: float, roll_deg: float, side: str) -> np.ndarray:
-    """Return a horn's unit direction; positive pitch raises it and roll toes it in."""
+    """Return a horn's unit direction; positive pitch raises and toes it inward.
+
+    Parameters
+    ----------
+    pitch_deg : float
+        Horn pitch in degrees.
+    roll_deg : float
+        Horn roll in degrees.
+    side : {"r", "l"}
+        Side of the bike.
+
+    Returns
+    -------
+    numpy.ndarray, shape (3,)
+        Unit direction vector in the bike's local frame.
+
+    Raises
+    ------
+    ValueError
+        If ``side`` is not ``"r"`` or ``"l"``.
+    """
     if side not in {"r", "l"}:
         raise ValueError("side must be 'r' or 'l'")
     side_sign = 1.0 if side == "r" else -1.0
@@ -94,7 +114,18 @@ def _point_range(
 
 
 def _range_angle_deg(value: tuple[tuple[float, float], tuple[float, float]]) -> float:
-    """Directed XY angle from +X of the start-to-end segment (deg)."""
+    """Return the directed XY angle from +X of a start-to-end segment.
+
+    Parameters
+    ----------
+    value : tuple of tuple of float
+        Segment endpoints ``((x0, y0), (x1, y1))`` in millimetres.
+
+    Returns
+    -------
+    float
+        Counterclockwise angle from +X in degrees.
+    """
     return math.degrees(
         math.atan2(value[1][1] - value[0][1], value[1][0] - value[0][0])
     )
@@ -275,22 +306,22 @@ class Bike(Equipment):
 
     def __init__(
         self,
-        # piantone seduta
+        # Seat tube.
         seat_tube_range_mm: Sequence[Sequence[float]] = ((-150, 800), (-226, 1111)),
         seat_tube_steps: int = 23,
         seat_length_mm: float = 260.0,
         seat_width_mm: float = 140.0,
-        # slitta sella
+        # Seat slide.
         seat_slide_range_mm: Sequence[Sequence[float]] = (0, 150),
         seat_slide_steps: int = 25,
         seat_slide_angle_deg: float = 0.0,
-        # piantone manubrio
+        # Handlebar tube.
         handlebar_tube_range_mm: Sequence[Sequence[float]] = (
             (430.0, 970.0),
             (411.0, 1078.0),
         ),
         handlebar_tube_steps: int = 10,
-        # slitta manubrio
+        # Handlebar slide.
         handlebar_slide_range_mm: Sequence[Sequence[float]] = (0, 120),
         handlebar_slide_steps: int = 10,
         handlebar_slide_angle_deg: float = 10.0,
@@ -459,12 +490,36 @@ class Bike(Equipment):
 
     @staticmethod
     def _xyz(point_mm: Sequence[float]) -> np.ndarray:
-        """Return an (x, y) point in millimetres as an (x, y, 0) array in metres."""
+        """Convert an XY point in millimetres to a 3D metre vector.
+
+        Parameters
+        ----------
+        point_mm : sequence of float
+            ``(x, y)`` world coordinates in millimetres.
+
+        Returns
+        -------
+        numpy.ndarray, shape (3,)
+            ``(x, y, 0)`` coordinates in metres.
+        """
         return np.array([point_mm[0], point_mm[1], 0.0]) * MM_TO_M
 
     @staticmethod
     def _along(angle_deg: float, distance_mm: float) -> np.ndarray:
-        """Return the (x, y, 0) vector in metres of a distance along an XY angle."""
+        """Return a vector of the requested length along an XY angle.
+
+        Parameters
+        ----------
+        angle_deg : float
+            Counterclockwise angle from +X in degrees.
+        distance_mm : float
+            Distance along the direction in millimetres.
+
+        Returns
+        -------
+        numpy.ndarray, shape (3,)
+            ``(x, y, 0)`` vector in metres.
+        """
         angle = math.radians(angle_deg)
         return distance_mm * MM_TO_M * np.array([math.cos(angle), math.sin(angle), 0.0])
 
@@ -474,6 +529,11 @@ class Bike(Equipment):
         """Direction of the seat tube from +X, counterclockwise about +Z (deg).
 
         Derived from :attr:`seat_tube_range_mm`.
+
+        Returns
+        -------
+        float
+            Directed seat-tube angle in degrees.
         """
         return _range_angle_deg(self._seat_tube_range_mm)
 
@@ -482,6 +542,11 @@ class Bike(Equipment):
         """Direction of the handlebar tube from +X, counterclockwise about +Z (deg).
 
         Derived from :attr:`handlebar_tube_range_mm`.
+
+        Returns
+        -------
+        float
+            Directed handlebar-tube angle in degrees.
         """
         return _range_angle_deg(self._handlebar_tube_range_mm)
 
@@ -602,7 +667,20 @@ class Bike(Equipment):
         return self._seat_tube_top_at(tube_step) + offset + lift
 
     def seat_position_at_m(self, tube_step: int, slide_step: int) -> np.ndarray:
-        """Return the seat centre in metres at the supplied adjustment steps."""
+        """Return the seat centre at the requested adjustment steps.
+
+        Parameters
+        ----------
+        tube_step : int
+            Zero-based seat-tube position index.
+        slide_step : int
+            Zero-based seat-slide position index.
+
+        Returns
+        -------
+        numpy.ndarray, shape (3,)
+            Seat centre in metres in the world frame.
+        """
         tube_step = _check_step("tube_step", tube_step, self._seat_tube_steps)
         slide_step = _check_step("slide_step", slide_step, self._seat_slide_steps)
         return self._seat_position_at(tube_step, slide_step)
@@ -618,7 +696,20 @@ class Bike(Equipment):
         return self._handlebar_tube_top_at(tube_step) + offset
 
     def handlebar_position_at_m(self, tube_step: int, slide_step: int) -> np.ndarray:
-        """Return the handlebar centre in metres at the supplied adjustment steps."""
+        """Return the handlebar centre at the requested adjustment steps.
+
+        Parameters
+        ----------
+        tube_step : int
+            Zero-based handlebar-tube position index.
+        slide_step : int
+            Zero-based handlebar-slide position index.
+
+        Returns
+        -------
+        numpy.ndarray, shape (3,)
+            Handlebar centre in metres in the world frame.
+        """
         tube_step = _check_step("tube_step", tube_step, self._handlebar_tube_steps)
         slide_step = _check_step("slide_step", slide_step, self._handlebar_slide_steps)
         return self._handlebar_position_at(tube_step, slide_step)
@@ -784,7 +875,17 @@ class Bike(Equipment):
         horizontal_min_mm: float | None = None,
         vertical_min_mm: float | None = None,
     ) -> None:
-        """Expand lower screen-offset bounds to include requested values."""
+        """Expand lower screen-offset bounds to include requested values.
+
+        Parameters
+        ----------
+        horizontal_min_mm : float or None, optional
+            New horizontal lower bound in millimetres. ``None`` leaves it
+            unchanged.
+        vertical_min_mm : float or None, optional
+            New vertical lower bound in millimetres. ``None`` leaves it
+            unchanged.
+        """
         if horizontal_min_mm is not None:
             self._screen_horizontal_offset_min_mm = min(
                 self._screen_horizontal_offset_min_mm,

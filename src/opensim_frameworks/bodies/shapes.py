@@ -9,7 +9,7 @@ from typing import Sequence
 import numpy as np
 
 from ..utils.constants import MESHES_DIR
-from ..utils.functions import import_opensim, register_geometry_search_path
+from ..utils.opensim import import_opensim, register_geometry_search_path
 
 __all__ = [
     "MESHES_DIR",
@@ -31,7 +31,20 @@ register_geometry_search_path(opensim, MESHES_DIR)
 
 
 def _mesh(file_name: str, scale: Sequence[float]):
-    """Bundled unit mesh (unit size, centred) scaled to the requested size."""
+    """Create a bundled unit mesh with the requested scale factors.
+
+    Parameters
+    ----------
+    file_name : str
+        Name of a mesh file bundled with the package.
+    scale : sequence of float
+        Scale factors along the mesh's x, y, and z axes.
+
+    Returns
+    -------
+    opensim.Mesh
+        Mesh with the requested scale factors.
+    """
     mesh = opensim.Mesh(file_name)
     mesh.set_scale_factors(opensim.Vec3(*(float(v) for v in scale)))
     return mesh
@@ -121,7 +134,18 @@ class Shape:
         raise NotImplementedError
 
     def _local_inertia(self, mass: float) -> np.ndarray:
-        """Inertia tensor about the shape centre in the shape's own axes."""
+        """Return the inertia tensor about the shape centre in its local axes.
+
+        Parameters
+        ----------
+        mass : float
+            Shape mass in kilograms.
+
+        Returns
+        -------
+        numpy.ndarray, shape (3, 3)
+            Inertia tensor in kg m², expressed in the shape's local axes.
+        """
         raise NotImplementedError
 
     def _axis_rotation(self) -> np.ndarray:

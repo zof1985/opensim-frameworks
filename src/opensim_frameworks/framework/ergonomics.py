@@ -17,7 +17,7 @@ from scipy.spatial import ConvexHull, QhullError
 from ..bodies import Cylinder, Shape, add_welded_body, matrix_to_euler_xyz
 from ..models.equipment import Equipment, Screen
 from ..models.user import User
-from ..utils.functions import import_opensim
+from ..utils.opensim import import_opensim
 from .framework import Framework
 
 __all__ = ["VisualErgonomicsFramework"]
@@ -771,7 +771,19 @@ class VisualErgonomicsFramework(Framework):
         return shoulder, radius
 
     def _screen_contact_sphere(self, side: str) -> tuple[np.ndarray, float]:
-        """Return a hand-contact reach sphere for screen coverage metrics."""
+        """Return a hand-contact reach sphere for screen coverage metrics.
+
+        Parameters
+        ----------
+        side : {"r", "l"}
+            Rider side.
+
+        Returns
+        -------
+        tuple of (numpy.ndarray, float)
+            Shoulder position in metres and reach radius in metres, including
+            the extension from the palm centre to the hand's distal endpoint.
+        """
         shoulder, palm_center_radius = self._reachability_sphere(side)
         side_name = "right" if side == "r" else "left"
         palm_length = float(getattr(self.user, f"{side_name}_palm_length"))

@@ -92,7 +92,7 @@ class _JointCenterMixin:
         coupling is only resolved by ``realizePosition``/``assemble``-level
         updates, not by a plain :meth:`update_state` after a mid-edit knee
         angle change (see :meth:`set_left_knee_flexionextension` and the
-        README's "Limiti noti di update_state()").
+        README's "Known update_state() limitation").
 
         Returns
         -------
@@ -112,7 +112,7 @@ class _JointCenterMixin:
         coupling is only resolved by ``realizePosition``/``assemble``-level
         updates, not by a plain :meth:`update_state` after a mid-edit knee
         angle change (see :meth:`set_right_knee_flexionextension` and the
-        README's "Limiti noti di update_state()").
+        README's "Known update_state() limitation").
 
         Returns
         -------

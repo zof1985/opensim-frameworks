@@ -12,7 +12,7 @@ from typing import Any, ClassVar, Self
 import numpy as np
 
 from ...utils.constants import MM_TO_M
-from ...utils.functions import import_opensim
+from ...utils.opensim import import_opensim
 
 opensim = import_opensim()
 
@@ -349,6 +349,19 @@ class Equipment(opensim.Model, ABC):
         Screen-bearing equipment with configurable offset limits should
         override this method. The default is suitable for equipment whose
         screen offsets do not have separate lower limits.
+
+        Parameters
+        ----------
+        horizontal_min_mm : float or None, optional
+            Requested minimum horizontal screen offset in millimetres.
+        vertical_min_mm : float or None, optional
+            Requested minimum vertical screen offset in millimetres.
+
+        Raises
+        ------
+        NotImplementedError
+            If the equipment has a screen with separate offset limits but
+            does not support expanding them.
         """
         if self.screen is not None and (
             (
@@ -419,10 +432,21 @@ class Equipment(opensim.Model, ABC):
 
         Subclasses using the default initializer must also save the model and
         any display meshes under ``_model_path``.
+
+        Raises
+        ------
+        NotImplementedError
+            If the concrete equipment does not implement this method.
         """
         raise NotImplementedError
 
     @abstractmethod
     def fit_user(self, *args: Any, **kwargs: Any) -> Any:
-        """Fit a user to this equipment using a subclass-specific procedure."""
+        """Fit a user to this equipment using a subclass-specific procedure.
+
+        Raises
+        ------
+        NotImplementedError
+            If the concrete equipment does not implement a fitting procedure.
+        """
         raise NotImplementedError

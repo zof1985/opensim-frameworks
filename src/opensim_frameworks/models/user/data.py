@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-__all__ = ["DEFAULT_DATASET", "AnthropometricReference", "load_ansur", "resolve_reference"]
-
-from dataclasses import dataclass
-from pathlib import Path
 import csv
 import warnings
+from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from scipy.interpolate import PchipInterpolator
+
+__all__ = ["DEFAULT_DATASET", "AnthropometricReference", "load_ansur", "resolve_reference"]
 
 DEFAULT_DATASET = Path(__file__).resolve().parent / "assets" / "ansur_ref.csv"
 
@@ -129,6 +129,19 @@ def _pchip_with_linear_tails(x: np.ndarray, y: np.ndarray):
     queries well outside the sampled range. Continuing instead along the
     tangent at each boundary keeps extrapolated values monotonic with the
     local trend.
+
+    Parameters
+    ----------
+    x : numpy.ndarray
+        Strictly increasing sample coordinates.
+    y : numpy.ndarray
+        Sample values corresponding to ``x``.
+
+    Returns
+    -------
+    callable
+        Function accepting a scalar query coordinate and returning its
+        interpolated or linearly extrapolated value.
     """
     interpolator = PchipInterpolator(x, y, extrapolate=False)
     derivative = interpolator.derivative()
@@ -191,6 +204,19 @@ def _values_from_height(frame: pd.DataFrame, height_m: float) -> dict[str, float
     stature, so the same curve interpolates within the ANSUR range and
     extrapolates beyond it, instead of relying on a percentile lookup that is
     undefined outside ``[0, 100]``.
+
+    Parameters
+    ----------
+    frame : pandas.DataFrame
+        ANSUR reference data containing a ``stature_m`` column and numeric
+        measurement columns.
+    height_m : float
+        Requested stature in metres.
+
+    Returns
+    -------
+    dict of str to float
+        Numeric measurements resolved at the requested stature.
     """
     stature = frame["stature_m"].to_numpy(dtype=float)
     n_bins = int(np.clip(len(frame) // 100, 10, 40))

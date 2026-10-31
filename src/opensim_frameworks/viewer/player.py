@@ -78,6 +78,7 @@ from .win32_embed import (
     resize_embedded_window,
     set_process_dpi_aware,
 )
+from ..utils.constants import DEFAULT_SIZE, VIEW_NAMES
 
 __all__ = ["MotionData", "MotionPlayer", "PlayerWindow", "start_player"]
 
@@ -490,7 +491,6 @@ def start_player(
 
         import sv_ttk
 
-        from ..utils.constants import DEFAULT_SIZE, VIEW_NAMES
         from .visualizer import VTKVisualizer
 
         root = tk.Tk()

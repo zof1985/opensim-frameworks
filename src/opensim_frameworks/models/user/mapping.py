@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-__all__ = ["segment_scale_factors"]
-
 from collections.abc import Mapping
 
 from .data import AnthropometricReference
+
+__all__ = ["segment_scale_factors"]
 
 DEFAULT_BODY_NAMES = (
     "pelvis",
