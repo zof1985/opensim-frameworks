@@ -12,6 +12,7 @@ from ...bodies.shapes import MESHES_DIR
 from ...utils.opensim import (
     get_referenced_meshes,
     import_opensim,
+    read_vtp_vertices,
     register_geometry_search_path,
 )
 from .data import DEFAULT_DATASET, resolve_reference
@@ -127,6 +128,9 @@ class User(opensim.Model, _MeasurementMixin, _PostureMixin, _JointCenterMixin):
     wrist joint with independent flexion/extension and radial/ulnar-deviation
     coordinates. ``RPALM`` and ``LPALM`` are hand-attached markers at the
     anthropometric palm centres, repositioned after body scaling.
+    After scaling, the model is translated vertically so the lowest vertices
+    of both foot meshes touch the ground plane (``y = 0``). This is a
+    geometry-based approximation and does not model soft-tissue contact.
 
     Parameters
     ----------
@@ -177,8 +181,8 @@ class User(opensim.Model, _MeasurementMixin, _PostureMixin, _JointCenterMixin):
     ValueError
         If ``gender`` is not ``"M"``/``"F"``, if ``height_cm`` is given but is
         not a positive finite number, if ``percentile`` is not finite or
-        falls outside ``[0.1, 99.9]``, or if ``mass_kg`` is given but is not
-        a positive finite number.
+        falls outside ``[0.1, 99.9]``, if ``mass_kg`` is not a positive finite
+        number, or if both feet cannot be grounded by vertical translation.
     """
 
     def __init__(
@@ -195,7 +199,8 @@ class User(opensim.Model, _MeasurementMixin, _PostureMixin, _JointCenterMixin):
         The resolved reference determines segment scaling relative to the
         50th-percentile baseline for the same gender. The model's total mass
         is then calibrated to ``mass_kg`` or, when omitted, to the resolved
-        ANSUR ``weight_kg``.
+        ANSUR ``weight_kg``. The scaled foot meshes are placed on ground by
+        translating the pelvis vertically without changing joint angles.
 
         Parameters
         ----------
@@ -216,7 +221,8 @@ class User(opensim.Model, _MeasurementMixin, _PostureMixin, _JointCenterMixin):
         Raises
         ------
         ValueError
-            If the supplied gender, stature, percentile, or mass is invalid.
+            If the supplied gender, stature, percentile, or mass is invalid,
+            or if both feet cannot be grounded by vertical translation.
         UserWarning
             If the requested stature lies outside the ANSUR range.
         """
@@ -253,6 +259,54 @@ class User(opensim.Model, _MeasurementMixin, _PostureMixin, _JointCenterMixin):
         )
         self._rescale_total_mass(target_mass_kg)
         self._mass_kg = target_mass_kg
+        self._place_feet_on_ground()
+
+    def _place_feet_on_ground(self) -> None:
+        """Translate the scaled model so both foot meshes touch ground."""
+        self.realizePosition(self.state)
+        foot_heights = []
+        for side in ("r", "l"):
+            mesh_heights = []
+            for body_name in (f"calcn_{side}", f"toes_{side}"):
+                body = self.getBodySet().get(body_name)
+                for index in range(body.getPropertyByName("attached_geometry").size()):
+                    mesh = opensim.Mesh.safeDownCast(body.get_attached_geometry(index))
+                    if mesh is None:
+                        continue
+                    mesh_path = DEFAULT_MESHES_DIR / mesh.get_mesh_file()
+                    vertices = read_vtp_vertices(mesh_path)
+                    scale = np.array(
+                        [mesh.get_scale_factors().get(axis) for axis in range(3)]
+                    )
+                    transform = mesh.getFrame().getTransformInGround(self.state)
+                    vertical = np.array(
+                        [transform.R().get(1, axis) for axis in range(3)]
+                    )
+                    heights = (vertices * scale) @ vertical + transform.p().get(1)
+                    mesh_heights.append(float(np.min(heights)))
+            if not mesh_heights:
+                raise ValueError(f"No foot mesh is attached on side {side!r}")
+            foot_heights.append(min(mesh_heights))
+
+        if not all(math.isfinite(height) for height in foot_heights):
+            raise ValueError("Foot mesh heights must be finite")
+        if not math.isclose(foot_heights[0], foot_heights[1], abs_tol=1e-8):
+            raise ValueError(
+                "The scaled feet cannot both touch ground by vertical translation: "
+                f"right height {foot_heights[0]:.9g} m, "
+                f"left height {foot_heights[1]:.9g} m"
+            )
+
+        coordinate = self.getCoordinateSet().get("pelvis_ty")
+        target = coordinate.getValue(self.state) - min(foot_heights)
+        if not coordinate.getRangeMin() <= target <= coordinate.getRangeMax():
+            raise ValueError(
+                f"Grounding the feet requires pelvis_ty={target:.9g} m outside "
+                f"[{coordinate.getRangeMin():.9g}, {coordinate.getRangeMax():.9g}] m"
+            )
+        coordinate.setDefaultValue(target)
+        coordinate.setValue(self.state, target, False)
+        self.realizePosition(self.state)
 
     def _add_anatomical_bodies(self) -> None:
         """Create articulated head segments and anatomical eye/palm markers.

@@ -16,6 +16,7 @@ from opensim_frameworks.models.user.user import (
     _FOOT_MARKER_NAMES,
     _JOINT_CENTER_NAMES,
 )
+from opensim_frameworks.utils.opensim import read_vtp_vertices
 from opensim_frameworks.models.user.posture_table import (
     POSTURE_COORDINATE_NAMES as _POSTURE_COORDINATE_NAMES,
 )
@@ -110,6 +111,82 @@ CIRCULAR_SECTION_PROPERTIES = [
 
 def make_user(**kwargs):
     return User(dataset=DATASET, **kwargs)
+
+
+def foot_mesh_minimum_height(user, side):
+    user.realizePosition(user.state)
+    heights = []
+    for body_name in (f"calcn_{side}", f"toes_{side}"):
+        body = user.getBodySet().get(body_name)
+        for index in range(body.getPropertyByName("attached_geometry").size()):
+            mesh = opensim.Mesh.safeDownCast(body.get_attached_geometry(index))
+            if mesh is None:
+                continue
+            vertices = read_vtp_vertices(DEFAULT_MESHES_DIR / mesh.get_mesh_file())
+            scale = np.array([mesh.get_scale_factors().get(i) for i in range(3)])
+            frame = mesh.getFrame()
+            for vertex in vertices:
+                position = frame.findStationLocationInGround(
+                    user.state, opensim.Vec3(*map(float, vertex * scale))
+                )
+                heights.append(position.get(1))
+    return min(heights)
+
+
+@requires_opensim
+@pytest.mark.filterwarnings("ignore:height=.*outside ANSUR range:UserWarning")
+@pytest.mark.parametrize("gender", ["M", "F"])
+@pytest.mark.parametrize("height", [150, 175, 205])
+def test_scaled_user_starts_with_both_feet_on_ground(gender, height):
+    user = make_user(gender=gender, height_cm=height)
+
+    for side in ("r", "l"):
+        assert foot_mesh_minimum_height(user, side) == pytest.approx(0.0, abs=1e-8)
+    assert all(position[1] >= 0.0 for position in user.foot_markers.values())
+
+    pelvis_ty = user.getCoordinateSet().get("pelvis_ty")
+    assert pelvis_ty.getDefaultValue() == pytest.approx(pelvis_ty.getValue(user.state))
+    user.reinitialize()
+    for side in ("r", "l"):
+        assert foot_mesh_minimum_height(user, side) == pytest.approx(0.0, abs=1e-8)
+
+
+@requires_opensim
+def test_grounding_only_translates_the_pelvis_vertically(monkeypatch):
+    with monkeypatch.context() as patch:
+        patch.setattr(User, "_place_feet_on_ground", lambda self: None)
+        baseline = make_user(gender="M", height_cm=150)
+    grounded = make_user(gender="M", height_cm=150)
+
+    baseline_coordinates = baseline.getCoordinateSet()
+    grounded_coordinates = grounded.getCoordinateSet()
+    for index in range(baseline_coordinates.getSize()):
+        coordinate = baseline_coordinates.get(index)
+        if coordinate.getName() == "pelvis_ty":
+            continue
+        assert grounded_coordinates.get(coordinate.getName()).getValue(
+            grounded.state
+        ) == pytest.approx(coordinate.getValue(baseline.state))
+    assert grounded.mass_kg == pytest.approx(baseline.mass_kg)
+    assert grounded.getCoordinateSet().get("pelvis_ty").getValue(
+        grounded.state
+    ) != pytest.approx(baseline_coordinates.get("pelvis_ty").getValue(baseline.state))
+
+
+@requires_opensim
+def test_grounded_pose_is_preserved_in_a_new_opensim_system():
+    user = make_user(gender="M", height_cm=150)
+    expected = user.foot_markers
+
+    copied_model = opensim.Model(user)
+    copied_model.finalizeConnections()
+    copied_state = copied_model.initSystem()
+    copied_model.realizePosition(copied_state)
+    for name, marker_name in _FOOT_MARKER_NAMES.items():
+        position = copied_model.getMarkerSet().get(marker_name).getLocationInGround(
+            copied_state
+        )
+        assert tuple(position.get(i) for i in range(3)) == pytest.approx(expected[name])
 
 
 # ---------------------------------------------------------------------------

@@ -144,7 +144,11 @@ measurement; a single ANSUR subject is not selected. Each segment is scaled
 using ANSUR measurements associated with its available axes, with the stature
 ratio used for the remaining axes. After geometric scaling, body masses and
 inertias are rescaled uniformly so the model's total mass matches `mass_kg` or
-the weight resolved from ANSUR data.
+the weight resolved from ANSUR data. The pelvis is translated vertically so
+the lowest vertices of both scaled foot meshes touch the ground plane (`y = 0`)
+without changing joint angles. This uses the displayed foot geometry as an
+approximation; it does not simulate soft tissue, contact forces, or footwear.
+The foot markers remain at their anatomical offsets above the ground.
 
 ### ANSUR-resolved values
 
@@ -167,8 +171,9 @@ The cervical joints provide neck-base flexion/extension and lateral flexion
 lateral flexion, and rotation (`neck_flexion`, `neck_lateral_flexion`,
 `neck_rotation`). The wrists support flexion/extension and radial/ulnar
 deviation. `REYE`/`LEYE` mark the eye sockets, `RPALM`/`LPALM` mark the palm
-centres, and foot markers identify the heel, first metatarsal, and fifth
-metatarsal. Each foot has a subtalar degree of freedom for inversion/eversion.
+centres, and foot markers identify the heel, toe, and fifth metatarsal; there
+is no first-metatarsal marker in this model. Each foot has a subtalar degree
+of freedom for inversion/eversion.
 
 `to_osim()` exports the scaled model in its current pose. By default, it also
 copies referenced meshes into a `Geometry` directory next to the `.osim` file.
