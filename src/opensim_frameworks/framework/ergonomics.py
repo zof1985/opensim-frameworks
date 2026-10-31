@@ -17,7 +17,7 @@ from scipy.spatial import ConvexHull, QhullError
 from ..bodies import Cylinder, Shape, add_welded_body, matrix_to_euler_xyz
 from ..models.equipment import Equipment, Screen
 from ..models.user import User
-from ..utils.opensim import import_opensim
+from ..utils.opensim import import_opensim, rotation_to_numpy, vec3_to_numpy
 from .framework import Framework
 
 __all__ = ["VisualErgonomicsFramework"]
@@ -201,14 +201,12 @@ def _spherical_cap_mesh(
 
 def _rotation_in_ground(frame: Any, state: Any) -> np.ndarray:
     transform = frame.getTransformInGround(state)
-    return np.array(
-        [[transform.R().get(row, column) for column in range(3)] for row in range(3)]
-    )
+    return rotation_to_numpy(transform.R())
 
 
 def _position_in_ground(frame: Any, state: Any) -> np.ndarray:
     point = frame.getPositionInGround(state)
-    return np.array([point.get(index) for index in range(3)])
+    return vec3_to_numpy(point)
 
 
 class VisualErgonomicsFramework(Framework):
@@ -379,17 +377,13 @@ class VisualErgonomicsFramework(Framework):
             self.user.state = state
         return state
 
-    @staticmethod
-    def _vector(value: Any) -> np.ndarray:
-        return np.array([value.get(index) for index in range(3)], dtype=float)
-
     def _eye_center_and_head_rotation(self) -> tuple[np.ndarray, np.ndarray]:
         state = self._user_state()
         self.user.realizePosition(state)
         markers = self.user.getMarkerSet()
         eyes = np.array(
             [
-                self._vector(markers.get(name).getLocationInGround(state))
+                vec3_to_numpy(markers.get(name).getLocationInGround(state))
                 for name in ("REYE", "LEYE")
             ]
         )
@@ -443,7 +437,7 @@ class VisualErgonomicsFramework(Framework):
         markers = self.user.getMarkerSet()
         return np.array(
             [
-                self._vector(markers.get(name).getLocationInGround(state))
+                vec3_to_numpy(markers.get(name).getLocationInGround(state))
                 for name in ("RPALM", "LPALM")
             ]
         )
@@ -708,7 +702,7 @@ class VisualErgonomicsFramework(Framework):
                         coordinate.setValue(state, coordinate.getRangeMin(), False)
                     self.user.realizePosition(state)
                     endpoints.append(
-                        self._vector(marker.getLocationInGround(state))
+                        vec3_to_numpy(marker.getLocationInGround(state))
                     )
             finally:
                 for coordinate, value in zip(coordinate_values, original_values):

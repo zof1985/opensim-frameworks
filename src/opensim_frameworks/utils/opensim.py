@@ -7,6 +7,7 @@ import math
 import os
 import re
 import sys
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -16,6 +17,10 @@ __all__ = [
     "import_opensim",
     "register_geometry_search_path",
     "resolve_geometry_file",
+    "vec3_to_numpy",
+    "numpy_to_vec3",
+    "rotation_to_numpy",
+    "numpy_to_rotation",
     "local_to_global",
     "global_to_local",
     "weld_bodies",
@@ -125,6 +130,152 @@ def _as_vec3(point: Any, opensim: Any) -> Any:
     if coordinates.shape != (3,) or not np.all(np.isfinite(coordinates)):
         raise ValueError("point must contain three finite coordinates")
     return point if is_vec3 else opensim.Vec3(*map(float, coordinates))
+
+
+@lru_cache(maxsize=1)
+def _conversion_opensim() -> Any:
+    return import_opensim()
+
+
+def vec3_to_numpy(value: Any) -> np.ndarray:
+    """Convert an OpenSim Vec3 to an independent NumPy array.
+
+    Parameters
+    ----------
+    value : opensim.Vec3
+        Vector containing three finite coordinates.
+
+    Returns
+    -------
+    numpy.ndarray, shape (3,)
+        Copy of the vector's coordinates, with dtype float.
+
+    Raises
+    ------
+    TypeError
+        If ``value`` is not an OpenSim Vec3.
+    ValueError
+        If a coordinate is not finite.
+
+    Notes
+    -----
+    No units or reference frame are changed.
+    """
+    opensim = _conversion_opensim()
+    if not isinstance(value, opensim.Vec3):
+        raise TypeError("value must be an OpenSim Vec3")
+    coordinates = np.array([value.get(index) for index in range(3)], dtype=float)
+    if not np.all(np.isfinite(coordinates)):
+        raise ValueError("value must contain three finite coordinates")
+    return coordinates
+
+
+def numpy_to_vec3(value: Any) -> Any:
+    """Convert three numeric coordinates to an OpenSim Vec3.
+
+    Parameters
+    ----------
+    value : array-like, shape (3,) or opensim.Vec3
+        Finite coordinates. An existing Vec3 is returned unchanged.
+
+    Returns
+    -------
+    opensim.Vec3
+        Vector containing the given coordinates.
+
+    Raises
+    ------
+    ValueError
+        If the input does not have shape ``(3,)`` or contains nonfinite values.
+
+    Notes
+    -----
+    No units or reference frame are changed.
+    """
+    return _as_vec3(value, _conversion_opensim())
+
+
+def _validate_rotation_matrix(matrix: np.ndarray) -> None:
+    if matrix.shape != (3, 3) or not np.all(np.isfinite(matrix)):
+        raise ValueError("rotation must be a finite 3x3 matrix")
+    if not (
+        np.max(np.abs(matrix.T @ matrix - np.eye(3))) <= 1e-6
+        and abs(np.linalg.det(matrix) - 1.0) <= 1e-6
+    ):
+        raise ValueError("rotation must be orthonormal with determinant +1")
+
+
+def rotation_to_numpy(value: Any) -> np.ndarray:
+    """Convert an OpenSim Rotation to an independent NumPy matrix.
+
+    Parameters
+    ----------
+    value : opensim.Rotation
+        OpenSim rotation.
+
+    Returns
+    -------
+    numpy.ndarray, shape (3, 3)
+        Copy of the rotation matrix, with dtype float.
+
+    Raises
+    ------
+    TypeError
+        If ``value`` is not an OpenSim Rotation.
+    ValueError
+        If its matrix is not a finite proper rotation within an absolute
+        tolerance of 1e-6.
+
+    Notes
+    -----
+    Rows and columns are preserved; no transposition or reference-frame
+    transformation is performed.
+    """
+    opensim = _conversion_opensim()
+    if not isinstance(value, opensim.Rotation):
+        raise TypeError("value must be an OpenSim Rotation")
+    matrix = np.array(
+        [[value.get(row, column) for column in range(3)] for row in range(3)],
+        dtype=float,
+    )
+    _validate_rotation_matrix(matrix)
+    return matrix
+
+
+def numpy_to_rotation(value: Any) -> Any:
+    """Convert a proper rotation matrix to an OpenSim Rotation.
+
+    Parameters
+    ----------
+    value : array-like, shape (3, 3) or opensim.Rotation
+        Finite matrix with orthonormal columns and determinant +1, within
+        an absolute tolerance of 1e-6. An existing Rotation is validated and
+        returned unchanged.
+
+    Returns
+    -------
+    opensim.Rotation
+        Rotation containing the given matrix entries.
+
+    Raises
+    ------
+    ValueError
+        If the input is not a finite 3x3 proper rotation matrix.
+
+    Notes
+    -----
+    Entries are preserved without orthogonalization or transposition; no
+    reference-frame transformation is performed.
+    """
+    opensim = _conversion_opensim()
+    if isinstance(value, opensim.Rotation):
+        rotation_to_numpy(value)
+        return value
+    matrix = np.asarray(value, dtype=float)
+    _validate_rotation_matrix(matrix)
+    mat33 = opensim.Mat33(*(float(entry) for entry in matrix.flat))
+    # Use Simbody's trusted-matrix overload; the single-argument overload projects it.
+    return opensim.Rotation(mat33, True)
 
 
 def local_to_global(frame: Any, state: Any, point: Any) -> Any:
@@ -570,8 +721,7 @@ def body_mass_center_array(body: Any) -> np.ndarray:
     numpy.ndarray, shape (3,)
         Mass-centre coordinates in metres.
     """
-    center = body.getMassCenter()
-    return np.array([center.get(index) for index in range(3)], dtype=float)
+    return vec3_to_numpy(body.getMassCenter())
 
 
 def get_referenced_meshes(model: Any) -> list[tuple[Any, str]]:

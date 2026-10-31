@@ -5,7 +5,7 @@ import warnings
 import numpy as np
 import pytest
 
-from opensim_frameworks import Bike, User
+from opensim_frameworks import Bike, User, vec3_to_numpy
 from opensim_frameworks.framework import VisualErgonomicsFramework
 from opensim_frameworks.framework import Framework
 from opensim_frameworks.viewer.viewer import _ViewerModel
@@ -649,7 +649,7 @@ def test_reachability_hull_includes_effective_shoulder_range_boundaries(manager)
                 coordinate.setValue(state, value, False)
             elbow.setValue(state, elbow.getRangeMin(), False)
             user.realizePosition(state)
-            endpoint = manager._vector(marker.getLocationInGround(state))
+            endpoint = vec3_to_numpy(marker.getLocationInGround(state))
 
             assert np.min(np.linalg.norm(points - endpoint, axis=1)) < 1e-8
     finally:

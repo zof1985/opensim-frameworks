@@ -509,6 +509,30 @@ of mass to a NumPy array, while `get_referenced_meshes()` returns the meshes
 attached to a model and their referenced file names. These utilities are
 also available from the top-level `opensim_frameworks` namespace.
 
+`vec3_to_numpy()` and `numpy_to_vec3()` convert between an OpenSim `Vec3`
+and three finite numeric coordinates. The former returns an independent
+NumPy array with shape `(3,)`; the latter also accepts a list or tuple.
+These conversions preserve the coordinates' units and reference frame:
+
+```python
+import opensim_frameworks as osf
+
+coordinates = osf.vec3_to_numpy(body.getMassCenter())
+vector = osf.numpy_to_vec3(coordinates)
+```
+
+`rotation_to_numpy()` and `numpy_to_rotation()` convert between an OpenSim
+`Rotation` and a NumPy matrix with shape `(3, 3)`. They preserve row and
+column order without changing reference frames. Both validate that the
+matrix is finite and represents a proper rotation (orthonormal with
+determinant +1, within an absolute tolerance of `1e-6`). The conversion
+does not silently orthogonalize the input:
+
+```python
+rotation_matrix = osf.rotation_to_numpy(body.getTransformInGround(state).R())
+rotation = osf.numpy_to_rotation(rotation_matrix)
+```
+
 ## Composition with `Framework`
 
 `Framework` is a dictionary-like container of separate OpenSim models
@@ -656,8 +680,10 @@ and `VIEW_NAMES`.
 `Equipment`, `Screen`, `read_step`, `weld_bodies`,
 `extract_step_body_and_mesh`, and `weld_step_body_mesh_tree` are available
 from `opensim_frameworks.models.equipment`. `read_vtp_vertices`,
-`body_mass_center_array`, and `get_referenced_meshes` are also exposed from
-the top-level namespace. `VisualErgonomicsFramework` is available from
+`body_mass_center_array`, `get_referenced_meshes`, `vec3_to_numpy`,
+`numpy_to_vec3`, `rotation_to_numpy`, and `numpy_to_rotation` are also
+exposed from the top-level namespace.
+`VisualErgonomicsFramework` is available from
 `opensim_frameworks.framework`. Geometric primitives and OpenSim body
 builders are exposed from `opensim_frameworks.bodies`, including `Box`,
 `Cylinder`, `Disk`, `Ellipsoid`, `Sphere`, `Tube`, and `mass_properties`.

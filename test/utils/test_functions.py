@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+import opensim_frameworks as osf
 from opensim_frameworks.utils.opensim import global_to_local, local_to_global
 from opensim_frameworks.utils.opensim import (
     body_mass_center_array,
@@ -50,6 +51,165 @@ def _posed_body():
     state = model.initSystem()
     model.realizePosition(state)
     return model, body, state
+
+
+@pytest.mark.parametrize(
+    "coordinates",
+    [np.array([1.25, -2.0, 3.5]), np.array([1, 2, 3]), [1, -2, 3], (1, -2, 3)],
+)
+def test_vec3_numpy_conversions_round_trip_without_aliasing(coordinates):
+    vector = osf.numpy_to_vec3(coordinates)
+    result = osf.vec3_to_numpy(vector)
+
+    assert isinstance(vector, opensim.Vec3)
+    assert result.shape == (3,)
+    assert result.dtype == np.dtype(float)
+    np.testing.assert_array_equal(result, coordinates)
+    result[0] = 100.0
+    assert vector.get(0) == coordinates[0]
+    if isinstance(coordinates, np.ndarray):
+        coordinates[1] = 200
+        assert vector.get(1) != coordinates[1]
+
+
+def test_numpy_to_vec3_accepts_and_validates_existing_vec3():
+    vector = opensim.Vec3(1, 2, 3)
+    assert osf.numpy_to_vec3(vector) is vector
+
+
+@pytest.mark.parametrize(
+    "coordinates",
+    [
+        [],
+        [1, 2],
+        [1, 2, 3, 4],
+        [[1], [2], [3]],
+        1,
+        [1, float("nan"), 3],
+        [1, float("inf"), 3],
+        [1, -float("inf"), 3],
+    ],
+)
+def test_numpy_to_vec3_rejects_invalid_coordinates(coordinates):
+    with pytest.raises(ValueError, match="three finite coordinates"):
+        osf.numpy_to_vec3(coordinates)
+
+
+@pytest.mark.parametrize("bad_value", [None, [1, 2, 3], np.array([1, 2, 3])])
+def test_vec3_to_numpy_rejects_non_vec3_values(bad_value):
+    with pytest.raises(TypeError, match="OpenSim Vec3"):
+        osf.vec3_to_numpy(bad_value)
+
+
+@pytest.mark.parametrize("coordinate", [float("nan"), float("inf"), -float("inf")])
+def test_conversions_reject_nonfinite_vec3(coordinate):
+    vector = opensim.Vec3(1, coordinate, 3)
+    with pytest.raises(ValueError, match="three finite coordinates"):
+        osf.vec3_to_numpy(vector)
+    with pytest.raises(ValueError, match="three finite coordinates"):
+        osf.numpy_to_vec3(vector)
+
+
+@pytest.mark.parametrize(
+    "matrix",
+    [
+        np.eye(3),
+        [[0, -1, 0], [1, 0, 0], [0, 0, 1]],
+        np.array([[0.36, -0.48, 0.8], [0.8, 0.6, 0], [-0.48, 0.64, 0.6]]),
+        np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]], dtype=np.float32),
+    ],
+)
+def test_rotation_numpy_conversions_preserve_entries_and_do_not_alias(matrix):
+    expected = np.asarray(matrix, dtype=float).copy()
+    rotation = osf.numpy_to_rotation(matrix)
+    result = osf.rotation_to_numpy(rotation)
+
+    assert isinstance(rotation, opensim.Rotation)
+    assert result.shape == (3, 3)
+    assert result.dtype == np.dtype(float)
+    np.testing.assert_array_equal(result, expected)
+    result[0, 0] = 100.0
+    assert rotation.get(0, 0) == expected[0, 0]
+    if isinstance(matrix, np.ndarray):
+        matrix[0, 1] = 100.0
+        assert rotation.get(0, 1) == expected[0, 1]
+
+
+def test_rotation_conversion_preserves_frame_direction():
+    _model, body, state = _posed_body()
+    transform = body.getTransformInGround(state)
+    matrix = osf.rotation_to_numpy(transform.R())
+    local = np.array([1.0, 0.0, 0.0])
+    expected_ground = osf.vec3_to_numpy(local_to_global(body, state, local))
+    np.testing.assert_allclose(
+        matrix @ local + osf.vec3_to_numpy(transform.p()),
+        expected_ground,
+        atol=1e-12,
+    )
+    converted = osf.numpy_to_rotation(matrix)
+    np.testing.assert_allclose(
+        osf.vec3_to_numpy(converted.multiply(osf.numpy_to_vec3(local))),
+        matrix @ local,
+        atol=1e-12,
+    )
+
+
+def test_numpy_to_rotation_preserves_accepted_entries_without_projection():
+    matrix = np.eye(3)
+    matrix[0, 1] = 1e-8
+    result = osf.rotation_to_numpy(osf.numpy_to_rotation(matrix))
+    np.testing.assert_array_equal(result, matrix)
+
+
+def test_numpy_to_rotation_accepts_existing_rotation():
+    rotation = opensim.Rotation()
+    assert osf.numpy_to_rotation(rotation) is rotation
+
+
+@pytest.mark.parametrize(
+    "matrix",
+    [
+        [1, 2, 3],
+        np.ones((3, 2)),
+        np.zeros((3, 3, 1)),
+        [[1, 0, 0], [0, np.nan, 0], [0, 0, 1]],
+        [[1, 0, 0], [0, np.inf, 0], [0, 0, 1]],
+    ],
+)
+def test_numpy_to_rotation_rejects_bad_shape_or_nonfinite_values(matrix):
+    with pytest.raises(ValueError, match="finite 3x3 matrix"):
+        osf.numpy_to_rotation(matrix)
+
+
+@pytest.mark.parametrize(
+    "matrix",
+    [
+        [[-1, 0, 0], [0, 1, 0], [0, 0, 1]],
+        [[2, 0, 0], [0, 1, 0], [0, 0, 1]],
+        [[1, 0.01, 0], [0, 1, 0], [0, 0, 1]],
+        [[1, 1.1e-6, 0], [0, 1, 0], [0, 0, 1]],
+        np.zeros((3, 3)),
+    ],
+)
+def test_numpy_to_rotation_rejects_non_rotations(matrix):
+    with pytest.raises(ValueError, match="orthonormal with determinant"):
+        osf.numpy_to_rotation(matrix)
+
+
+@pytest.mark.parametrize("value", [None, np.eye(3), opensim.Mat33(1.0)])
+def test_rotation_to_numpy_rejects_non_rotation_values(value):
+    with pytest.raises(TypeError, match="OpenSim Rotation"):
+        osf.rotation_to_numpy(value)
+
+
+@pytest.mark.parametrize("entry", [float("nan"), 2.0])
+def test_conversions_reject_invalid_opensim_rotation(entry):
+    rotation = opensim.Rotation()
+    rotation.set(0, 0, entry)
+    with pytest.raises(ValueError, match="rotation"):
+        osf.rotation_to_numpy(rotation)
+    with pytest.raises(ValueError, match="rotation"):
+        osf.numpy_to_rotation(rotation)
 
 
 def test_local_to_global_applies_frame_translation_and_rotation():

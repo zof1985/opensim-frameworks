@@ -11,7 +11,12 @@ from scipy.optimize import least_squares, minimize_scalar
 
 from .....bodies.shapes import matrix_to_euler_xyz
 from .....framework import Framework
-from .....utils.opensim import import_opensim
+from .....utils.opensim import (
+    import_opensim,
+    numpy_to_vec3,
+    rotation_to_numpy,
+    vec3_to_numpy,
+)
 from .bike import horn_direction
 
 __all__ = ["fit_user"]
@@ -37,13 +42,9 @@ _PRESERVED_POSTURE_COORDINATES = (
 
 def _pose(frame: Any, state: Any) -> tuple[np.ndarray, np.ndarray]:
     transform = frame.getTransformInGround(state)
-    rotation = np.array([[transform.R().get(i, j) for j in range(3)] for i in range(3)])
-    position = np.array([transform.p().get(i) for i in range(3)])
+    rotation = rotation_to_numpy(transform.R())
+    position = vec3_to_numpy(transform.p())
     return rotation, position
-
-
-def _vec(value: Any) -> np.ndarray:
-    return np.array([value.get(i) for i in range(3)])
 
 
 def _pitch(rotation: np.ndarray, neutral: np.ndarray) -> float:
@@ -118,14 +119,18 @@ class _Rider:
         self.set(values)
 
     def marker(self, name: str) -> np.ndarray:
-        return _vec(self.user.getMarkerSet().get(name).getLocationInGround(self.state))
+        return vec3_to_numpy(
+            self.user.getMarkerSet().get(name).getLocationInGround(self.state)
+        )
 
     def body_rotation(self, name: str) -> np.ndarray:
         return _pose(self.user.getBodySet().get(name), self.state)[0]
 
     def station(self, body: str, local: np.ndarray) -> np.ndarray:
         frame = self.user.getBodySet().get(body)
-        return _vec(frame.findStationLocationInGround(self.state, opensim.Vec3(*local)))
+        return vec3_to_numpy(
+            frame.findStationLocationInGround(self.state, numpy_to_vec3(local))
+        )
 
     def _pelvis_translation(self) -> np.ndarray:
         return np.array(
@@ -593,8 +598,8 @@ def _mount(
         frame.setName(name)
         frame.setParentFrame(parent_body)
         parent_body.addComponent(frame)
-    frame.set_translation(opensim.Vec3(*position))
-    frame.set_orientation(opensim.Vec3(*matrix_to_euler_xyz(rotation)))
+    frame.set_translation(numpy_to_vec3(position))
+    frame.set_orientation(numpy_to_vec3(matrix_to_euler_xyz(rotation)))
 
 
 def fit_user(
