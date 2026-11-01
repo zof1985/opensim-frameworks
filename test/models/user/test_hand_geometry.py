@@ -643,3 +643,82 @@ def test_distinct_hand_bodies_do_not_intersect_in_representative_poses(side, suf
         collision.SetCellTolerance(0)
         collision.Update()
         assert collision.GetNumberOfContacts() == 0, f"{first[1]} intersects {second[1]}"
+
+
+@pytest.mark.parametrize(("side", "suffix"), (("right", "r"), ("left", "l")))
+def test_valid_thumb_coordinates_can_intersect_palm(side, suffix):
+    """Detect a thumb-palm intersection despite valid individual joint ranges."""
+    user = User("M", percentile=50)
+
+    # Verify that the reference pose does not intersect.
+    assert user.hand_surface_intersections(side) == ()
+
+    # Move the thumb to a reproducible pose within its individual joint limits.
+    for joint, motion, radians in (
+        ("cmc", "opposition", 0.534784343673506),
+        ("cmc", "flexion", 0.06403444402876823),
+        ("mcp", "flexion", -0.10446352235477496),
+        ("ip", "flexion", -1.2799411850060745),
+    ):
+        user.set_finger_coordinate_locked(side, "thumb", joint, motion, False)
+        user.set_finger_angle(side, "thumb", joint, motion, math.degrees(radians))
+
+    # Verify that the check detects the intersection without changing the pose.
+    coordinate = user.finger_coordinate(side, "thumb", "ip", "flexion")
+    value = coordinate.getValue(user.state)
+    intersections = user.hand_surface_intersections(side)
+    assert (f"metacarpal3_{suffix}vs.vtp", f"thumb_distal_{suffix}vs.vtp") in intersections
+    assert coordinate.getValue(user.state) == value
+    assert not coordinate.getLocked(user.state)
+
+
+def test_hand_surface_intersections_rejects_invalid_side():
+    """Reject an invalid side instead of assuming a hand."""
+    user = User("M", percentile=50)
+    with pytest.raises(ValueError, match="side"):
+        user.hand_surface_intersections("r")
+
+
+@pytest.mark.parametrize(("side", "suffix"), (("right", "r"), ("left", "l")))
+def test_hand_surface_intersections_detects_crossing_fingers(side, suffix):
+    """Detect two finger surfaces crossing within their joint ranges."""
+    user = User("M", percentile=50)
+
+    # Set a reproducible pose in which the proximal index and middle bones cross.
+    for finger, joint, motion, radians in (
+        ("index", "mcp", "flexion", 0.6338919955269555),
+        ("index", "mcp", "abduction", -0.005783169561993096),
+        ("middle", "mcp", "flexion", 0.9368752462183754),
+        ("middle", "mcp", "abduction", 0.23140718560476858),
+    ):
+        user.set_finger_coordinate_locked(side, finger, joint, motion, False)
+        user.set_finger_angle(side, finger, joint, motion, math.degrees(radians))
+
+    # Verify that both finger meshes appear in the surface-intersection report.
+    intersections = user.hand_surface_intersections(side)
+    assert (
+        f"index_proximal_{suffix}vs.vtp",
+        f"middle_proximal_{suffix}vs.vtp",
+    ) in intersections
+
+
+def test_hand_surface_intersections_reports_missing_mesh(tmp_path):
+    """Report a missing bone mesh instead of skipping its collision checks."""
+    user = User("M", percentile=50)
+    hand = user.updBodySet().get("hand_r")
+    mesh = opensim.Mesh.safeDownCast(hand.upd_attached_geometry(0))
+    mesh.set_mesh_file(str(tmp_path / "missing.vtp"))
+    with pytest.raises(FileNotFoundError, match="Hand mesh not found"):
+        user.hand_surface_intersections("right")
+
+
+def test_hand_surface_intersections_does_not_search_current_directory(tmp_path, monkeypatch):
+    """Do not resolve a relative mesh against an unregistered working directory."""
+    user = User("M", percentile=50)
+    hand = user.updBodySet().get("hand_r")
+    mesh = opensim.Mesh.safeDownCast(hand.upd_attached_geometry(0))
+    mesh.set_mesh_file("shadow.vtp")
+    (tmp_path / "shadow.vtp").touch()
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(FileNotFoundError, match="Hand mesh not found"):
+        user.hand_surface_intersections("right")

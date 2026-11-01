@@ -226,6 +226,13 @@ joint poses, not measured on a subject. Tests check both sides, selected
 anthropometries and representative flexion/abduction combinations; they do
 not prove absence of self-intersection over every possible posture.
 
+`user.hand_surface_intersections("right")` reports pairs of bone meshes
+attached to different hand bodies whose triangle surfaces intersect or touch
+in the current pose. It can identify a thumb crossing a palm bone or two
+fingers crossing, but it does not prevent such poses. The check cannot
+distinguish touching from penetration or detect complete containment without
+surface intersection, and it does not check the motion between poses.
+
 The meshes represent bones, not skin; some have open or non-manifold edges.
 There are no finger muscles or general hand-object surface-contact model.
 Neither moving the fingers nor a marker coincidence establishes a realistic

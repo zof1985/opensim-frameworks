@@ -866,6 +866,120 @@ class User(opensim.Model, _MeasurementMixin, _PostureMixin, _JointCenterMixin):
         coordinate = self.finger_coordinate(side, finger, joint, motion)
         return math.degrees(coordinate.getValue(self.state))
 
+    def hand_surface_intersections(
+        self, side: str
+    ) -> tuple[tuple[str, str], ...]:
+        """Find intersections between bone surfaces on different hand bodies.
+
+        Parameters
+        ----------
+        side : {'left', 'right'}
+            Hand to inspect in the current user state.
+
+        Returns
+        -------
+        tuple of tuple of str
+            Pairs of intersecting mesh filenames. A pair is also reported
+            when its surfaces touch.
+
+        Raises
+        ------
+        ValueError
+            If the side, mesh, or mesh scale is invalid.
+        FileNotFoundError
+            If a referenced bone mesh cannot be found in the registered
+            geometry directories.
+
+        Notes
+        -----
+        This checks triangle-surface intersections only. It does not detect
+        complete containment without surface intersection, distinguish
+        tangency from penetration, or model skin and soft tissue. The meshes
+        belonging to the same rigid body are not compared. It neither changes
+        the pose nor enforces a collision-free trajectory.
+        """
+        import vtk
+        from vtk.util.numpy_support import vtk_to_numpy
+
+        # Resolve the selected side and realize the current body transforms.
+        if side not in ("left", "right"):
+            raise ValueError("side must be 'left' or 'right'")
+        suffix = "l" if side == "left" else "r"
+        self.realizePosition(self.state)
+        surfaces = []
+
+        # Load the palm and finger meshes and build their transforms to ground.
+        for name in ("hand", *MOVING_HAND_SEGMENTS):
+            body = self.getBodySet().get(f"{name}_{suffix}")
+            count = body.getPropertyByName("attached_geometry").size()
+            if count == 0:
+                raise ValueError(f"Body {body.getName()!r} has no attached mesh")
+            for index in range(count):
+                mesh = self.opensim.Mesh.safeDownCast(body.get_attached_geometry(index))
+                if mesh is None:
+                    raise ValueError(f"Non-mesh geometry on body {body.getName()!r}")
+                filename = Path(mesh.get_mesh_file())
+                if not filename.is_absolute():
+                    source = next(
+                        (
+                            directory / filename
+                            for directory in self.geometry_directories
+                            if (directory / filename).is_file()
+                        ),
+                        None,
+                    )
+                    if source is None:
+                        raise FileNotFoundError(f"Hand mesh not found: {filename}")
+                    filename = source
+                if not filename.is_file():
+                    raise FileNotFoundError(f"Hand mesh not found: {filename}")
+                if filename.suffix.lower() != ".vtp":
+                    raise ValueError(f"Hand mesh must be a VTP file: {filename}")
+                scale = np.array([mesh.get_scale_factors().get(i) for i in range(3)])
+                if not np.all(np.isfinite(scale)) or np.any(scale <= 0):
+                    raise ValueError(f"Invalid scale factors for hand mesh: {filename}")
+                reader = vtk.vtkXMLPolyDataReader()
+                reader.SetFileName(str(filename))
+                reader.Update()
+                polydata = reader.GetOutput()
+                if polydata.GetNumberOfPoints() == 0 or polydata.GetNumberOfPolys() == 0:
+                    raise ValueError(f"Hand mesh has no polygonal surface: {filename}")
+                if not np.all(np.isfinite(vtk_to_numpy(polydata.GetPoints().GetData()))):
+                    raise ValueError(f"Hand mesh contains nonfinite vertices: {filename}")
+                offsets = vtk_to_numpy(polydata.GetPolys().GetOffsetsArray())
+                if np.any(np.diff(offsets) != 3):
+                    raise ValueError(f"Hand mesh contains non-triangular polygons: {filename}")
+                transform = mesh.getFrame().getTransformInGround(self.state)
+                matrix = vtk.vtkMatrix4x4()
+                for row in range(3):
+                    for column in range(3):
+                        matrix.SetElement(
+                            row,
+                            column,
+                            float(transform.R().get(row, column) * scale[column]),
+                        )
+                    matrix.SetElement(row, 3, float(transform.p().get(row)))
+                surfaces.append((body.getName(), mesh.get_mesh_file(), polydata, matrix))
+
+        # Compare different bodies and report the mesh pairs that touch or cross.
+        intersections = []
+        for index, first in enumerate(surfaces):
+            for second in surfaces[index + 1 :]:
+                if first[0] == second[0]:
+                    continue
+                collision = vtk.vtkCollisionDetectionFilter()
+                collision.SetInputData(0, first[2])
+                collision.SetInputData(1, second[2])
+                collision.SetMatrix(0, first[3])
+                collision.SetMatrix(1, second[3])
+                collision.SetCollisionModeToFirstContact()
+                collision.SetBoxTolerance(0)
+                collision.SetCellTolerance(0)
+                collision.Update()
+                if collision.GetNumberOfContacts():
+                    intersections.append((first[1], second[1]))
+        return tuple(intersections)
+
     def set_neck_flexion(self, degrees: float) -> None:
         """Set head flexion/extension relative to the neck base.
 
