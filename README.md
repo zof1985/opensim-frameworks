@@ -175,6 +175,62 @@ centres, and foot markers identify the heel, toe, and fifth metatarsal; there
 is no first-metatarsal marker in this model. Each foot has a subtalar degree
 of freedom for inversion/eversion.
 
+#### Articulated fingers
+
+Each hand has independent proximal, middle and distal phalanges for the
+index, middle, ring and little fingers. The thumb has a separate first
+metacarpal and two phalanges. Its carpometacarpal joint provides opposition
+and flexion; the other finger joints provide flexion and, at the four
+metacarpophalangeal joints, abduction. Coordinates start **locked** at the
+corrected reference pose. Unlock a coordinate before changing it:
+
+```python
+user.set_finger_coordinate_locked("right", "index", "mcp", "flexion", False)
+user.set_finger_angle("right", "index", "mcp", "flexion", 20.0)
+print(user.finger_angle("right", "index", "mcp", "flexion"))
+```
+
+Coordinates measure degrees relative to the corrected reference pose, which is
+already flexed and is not an anatomical zero. Their bounds are approximate
+and are checked by `set_finger_angle`. Use `finger_coordinate` for direct
+OpenSim access. Finger bodies follow the corresponding hand's scaling,
+including side-specific palm-length changes; ANSUR does not provide
+individual finger lengths in this model.
+
+The joint centres are geometric estimates: a sphere is fitted to the distal
+20% of each parent long-bone mesh; the thumb carpometacarpal centre is based
+on the closest trapezium and metacarpal vertices. Joint axes and rest-angle
+estimates are approximate, and ranges are adapted from the
+[AAH model](https://github.com/nishbo/ms_arm_and_hand), not validated for
+these meshes. Each hand allocates 25% of its original mass to the moving
+segments according to their bone bounding boxes, with cuboid inertias. This
+preserves the original mass and first moment at the reference pose, but not
+its full inertia tensor. These assumptions are for kinematics, not validated
+finger dynamics.
+
+The original pose contains intersections between some adjacent bones. Without
+changing the mesh files, the model translates the child bone and its
+descendants along an estimated distal direction at each listed joint:
+
+| Digit | Proximal joint | Intermediate joint | Distal joint |
+|---|---:|---:|---:|
+| Index | 1.25 mm | 0 mm | 0 mm |
+| Middle | 2.75 mm | 0 mm | 1 mm |
+| Ring | 0 mm | 0.75 mm | 0.75 mm |
+| Little | 2.5 mm | 0 mm | 0 mm |
+| Thumb | 0 mm (CMC) | 1.25 mm (MCP) | 2.5 mm (IP) |
+
+These are relative translations and therefore accumulate along a finger.
+They were selected by checking the supplied bone meshes across sampled
+joint poses, not measured on a subject. Tests check both sides, selected
+anthropometries and representative flexion/abduction combinations; they do
+not prove absence of self-intersection over every possible posture.
+
+The meshes represent bones, not skin; some have open or non-manifold edges.
+There are no finger muscles or general hand-object surface-contact model.
+Neither moving the fingers nor a marker coincidence establishes a realistic
+grip or guarantees absence of penetration.
+
 `to_osim()` exports the scaled model in its current pose. By default, it also
 copies referenced meshes into a `Geometry` directory next to the `.osim` file.
 `show()` opens the interactive viewer for the model.

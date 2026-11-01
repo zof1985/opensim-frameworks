@@ -11,6 +11,7 @@ from opensim_frameworks.models.user.data import (
     load_ansur,
     resolve_reference,
 )
+from opensim_frameworks.models.user.hand import MOVING_HAND_SEGMENTS
 from opensim_frameworks.models.user.user import (
     DEFAULT_MESHES_DIR,
     _FOOT_MARKER_NAMES,
@@ -446,11 +447,11 @@ def test_set_mass_kg_rejects_non_positive_or_non_finite_values(mass_kg):
 def test_model_components_match_the_bundled_rajagopal_model():
     user = make_user(gender="M", percentile=75.0)
 
-    assert user.getBodySet().getSize() == 24
-    assert user.getJointSet().getSize() == 24
+    assert user.getBodySet().getSize() == 24 + 2 * len(MOVING_HAND_SEGMENTS)
+    assert user.getJointSet().getSize() == 24 + 2 * len(MOVING_HAND_SEGMENTS)
     assert user.getMuscles().getSize() == 80
     assert user.getMarkerSet().getSize() == 70
-    assert user.getCoordinateSet().getSize() == 44
+    assert user.getCoordinateSet().getSize() == 44 + 2 * 20
 
 
 @requires_opensim

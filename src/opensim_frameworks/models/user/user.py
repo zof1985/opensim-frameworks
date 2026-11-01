@@ -16,6 +16,7 @@ from ...utils.opensim import (
     register_geometry_search_path,
 )
 from .data import DEFAULT_DATASET, resolve_reference
+from .hand import MOVING_HAND_SEGMENTS, add_articulated_hands
 from .joint_center_table import JOINT_CENTER_NAMES as _JOINT_CENTER_NAMES
 from .joint_centers_generated import _JointCenterMixin
 from .mapping import segment_scale_factors
@@ -118,8 +119,13 @@ class User(opensim.Model, _MeasurementMixin, _PostureMixin, _JointCenterMixin):
     see :attr:`mass_kg`) rather than whatever the geometric scaling alone
     produces volumetrically; unlike every other anthropometric parameter
     here, total mass can also be recalibrated after construction, via
-    :meth:`set_mass_kg`. Every joint angle is exposed through a
-    ``set_<joint>_<motion>``/``<joint>_<motion>`` setter/getter pair.
+    :meth:`set_mass_kg`. Body posture angles are exposed through
+    ``set_<joint>_<motion>``/``<joint>_<motion>`` setter/getter pairs.
+    Finger coordinates are accessed with :meth:`finger_coordinate`,
+    :meth:`set_finger_angle`, and :meth:`finger_angle`. They are initially
+    locked at the corrected reference pose, which is not an anatomical zero.
+    Finger joint geometry and inertial properties are approximations, and
+    the model does not include finger muscles or skin-contact geometry.
     Anthropometric dimensions have explicit measurement setters and
     properties. Bilateral setters (for example ``set_left_arm_length`` and
     ``set_right_arm_length``) scale only their corresponding side; ANSUR's
@@ -241,6 +247,8 @@ class User(opensim.Model, _MeasurementMixin, _PostureMixin, _JointCenterMixin):
             self.gender, percentile=50.0, dataset=dataset
         )
         self._add_anatomical_bodies()
+        # Split the hand meshes into articulated bodies before initialization.
+        add_articulated_hands(self, opensim, DEFAULT_MESHES_DIR)
         self.finalizeConnections()
         self.state = self.initSystem()
         self.add_geometry_directory(DEFAULT_MESHES_DIR)
@@ -501,8 +509,10 @@ class User(opensim.Model, _MeasurementMixin, _PostureMixin, _JointCenterMixin):
     def scale_bodies(self, factors: dict[str, tuple[float, float, float]]) -> None:
         """Apply OpenSim's native body scaling and preserve the current state.
 
-        After scaling, each palm marker is repositioned at half the resolved
-        palm length from the wrist along the hand's local negative y axis.
+        A factor for a hand body is also applied to its finger bodies unless
+        a factor for a finger body is supplied explicitly. After scaling,
+        each palm marker is repositioned at half the resolved palm length
+        from the wrist along the hand's local negative y axis.
 
         Parameters
         ----------
@@ -515,6 +525,14 @@ class User(opensim.Model, _MeasurementMixin, _PostureMixin, _JointCenterMixin):
         ValueError
             If a scale factor for an existing body is not positive and finite.
         """
+        # Propagate each hand scale to its fingers unless explicitly overridden.
+        factors = dict(factors)
+        for side in ("r", "l"):
+            hand_name = f"hand_{side}"
+            if hand_name in factors:
+                for segment in MOVING_HAND_SEGMENTS:
+                    factors.setdefault(f"{segment}_{side}", factors[hand_name])
+
         body_set = self.getBodySet()
         scale_set = self.opensim.ScaleSet()
         for body_name, axes in factors.items():
@@ -728,6 +746,125 @@ class User(opensim.Model, _MeasurementMixin, _PostureMixin, _JointCenterMixin):
     def _coordinate_degrees(self, name: str) -> float:
         value = self.getCoordinateSet().get(name).getValue(self.state)
         return math.degrees(value)
+
+    def finger_coordinate(
+        self, side: str, finger: str, joint: str, motion: str
+    ) -> Any:
+        """Return a finger coordinate for explicit state and lock control.
+
+        Parameters
+        ----------
+        side : {'left', 'right'}
+            Anatomical side.
+        finger : {'thumb', 'index', 'middle', 'ring', 'little'}
+            Digit containing the joint.
+        joint : {'cmc', 'mcp', 'pip', 'dip', 'ip'}
+            Joint name. Available joints depend on the digit.
+        motion : {'flexion', 'abduction', 'opposition'}
+            Coordinate name. Available motions depend on the joint.
+
+        Returns
+        -------
+        opensim.Coordinate
+            The coordinate belonging to this user.
+
+        Raises
+        ------
+        ValueError
+            If the side or the requested coordinate is not available.
+        """
+        # Resolve the requested anatomical side and validate the coordinate name.
+        if side not in ("left", "right"):
+            raise ValueError("side must be 'left' or 'right'")
+        name = f"{finger}_{joint}_{motion}_{'l' if side == 'left' else 'r'}"
+        coordinates = self.getCoordinateSet()
+        if not coordinates.contains(name):
+            raise ValueError(f"Unknown finger coordinate {name!r}")
+        return coordinates.get(name)
+
+    def set_finger_coordinate_locked(
+        self, side: str, finger: str, joint: str, motion: str, locked: bool
+    ) -> None:
+        """Set a finger coordinate's current and default lock state.
+
+        Parameters
+        ----------
+        side, finger, joint, motion : str
+            Identify a coordinate as described by :meth:`finger_coordinate`.
+        locked : bool
+            Whether the coordinate should be locked.
+
+        Raises
+        ------
+        ValueError
+            If the coordinate is unavailable or ``locked`` is not a boolean.
+        """
+        # Validate the lock request and apply it to both the model and state.
+        if not isinstance(locked, bool):
+            raise ValueError("locked must be a bool")
+        coordinate = self.finger_coordinate(side, finger, joint, motion)
+        coordinate.set_locked(locked)
+        coordinate.setLocked(self.state, locked)
+
+    def set_finger_angle(
+        self, side: str, finger: str, joint: str, motion: str, degrees: float
+    ) -> None:
+        """Set an unlocked finger coordinate relative to the corrected reference pose.
+
+        Parameters
+        ----------
+        side, finger, joint, motion : str
+            Identify a coordinate as described by :meth:`finger_coordinate`.
+        degrees : float
+            Coordinate value in degrees relative to the corrected reference pose.
+
+        Raises
+        ------
+        ValueError
+            If the coordinate is locked or the value is nonfinite or outside
+            the approximate coordinate range.
+        """
+        # Resolve the coordinate and validate its lock state and requested angle.
+        coordinate = self.finger_coordinate(side, finger, joint, motion)
+        if not math.isfinite(degrees):
+            raise ValueError("finger angle must be finite")
+        if coordinate.getLocked(self.state):
+            raise ValueError(f"Finger coordinate {coordinate.getName()!r} is locked")
+        lower = coordinate.getRangeMin()
+        upper = coordinate.getRangeMax()
+        lower_degrees = math.degrees(lower)
+        upper_degrees = math.degrees(upper)
+        if not lower_degrees <= degrees <= upper_degrees:
+            raise ValueError(f"Finger angle is outside the range of {coordinate.getName()!r}")
+        # Preserve exact bounds when converting endpoint values back to radians.
+        if degrees == lower_degrees:
+            angle = lower
+        elif degrees == upper_degrees:
+            angle = upper
+        else:
+            angle = math.radians(degrees)
+        coordinate.setValue(self.state, angle, False)
+
+    def finger_angle(self, side: str, finger: str, joint: str, motion: str) -> float:
+        """Return a finger coordinate in degrees relative to the reference pose.
+
+        Parameters
+        ----------
+        side, finger, joint, motion : str
+            Identify a coordinate as described by :meth:`finger_coordinate`.
+
+        Returns
+        -------
+        float
+            Coordinate value in degrees relative to the corrected reference pose.
+
+        Raises
+        ------
+        ValueError
+            If the requested coordinate is unavailable.
+        """
+        coordinate = self.finger_coordinate(side, finger, joint, motion)
+        return math.degrees(coordinate.getValue(self.state))
 
     def set_neck_flexion(self, degrees: float) -> None:
         """Set head flexion/extension relative to the neck base.
