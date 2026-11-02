@@ -303,6 +303,28 @@ _AXIS_ALIGNMENT_REGULARIZATION_WEIGHT = 1e-3
 #: weight, towards the step 2 solution. Same tuning caveat as above.
 _PALM_TANGENCY_REGULARIZATION_WEIGHT = 1e-2
 
+#: Coordinate names, within _FULL_ARM_COORDINATE_SUFFIXES, treated as "the
+#: wrist" for the lexicographic wrist-posture priority policy (project-wide
+#: directive: penalize wrist flexion/extension and radial/ulnar deviation,
+#: as a hierarchical two-phase priority, not a soft weighted term -- see
+#: this project's wrist-posture-priority-policy notes). Deliberately
+#: excludes pro_sup (forearm pronation/supination): the policy names wrist
+#: flexion/extension and radial/ulnar deviation specifically, not forearm
+#: rotation.
+_WRIST_LOCK_COORDINATE_NAMES = ("wrist_flex", "wrist_dev")
+
+#: Phase-1 (wrist-locked) acceptance tolerances for fit_handle's stages 3-4:
+#: a Phase-1 solve that keeps wrist_flex/wrist_dev exactly at their starting
+#: value is accepted only if it still reaches this geometric quality: beyond
+#: these, stage 5's exact-mesh gate is the real acceptance criterion, so
+#: this only has to distinguish "good enough that locking the wrist cost
+#: nothing" from "the wrist genuinely needed to move". Engineering choice,
+#: tied to the same ~1 cm length scale as the default
+#: soft_tissues_approximation_distance; not derived from a validated source.
+_WRIST_LOCK_DISTANCE_TOLERANCE_M = 0.01
+_WRIST_LOCK_ANGLE_TOLERANCE_DEG = 2.0
+_WRIST_LOCK_GAP_TOLERANCE_M = 0.01
+
 
 @dataclass(frozen=True)
 class _HandCapsule:
@@ -1372,7 +1394,6 @@ class _HandFittingMixin:
         self,
         handle: Any,
         side: Literal["left", "right"],
-        function: Literal["push", "pull"] = "push",
         soft_tissues_approximation_distance: float = 0.01,
     ) -> dict[str, Any]:
         """Fit shoulder, elbow, forearm, wrist and finger coordinates to a grip body.
@@ -1392,33 +1413,74 @@ class _HandFittingMixin:
         :meth:`_fit_handle_grip` itself, still appropriate once the arm is
         already coarsely positioned) is not reliable.
 
-        The fit proceeds in four stages:
+        The fit proceeds in five stages:
 
         1. A least-squares cylinder (axis direction, a point on the axis,
            and radius; :func:`_handle_cylinder`) is fitted to `handle`'s
            attached mesh vertices, together with the real extent of those
            vertices along the fitted axis (a finite segment, not the
            mathematically infinite line the axis direction alone implies).
-        2. A least-squares line is fitted to the middle/ring/little MCP
+        2. **Coarse palm pre-positioning.** A single SLSQP run, over the
+           seven continuous shoulder/elbow/forearm/wrist coordinates, brings
+           the palm marker (``{prefix}PALM``) close to the cylinder's axis
+           point (no orientation term at all, just squared distance). This
+           exists because stages 3-4 below are single SLSQP solves with no
+           multistart: starting them directly from whatever arbitrary arm
+           pose `fit_handle` was called with (which can be far from
+           `handle`) made their outcome sensitive to incidental details such
+           as a coordinate's bound width (confirmed on this project's High
+           Row dataset: widening ``elbow_flex``'s or ``pro_sup``'s range,
+           needed for a hard supine-grip case, silently broke several
+           previously-perfect neutral-grip cases by sending stage 3 to a
+           different, worse local optimum from the same starting pose).
+           Reducing stage 3's starting distance from the target first,
+           cheaply and with the simplest possible objective, was the fix:
+           see this method's Notes for the empirical comparison.
+        3. A least-squares line is fitted to the middle/ring/little MCP
            joint centres (:func:`_mcp_axis_in_ground`); it moves rigidly
            with the hand body under any shoulder/elbow/forearm/wrist
-           coordinate change, independent of the current finger pose. One
-           SLSQP run, over the seven continuous shoulder/elbow/forearm/wrist
-           coordinates, minimizes this line's distance to the cylinder's
-           finite axis *segment* plus its angular misalignment to the
-           (sign-free) axis direction, regularized towards the pose
-           `fit_handle` was called with.
-        3. A second SLSQP run, from stage 2's solution, brings the palm
-           marker (``{prefix}PALM``) to tangency with the cylinder (its
-           distance to the axis equal to the fitted radius), regularized
-           towards stage 2's pose, over the same seven coordinates.
-        4. :meth:`_fit_handle_grip` refines the wrist, forearm and finger
-           coordinates against the real palm, finger and handle meshes: it
-           already enforces a palmar contact target (gap at most
-           `soft_tissues_approximation_distance`, for ``function="push"``)
-           as a hard capsule-proxy constraint, finger-wrap closure as a soft
-           objective, and the exact mesh non-interpenetration gate -- all
-           reused unchanged here, not reimplemented.
+           coordinate change, independent of the current finger pose. This
+           stage minimizes that line's distance to the cylinder's finite
+           axis *segment* plus its angular misalignment to the (sign-free)
+           axis direction, regularized towards stage 2's pre-positioned
+           pose (not the raw pose `fit_handle` was called with -- stage 2
+           replaces it as both the starting point and the regularization
+           anchor for every later stage), over the same seven coordinates
+           -- but ``wrist_flex``/``wrist_dev`` are given **lexicographic
+           priority** over the other five (project-wide policy: optimize
+           without moving the wrist first, then correct only the wrist, and
+           only if actually needed, rather than folding it into one soft
+           weighted term). Phase 1 -- the primary solution, not a
+           discardable attempt -- locks ``wrist_flex``/``wrist_dev`` at
+           their starting value and solves only the remaining five
+           coordinates. If the result is already within
+           :data:`_WRIST_LOCK_DISTANCE_TOLERANCE_M`/
+           :data:`_WRIST_LOCK_ANGLE_TOLERANCE_DEG`, it is accepted as-is --
+           the wrist is then *exactly* unchanged from its starting value.
+           Only if it falls short does Phase 2 run: a two-variable re-solve
+           of ``wrist_flex``/``wrist_dev`` alone, starting from their
+           original value, with Phase 1's five other coordinates kept fixed
+           (never re-optimized jointly with the wrist again).
+        4. A second two-phase solve, with the same wrist lexicographic
+           priority and the same structure as stage 3, from stage 3's
+           solution, brings the palm marker to tangency with the cylinder
+           (its distance to the axis equal to the fitted radius), regularized
+           towards stage 3's pose, over the same seven coordinates; Phase
+           1's acceptance tolerance here is :data:`_WRIST_LOCK_GAP_TOLERANCE_M`
+           on the tangency gap itself.
+        5. :meth:`_fit_handle_grip` refines the wrist, forearm and finger
+           coordinates against the real palm, finger and handle meshes,
+           always called here with ``function="pull"`` (hook grip: finger
+           wrap is the primary soft objective, palm-to-`handle` proximity is
+           only secondary) -- `fit_handle` does not expose a push/pull
+           choice itself; see the Notes below for why. :meth:`_fit_handle_grip`
+           still enforces finger-finger/finger-palm/hand-`handle`
+           non-interpenetration as a hard capsule-proxy constraint and the
+           exact mesh non-interpenetration gate, for either of its own
+           `function` values -- all reused unchanged here, not reimplemented.
+           This stage is :meth:`_fit_handle_grip`'s own, unrelated wrist
+           search (a coarse grid plus full SLSQP over wrist and fingers) and
+           is not affected by stages 3-4's lexicographic wrist priority.
 
         Parameters
         ----------
@@ -1427,13 +1489,8 @@ class _HandFittingMixin:
             with its pose already set in that model's own working state.
         side : {'left', 'right'}
             Hand to fit; not inferred (see above).
-        function : {'push', 'pull'}, default='push'
-            Forwarded to the stage-4 :meth:`_fit_handle_grip` call; see its
-            docstring for the push/pull difference. Only that final stage
-            uses it (stages 1-3 only align the arm to the handle geometry,
-            independent of grip strategy).
         soft_tissues_approximation_distance : float, default=0.01
-            Forwarded to the stage-4 :meth:`_fit_handle_grip` call; see its
+            Forwarded to the stage-5 :meth:`_fit_handle_grip` call; see its
             docstring.
 
         Returns
@@ -1442,80 +1499,110 @@ class _HandFittingMixin:
             Report with keys ``side``, ``cylinder_axis_point_m``,
             ``cylinder_axis_direction``, ``cylinder_radius_m`` (stage 1),
             ``axis_alignment_distance_m`` and
-            ``axis_alignment_angle_error_deg`` (stage 2 residuals),
-            ``palm_axis_gap_m`` (stage 3 residual: the palm's perpendicular
+            ``axis_alignment_angle_error_deg`` (stage 3 residuals),
+            ``palm_axis_gap_m`` (stage 4 residual: the palm's perpendicular
             distance to the cylinder axis minus its radius, near zero at
-            tangency), ``full_arm_coordinates_rad`` (stage 3 solution for
+            tangency), ``full_arm_coordinates_rad`` (stage 4 solution for
             the seven shoulder/elbow/forearm/wrist coordinates, keyed by
-            coordinate name), ``grip`` (the full dict returned by the
-            stage-4 :meth:`_fit_handle_grip` call) and
-            ``palm_axis_gap_after_wrap_m`` (the same signed gap recomputed
-            after stage 4; diagnostic only, see Notes).
+            coordinate name), ``wrist_kept_locked_stage3``/
+            ``wrist_kept_locked_stage4`` (bool: whether that stage's Phase 1
+            wrist-locked solve was accepted, i.e. ``wrist_flex``/
+            ``wrist_dev`` are exactly unchanged from the pose entering that
+            stage; ``False`` means Phase 2 ran and the wrist may have
+            moved), ``grip`` (the full dict returned by the stage-5
+            :meth:`_fit_handle_grip` call) and ``palm_axis_gap_after_wrap_m``
+            (the same signed gap recomputed after stage 5; diagnostic only,
+            see Notes).
 
         Raises
         ------
         TypeError
             If `handle` is not an ``opensim.Body``.
         ValueError
-            If `side`, `function` or `soft_tissues_approximation_distance`
-            is invalid, or if `handle`'s mesh or the MCP joint centres are
-            degenerate.
+            If `side` or `soft_tissues_approximation_distance` is invalid,
+            or if `handle`'s mesh or the MCP joint centres are degenerate.
         RuntimeError
-            If the cylinder fit does not converge, if either SLSQP stage
-            fails to converge, if the stage-4 :meth:`_fit_handle_grip` call
-            infers the wrong side (the stage-3 pose placed the opposite palm
+            If the cylinder fit does not converge, if any SLSQP stage fails
+            to converge, if the stage-5 :meth:`_fit_handle_grip` call infers
+            the wrong side (the stage-4 pose placed the opposite palm
             closer to `handle`), or if :meth:`_fit_handle_grip` itself
             raises (no feasible capsule-proxy wrap, or a failed exact-mesh
             gate).
 
         Notes
         -----
-        Validated so far on the complete High Row reference dataset (ANSUR
-        M/F x 150/175/205 cm, both sides, neutral grip, ``function="push"``):
-        all 12 neutral-grip fits converged with zero mesh intersection and
-        sub-millimetre residuals. The supine grip on that same equipment
-        failed in every one of the 6 tested cases with ``function="push"``
-        (stage 4 could not find a feasible hard-palm-contact pose); this is
-        consistent with a previously observed push/pull asymmetry on
-        supinated handles (see the project's grip-ergonomics notes) and is
-        expected to require ``function="pull"`` for that handle -- not yet
-        re-verified end to end at the time of this note. See this module's
-        test coverage before relying on this method for other anthropometry
-        or equipment. Stages 2 and 3 each run a single SLSQP from the pose
-        `fit_handle` was called with (no multistart), unlike
-        :meth:`_fit_handle_grip`'s own wrist/finger search; a poor starting
-        pose could converge to a worse local optimum or fail outright.
-        Coordinate ranges are read as currently set on the model and never
-        widened (as some equipment-specific coarse arm fits do for
-        ``arm_flex``); a `handle` unreachable within the current range fails
-        stage 2 or 3 rather than silently ignoring the limit. Like
-        :meth:`_fit_handle_grip`, this method does not lock any coordinate
-        back after moving it -- a caller's own pipeline is responsible for
-        that. It does not check for self-collision between the
-        forearm/upper arm and the rest of the body or the equipment frame,
-        the same unaddressed scope as the existing coarse arm fits in this
-        project. `palm_axis_gap_after_wrap_m` is purely diagnostic:
+        `fit_handle` does not expose a push/pull choice: stage 5 always calls
+        :meth:`_fit_handle_grip` with ``function="pull"`` (hook grip). This
+        was a deliberate committente decision (push/pull was explicitly out
+        of scope for this method's design) and is also the only option
+        validated so far: on the complete High Row reference dataset (ANSUR
+        M/F x 150/175/205 cm, both sides, both neutral and supine grip) all
+        24 fits converged with zero real mesh intersection, verified
+        independently, with ``function="pull"``. ``function="push"`` was
+        tried first while validating this dataset and failed on every
+        supine-grip case (stage 5 could not find a feasible hard-palm-contact
+        pose); this is consistent with a previously observed push/pull
+        asymmetry on supinated handles (see the project's grip-ergonomics
+        notes) -- ``pull``'s soft palm-approach objective is markedly more
+        tolerant of it. :meth:`_fit_handle_grip` itself still accepts either
+        `function` value unchanged, for callers that position the arm
+        themselves and need `fit_handle`'s own push behaviour.
+
+        Stage 2 (coarse palm pre-positioning) was added after the following
+        was confirmed on this project's dataset, not assumed: without it,
+        stage 3 started from an equipment-specific caller-provided pose that
+        could be arbitrarily far from `handle` (for example a seated
+        reference pose with the arm at the body), and its single,
+        no-multistart SLSQP was then measurably sensitive to incidental
+        details unrelated to the actual task -- widening ``elbow_flex_r``'s
+        or ``pro_sup_r``'s upper bound (needed to reach a hard supine-grip
+        case, ANSUR F-205) silently broke several previously near-perfect
+        (sub-millimetre/sub-0.1-degree) neutral-grip cases, converging them
+        instead to a 8-15 degree alignment error, two of them outright
+        infeasible. Stage 2 is this method's fix for that sensitivity,
+        inserted ahead of stage 3; see this module's test coverage for the
+        dataset's current pass/fail state with it in place. Stages 3 and 4
+        each still run one or two SLSQP solves (the five-coordinate
+        wrist-locked Phase 1, and only if needed a two-coordinate wrist-only
+        Phase 2, described above), still with no multistart over either
+        phase's free coordinates, unlike :meth:`_fit_handle_grip`'s own
+        wrist/finger search; a poor starting pose could still converge to a
+        worse local optimum or fail outright in either phase, which is why
+        stage 2 matters. Coordinate ranges are read as currently set on the
+        model and never widened (as some equipment-specific coarse arm fits
+        do for ``arm_flex``); a `handle` unreachable within the current
+        range fails stage 2, 3 or 4 rather than silently ignoring the limit.
+        Like :meth:`_fit_handle_grip`, this method does not lock any
+        coordinate back after moving it -- a caller's own pipeline is
+        responsible for that. It does not check for self-collision between
+        the forearm/upper arm and the rest of the body or the equipment
+        frame, the same unaddressed scope as the existing coarse arm fits in
+        this project. `palm_axis_gap_after_wrap_m` is purely diagnostic:
         :meth:`_fit_handle_grip`'s own hard capsule-proxy constraint and the
-        exact mesh gate are the actual acceptance criteria for stage 4, so a
+        exact mesh gate are the actual acceptance criteria for stage 5, so a
         small deviation here is expected and is not itself cause for
-        failure.
+        failure. The :data:`_WRIST_LOCK_DISTANCE_TOLERANCE_M`/
+        :data:`_WRIST_LOCK_ANGLE_TOLERANCE_DEG`/
+        :data:`_WRIST_LOCK_GAP_TOLERANCE_M` Phase-1 acceptance tolerances are
+        engineering choices (not derived from a validated source): they only
+        have to separate "the wrist genuinely needs to move" from "locking
+        it cost nothing", since stage 5's exact-mesh gate remains the real
+        acceptance criterion regardless of which phase stages 3-4 settle in.
         """
         if side not in ("left", "right"):
             raise ValueError("side must be 'left' or 'right'")
-        if function not in ("push", "pull"):
-            raise ValueError("function must be 'push' or 'pull'")
         suffix = "l" if side == "left" else "r"
         prefix = "L" if side == "left" else "R"
         soft_tissue = _validate_soft_tissue_distance(soft_tissues_approximation_distance)
 
-        # Stage 0: least-squares cylinder fit to the handle mesh, with the
+        # Stage 1: least-squares cylinder fit to the handle mesh, with the
         # real vertex extent along the fitted axis (see _handle_cylinder).
         axis_point, axis, radius, segment_start, segment_end = _handle_cylinder(
             handle, "Handle"
         )
 
         # Unlock the seven shoulder/elbow/forearm/wrist coordinates moved by
-        # stages 2-3 (finger coordinates are unlocked later, by stage 4's
+        # stages 2-4 (finger coordinates are unlocked later, by stage 5's
         # own _fit_handle_grip call).
         coordinates = [
             self.getCoordinateSet().get(f"{name}_{suffix}")
@@ -1540,78 +1627,192 @@ class _HandFittingMixin:
                 )[0]
             )
 
-        # Stage 2: align the MCP line to the cylinder's finite axis segment.
-        def step2_objective(x: np.ndarray) -> float:
+        # Stage 2: coarse palm pre-positioning. A single, simple (position
+        # only, no orientation term) SLSQP run brings {prefix}PALM close to
+        # the cylinder axis point before stage 3's more sensitive alignment
+        # objective runs -- see this method's docstring and Notes for why
+        # this stage was added (confirmed necessary on this project's
+        # dataset, not a precaution): without it, stage 3 started cold from
+        # whatever arm pose `fit_handle` was called with, and a no-multistart
+        # SLSQP from a pose far from `handle` proved sensitive to incidental
+        # details such as a coordinate's bound width.
+        def palm_position_objective(x: np.ndarray) -> float:
+            apply(x)
+            palm = np.array(self._marker_location(f"{prefix}PALM"))
+            return float(np.sum((palm - axis_point) ** 2))
+
+        prepositioning = minimize(
+            palm_position_objective,
+            x0,
+            method="SLSQP",
+            bounds=bounds,
+            options={"maxiter": 200, "ftol": 1e-10},
+        )
+        if not prepositioning.success:
+            raise RuntimeError(
+                "fit_handle stage 2 (palm pre-positioning) failed for "
+                f"handle {handle.getName()!r}: {prepositioning.message}"
+            )
+        x0_prepositioned = prepositioning.x
+
+        # Wrist-posture lexicographic priority (project-wide directive, see
+        # this project's wrist-posture-priority-policy notes): wrist_flex and
+        # wrist_dev are penalized hierarchically, not with a soft weighted
+        # term, and the priority is "optimize without moving the wrist, then
+        # evaluate whether the wrist itself needs correcting" -- not "try a
+        # wrist-locked attempt and, if it fails, throw it away and re-solve
+        # everything from scratch". `lexicographic_solve` implements that:
+        # Phase 1 locks wrist_flex/wrist_dev at `start`'s own values and
+        # optimizes the remaining five coordinates; this is always the
+        # primary solution, not a discardable attempt. If the result already
+        # satisfies `tolerance_ok`, it is returned as-is -- the wrist is then
+        # *exactly* unchanged from `start`. Only if it falls short does
+        # Phase 2 run, and Phase 2 corrects *only* wrist_flex/wrist_dev (a
+        # two-variable re-solve), starting from `start`'s wrist values, with
+        # Phase 1's five other coordinates kept fixed at their Phase-1
+        # values -- never re-optimized jointly with the wrist again.
+        wrist_idx = np.array(
+            [_FULL_ARM_COORDINATE_SUFFIXES.index(name) for name in _WRIST_LOCK_COORDINATE_NAMES]
+        )
+        free_idx = np.array(
+            [i for i in range(len(_FULL_ARM_COORDINATE_SUFFIXES)) if i not in wrist_idx]
+        )
+
+        def lexicographic_solve(
+            objective: Any,
+            start: np.ndarray,
+            tolerance_ok: Any,
+            options: dict[str, Any],
+        ) -> tuple[np.ndarray, bool]:
+            # Phase 1 -- primary solution: wrist locked at `start`, only the
+            # five non-wrist coordinates vary.
+            def objective_wrist_locked(x_free: np.ndarray) -> float:
+                x_full = start.copy()
+                x_full[free_idx] = x_free
+                return objective(x_full)
+
+            phase1 = minimize(
+                objective_wrist_locked,
+                start[free_idx],
+                method="SLSQP",
+                bounds=[bounds[i] for i in free_idx],
+                options=options,
+            )
+            if not phase1.success:
+                raise RuntimeError(
+                    f"fit_handle lexicographic solve Phase 1 (wrist locked, "
+                    f"five free coordinates) failed: {phase1.message}"
+                )
+            x_phase1 = start.copy()
+            x_phase1[free_idx] = phase1.x
+            if tolerance_ok(x_phase1):
+                return x_phase1, True
+
+            # Phase 2 -- wrist-only correction: the five non-wrist
+            # coordinates stay fixed at their Phase-1 values; only
+            # wrist_flex/wrist_dev are re-solved, starting from `start`'s
+            # own wrist values.
+            def objective_wrist_only(x_wrist: np.ndarray) -> float:
+                x_full = x_phase1.copy()
+                x_full[wrist_idx] = x_wrist
+                return objective(x_full)
+
+            phase2 = minimize(
+                objective_wrist_only,
+                start[wrist_idx],
+                method="SLSQP",
+                bounds=[bounds[i] for i in wrist_idx],
+                options=options,
+            )
+            if not phase2.success:
+                raise RuntimeError(
+                    f"fit_handle lexicographic solve Phase 2 (wrist-only "
+                    f"correction) failed: {phase2.message}"
+                )
+            x_phase2 = x_phase1.copy()
+            x_phase2[wrist_idx] = phase2.x
+            return x_phase2, False
+
+        # Stage 3: align the MCP line to the cylinder's finite axis segment.
+        def step3_objective(x: np.ndarray) -> float:
             apply(x)
             point, direction = _mcp_axis_in_ground(self, suffix)
             distance = axis_segment_distance(point)
             angle_term = 1.0 - (direction @ axis) ** 2
-            regularization = float(np.dot(x - x0, x - x0))
+            regularization = float(np.dot(x - x0_prepositioned, x - x0_prepositioned))
             return (
                 _AXIS_DISTANCE_WEIGHT * distance**2
                 + _AXIS_ANGLE_WEIGHT * angle_term
                 + _AXIS_ALIGNMENT_REGULARIZATION_WEIGHT * regularization
             )
 
-        stage2 = minimize(
-            step2_objective,
-            x0,
-            method="SLSQP",
-            bounds=bounds,
-            options={"maxiter": 200, "ftol": 1e-10},
-        )
-        if not stage2.success:
-            raise RuntimeError(
-                "fit_handle stage 2 (MCP-axis alignment) failed for "
-                f"handle {handle.getName()!r}: {stage2.message}"
+        def stage3_tolerance_ok(x: np.ndarray) -> bool:
+            apply(x)
+            point, direction = _mcp_axis_in_ground(self, suffix)
+            distance = axis_segment_distance(point)
+            angle_error = math.degrees(math.acos(min(1.0, abs(float(direction @ axis)))))
+            return (
+                distance <= _WRIST_LOCK_DISTANCE_TOLERANCE_M
+                and angle_error <= _WRIST_LOCK_ANGLE_TOLERANCE_DEG
             )
-        apply(stage2.x)
+
+        try:
+            x1, wrist_locked_stage3 = lexicographic_solve(
+                step3_objective, x0_prepositioned, stage3_tolerance_ok,
+                {"maxiter": 200, "ftol": 1e-10},
+            )
+        except RuntimeError as error:
+            raise RuntimeError(
+                "fit_handle stage 3 (MCP-axis alignment) failed for "
+                f"handle {handle.getName()!r}: {error}"
+            ) from error
+        apply(x1)
         point, direction = _mcp_axis_in_ground(self, suffix)
         axis_alignment_distance = axis_segment_distance(point)
         axis_alignment_angle_error = math.degrees(
             math.acos(min(1.0, abs(float(direction @ axis))))
         )
-        x1 = stage2.x
 
-        # Stage 3: bring the palm marker to tangency with the cylinder.
+        # Stage 4: bring the palm marker to tangency with the cylinder.
         def palm_axis_gap() -> float:
             palm = np.array(self._marker_location(f"{prefix}PALM"))
             offset = palm - axis_point
             perpendicular = offset - (offset @ axis) * axis
             return float(np.linalg.norm(perpendicular)) - radius
 
-        def step3_objective(x: np.ndarray) -> float:
+        def step4_objective(x: np.ndarray) -> float:
             apply(x)
             gap = palm_axis_gap()
             regularization = float(np.dot(x - x1, x - x1))
             return gap**2 + _PALM_TANGENCY_REGULARIZATION_WEIGHT * regularization
 
-        stage3 = minimize(
-            step3_objective,
-            x1,
-            method="SLSQP",
-            bounds=bounds,
-            options={"maxiter": 200, "ftol": 1e-12},
-        )
-        if not stage3.success:
-            raise RuntimeError(
-                "fit_handle stage 3 (palm-cylinder tangency) failed "
-                f"for handle {handle.getName()!r}: {stage3.message}"
-            )
-        apply(stage3.x)
-        stage3_palm_axis_gap = palm_axis_gap()
+        def stage4_tolerance_ok(x: np.ndarray) -> bool:
+            apply(x)
+            return abs(palm_axis_gap()) <= _WRIST_LOCK_GAP_TOLERANCE_M
 
-        # Stage 4: delegate the wrist/finger wrap entirely to the existing,
-        # already-validated _fit_handle_grip engine (already enforces the
-        # palmar contact target for push, finger wrap as a soft objective,
-        # and the exact mesh gate, for whichever `function` was requested).
+        try:
+            x3, wrist_locked_stage4 = lexicographic_solve(
+                step4_objective, x1, stage4_tolerance_ok, {"maxiter": 200, "ftol": 1e-12}
+            )
+        except RuntimeError as error:
+            raise RuntimeError(
+                "fit_handle stage 4 (palm-cylinder tangency) failed "
+                f"for handle {handle.getName()!r}: {error}"
+            ) from error
+        apply(x3)
+        stage4_palm_axis_gap = palm_axis_gap()
+
+        # Stage 5: delegate the wrist/finger wrap entirely to the existing,
+        # already-validated _fit_handle_grip engine, always as a hook grip
+        # (function="pull"; see this method's own Notes for why fit_handle
+        # does not expose a push/pull choice itself).
         grip_report = self._fit_handle_grip(
-            handle, function=function, soft_tissues_approximation_distance=soft_tissue
+            handle, function="pull", soft_tissues_approximation_distance=soft_tissue
         )
         if grip_report["side"] != side:
             raise RuntimeError(
                 f"_fit_handle_grip inferred side {grip_report['side']!r} while "
-                f"fitting the {side!r} arm with fit_handle: the stage-3 pose "
+                f"fitting the {side!r} arm with fit_handle: the stage-4 pose "
                 "placed the opposite palm closer to handle than the intended one"
             )
 
@@ -1622,13 +1823,15 @@ class _HandFittingMixin:
             "cylinder_radius_m": radius,
             "axis_alignment_distance_m": axis_alignment_distance,
             "axis_alignment_angle_error_deg": axis_alignment_angle_error,
-            "palm_axis_gap_m": float(stage3_palm_axis_gap),
+            "palm_axis_gap_m": float(stage4_palm_axis_gap),
             "full_arm_coordinates_rad": dict(
                 zip(
                     (f"{name}_{suffix}" for name in _FULL_ARM_COORDINATE_SUFFIXES),
-                    stage3.x.tolist(),
+                    x3.tolist(),
                 )
             ),
+            "wrist_kept_locked_stage3": wrist_locked_stage3,
+            "wrist_kept_locked_stage4": wrist_locked_stage4,
             "grip": grip_report,
             "palm_axis_gap_after_wrap_m": float(palm_axis_gap()),
         }

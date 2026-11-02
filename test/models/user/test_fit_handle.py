@@ -175,10 +175,13 @@ def test_hand_handle_intersections_reports_no_intersection_when_far_away(user, t
 
 
 @pytest.mark.parametrize("function", ["Push", "both", ""])
-def test_fit_handle_rejects_invalid_function(user, tmp_path, function):
+def test_fit_handle_grip_rejects_invalid_function(user, tmp_path, function):
+    # `function` is no longer a parameter of the public `fit_handle` (fixed
+    # internally to "pull"); the validation itself still lives in, and is
+    # tested against, the private `_fit_handle_grip` engine.
     handle = _handle_near(user, tmp_path, "right")
     with pytest.raises(ValueError, match="function"):
-        user.fit_handle(handle, side="right", function=function)
+        user._fit_handle_grip(handle, function=function)
 
 
 @pytest.mark.parametrize("side", ["up", "r", "", "Right"])
@@ -227,7 +230,7 @@ def test_fit_handle_leaves_other_side_untouched(user, tmp_path, side):
     }
 
     handle = _handle_near(user, tmp_path, side)
-    report = user.fit_handle(handle, side=side, function="push")
+    report = user.fit_handle(handle, side=side)
 
     assert report["side"] == side
     for key, value in before_other_fingers.items():
@@ -280,29 +283,34 @@ def test_fit_handle_grip_rejects_ambiguous_side(user, tmp_path):
 
 
 @pytest.mark.parametrize("side", ["right", "left"])
-def test_fit_handle_push_satisfies_contact_and_no_intersections(user, tmp_path, side):
+def test_fit_handle_grip_push_satisfies_contact_and_no_intersections(user, tmp_path, side):
+    # `function="push"`'s hard palm-contact behaviour is no longer reachable
+    # through the public `fit_handle` (fixed internally to "pull"); this
+    # exercises it directly against the private `_fit_handle_grip` engine,
+    # which still supports it unchanged.
     tolerance = 0.01
     handle = _handle_near(user, tmp_path, side)
 
-    report = user.fit_handle(
-        handle, side=side, function="push", soft_tissues_approximation_distance=tolerance
+    report = user._fit_handle_grip(
+        handle, function="push", soft_tissues_approximation_distance=tolerance
     )
 
     assert report["side"] == side
-    assert report["grip"]["function"] == "push"
-    assert report["grip"]["solver_success"] is True
-    assert max(report["grip"]["palm_handle_gaps_m"].values()) <= tolerance + 1e-6
-    assert min(report["grip"]["palm_handle_gaps_m"].values()) >= -1e-6
+    assert report["function"] == "push"
+    assert report["solver_success"] is True
+    assert max(report["palm_handle_gaps_m"].values()) <= tolerance + 1e-6
+    assert min(report["palm_handle_gaps_m"].values()) >= -1e-6
     assert user.hand_surface_intersections(side) == ()
     assert user.hand_handle_intersections(side, handle) == ()
 
 
 def test_fit_handle_pull_does_not_require_palm_contact(user, tmp_path):
+    # `fit_handle` is fixed internally to `function="pull"`; this exercises
+    # that behaviour (soft palm approach, no hard contact requirement)
+    # through the public method, with no `function` argument to pass.
     handle = _handle_near(user, tmp_path, "left")
 
-    report = user.fit_handle(
-        handle, side="left", function="pull", soft_tissues_approximation_distance=0.01
-    )
+    report = user.fit_handle(handle, side="left", soft_tissues_approximation_distance=0.01)
 
     assert report["grip"]["function"] == "pull"
     assert report["grip"]["solver_success"] is True
@@ -318,7 +326,7 @@ def test_fit_handle_pull_does_not_require_palm_contact(user, tmp_path):
 
 def test_fit_handle_unlocks_finger_coordinates_for_the_fitted_side(user, tmp_path):
     handle = _handle_near(user, tmp_path, "right")
-    report = user.fit_handle(handle, side="right", function="push")
+    report = user.fit_handle(handle, side="right")
     assert report["side"] == "right"
     for finger in ("index", "middle", "ring", "little"):
         coordinate = user.finger_coordinate("right", finger, "mcp", "flexion")
