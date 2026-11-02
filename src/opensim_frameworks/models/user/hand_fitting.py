@@ -303,6 +303,22 @@ _AXIS_ALIGNMENT_REGULARIZATION_WEIGHT = 1e-3
 #: weight, towards the step 2 solution. Same tuning caveat as above.
 _PALM_TANGENCY_REGULARIZATION_WEIGHT = 1e-2
 
+#: Explicit Phase-2 (wrist-only) regularization weights, towards the wrist
+#: value `lexicographic_solve` was called with (`start[wrist_idx]`), added on
+#: top of the stage's own regularization above (which already pulls every
+#: coordinate, wrist included, towards the same reference pose, but only
+#: with that stage's general-purpose weight). Deliberately set equal to each
+#: stage's own regularization weight above: this reuses the one magnitude
+#: already shown (on the same ANSUR M-150 case) to be weak enough to not
+#: block a genuine wrist correction against that stage's dominant geometric
+#: term (_AXIS_DISTANCE_WEIGHT/_AXIS_ANGLE_WEIGHT or the implicit unit
+#: coefficient on the stage 4 tangency gap squared), while still doubling the
+#: wrist's own pull back towards `start` relative to before -- instead of
+#: guessing a new, untested magnitude. Engineering choice, not derived from
+#: a validated source.
+_AXIS_ALIGNMENT_WRIST_REGULARIZATION_WEIGHT = 1e-3
+_PALM_TANGENCY_WRIST_REGULARIZATION_WEIGHT = 1e-2
+
 #: Coordinate names, within _FULL_ARM_COORDINATE_SUFFIXES, treated as "the
 #: wrist" for the lexicographic wrist-posture priority policy (project-wide
 #: directive: penalize wrist flexion/extension and radial/ulnar deviation,
@@ -723,6 +739,42 @@ def _validate_soft_tissue_distance(value: Any) -> float:
             "soft_tissues_approximation_distance must be a positive "
             "finite number in metres"
         )
+    return float(value)
+
+
+def _validate_positive_finite(name: str, value: Any) -> float:
+    """Validate a `fit_handle` tuning weight/tolerance and return it as a float.
+
+    Shared by `fit_handle`'s nine keyword-configurable stage 2-4 tuning
+    parameters (objective weights and wrist-lock tolerances): all of them
+    share the same contract, a positive finite number, so one validator
+    covers all nine instead of nine near-identical checks.
+
+    Parameters
+    ----------
+    name : str
+        Parameter name, used in the error message.
+    value : Any
+        Candidate value, expected to be a positive finite number.
+
+    Returns
+    -------
+    float
+        The validated value.
+
+    Raises
+    ------
+    ValueError
+        If `value` is not a positive finite number (bools are rejected even
+        though ``bool`` is a subclass of ``int``).
+    """
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value <= 0
+    ):
+        raise ValueError(f"{name} must be a positive finite number")
     return float(value)
 
 
@@ -1395,6 +1447,19 @@ class _HandFittingMixin:
         handle: Any,
         side: Literal["left", "right"],
         soft_tissues_approximation_distance: float = 0.01,
+        axis_distance_weight: float = _AXIS_DISTANCE_WEIGHT,
+        axis_angle_weight: float = _AXIS_ANGLE_WEIGHT,
+        axis_alignment_regularization_weight: float = _AXIS_ALIGNMENT_REGULARIZATION_WEIGHT,
+        palm_tangency_regularization_weight: float = _PALM_TANGENCY_REGULARIZATION_WEIGHT,
+        axis_alignment_wrist_regularization_weight: float = (
+            _AXIS_ALIGNMENT_WRIST_REGULARIZATION_WEIGHT
+        ),
+        palm_tangency_wrist_regularization_weight: float = (
+            _PALM_TANGENCY_WRIST_REGULARIZATION_WEIGHT
+        ),
+        wrist_lock_distance_tolerance_m: float = _WRIST_LOCK_DISTANCE_TOLERANCE_M,
+        wrist_lock_angle_tolerance_deg: float = _WRIST_LOCK_ANGLE_TOLERANCE_DEG,
+        wrist_lock_gap_tolerance_m: float = _WRIST_LOCK_GAP_TOLERANCE_M,
     ) -> dict[str, Any]:
         """Fit shoulder, elbow, forearm, wrist and finger coordinates to a grip body.
 
@@ -1448,26 +1513,38 @@ class _HandFittingMixin:
            anchor for every later stage), over the same seven coordinates
            -- but ``wrist_flex``/``wrist_dev`` are given **lexicographic
            priority** over the other five (project-wide policy: optimize
-           without moving the wrist first, then correct only the wrist, and
-           only if actually needed, rather than folding it into one soft
-           weighted term). Phase 1 -- the primary solution, not a
-           discardable attempt -- locks ``wrist_flex``/``wrist_dev`` at
-           their starting value and solves only the remaining five
-           coordinates. If the result is already within
+           without moving the wrist first, then always refine the wrist
+           itself, rather than folding it into one soft weighted term).
+           Phase 1 -- the primary solution, not a discardable attempt --
+           locks ``wrist_flex``/``wrist_dev`` at their starting value and
+           solves only the remaining five coordinates. Whether this result
+           is already within `wrist_lock_distance_tolerance_m`/
+           `wrist_lock_angle_tolerance_deg` (defaults
            :data:`_WRIST_LOCK_DISTANCE_TOLERANCE_M`/
-           :data:`_WRIST_LOCK_ANGLE_TOLERANCE_DEG`, it is accepted as-is --
-           the wrist is then *exactly* unchanged from its starting value.
-           Only if it falls short does Phase 2 run: a two-variable re-solve
-           of ``wrist_flex``/``wrist_dev`` alone, starting from their
-           original value, with Phase 1's five other coordinates kept fixed
-           (never re-optimized jointly with the wrist again).
+           :data:`_WRIST_LOCK_ANGLE_TOLERANCE_DEG`) is recorded as a
+           diagnostic flag, but Phase 2 always runs next regardless: a
+           two-variable re-solve of ``wrist_flex``/``wrist_dev`` alone,
+           starting from their original value, with Phase 1's five other
+           coordinates kept fixed (never re-optimized jointly with the wrist
+           again) and an explicit quadratic penalty added towards that same
+           original wrist value (`axis_alignment_wrist_regularization_weight`,
+           default :data:`_AXIS_ALIGNMENT_WRIST_REGULARIZATION_WEIGHT`, on top
+           of this stage's own regularization towards stage 2's pose, which
+           already covers the wrist too but only with that general-purpose
+           weight) so that Phase 2 only moves the wrist when the alignment
+           objective's own gain from doing so outweighs this penalty. Phase
+           2's result is always the one returned.
         4. A second two-phase solve, with the same wrist lexicographic
-           priority and the same structure as stage 3, from stage 3's
-           solution, brings the palm marker to tangency with the cylinder
-           (its distance to the axis equal to the fitted radius), regularized
-           towards stage 3's pose, over the same seven coordinates; Phase
-           1's acceptance tolerance here is :data:`_WRIST_LOCK_GAP_TOLERANCE_M`
-           on the tangency gap itself.
+           priority and the same structure as stage 3 (including Phase 2's
+           explicit wrist regularization, here weighted by
+           `palm_tangency_wrist_regularization_weight`, default
+           :data:`_PALM_TANGENCY_WRIST_REGULARIZATION_WEIGHT`), from stage
+           3's solution, brings the palm marker to tangency with the
+           cylinder (its distance to the axis equal to the fitted radius),
+           regularized towards stage 3's pose, over the same seven
+           coordinates; Phase 1's diagnostic tolerance here is
+           `wrist_lock_gap_tolerance_m` (default
+           :data:`_WRIST_LOCK_GAP_TOLERANCE_M`) on the tangency gap itself.
         5. :meth:`_fit_handle_grip` refines the wrist, forearm and finger
            coordinates against the real palm, finger and handle meshes,
            always called here with ``function="pull"`` (hook grip: finger
@@ -1492,6 +1569,42 @@ class _HandFittingMixin:
         soft_tissues_approximation_distance : float, default=0.01
             Forwarded to the stage-5 :meth:`_fit_handle_grip` call; see its
             docstring.
+        axis_distance_weight : float, default=:data:`_AXIS_DISTANCE_WEIGHT`
+            Stage 3 weight on the squared MCP-axis-to-cylinder-segment
+            distance (metres) in `step3_objective`; the dominant term of the
+            three stage 3 weights. Must be a positive finite number.
+        axis_angle_weight : float, default=:data:`_AXIS_ANGLE_WEIGHT`
+            Stage 3 weight on the dimensionless angular-misalignment term
+            (``1 - cos(angle)**2``) in `step3_objective`. Must be a positive
+            finite number.
+        axis_alignment_regularization_weight : float, default=:data:`_AXIS_ALIGNMENT_REGULARIZATION_WEIGHT`
+            Stage 3 weight on the squared-distance regularization towards
+            stage 2's pre-positioned pose, over all seven coordinates, in
+            `step3_objective`. Must be a positive finite number.
+        palm_tangency_regularization_weight : float, default=:data:`_PALM_TANGENCY_REGULARIZATION_WEIGHT`
+            Stage 4 weight on the squared-distance regularization towards
+            stage 3's pose, over all seven coordinates, in `step4_objective`.
+            Must be a positive finite number.
+        axis_alignment_wrist_regularization_weight : float, default=:data:`_AXIS_ALIGNMENT_WRIST_REGULARIZATION_WEIGHT`
+            Stage 3 Phase 2 weight on the explicit quadratic penalty towards
+            the wrist value `fit_handle` was called with (see stage 3 above
+            and `lexicographic_solve`'s own comments). Must be a positive
+            finite number.
+        palm_tangency_wrist_regularization_weight : float, default=:data:`_PALM_TANGENCY_WRIST_REGULARIZATION_WEIGHT`
+            Stage 4's equivalent of `axis_alignment_wrist_regularization_weight`.
+            Must be a positive finite number.
+        wrist_lock_distance_tolerance_m : float, default=:data:`_WRIST_LOCK_DISTANCE_TOLERANCE_M`
+            Stage 3 Phase-1 diagnostic distance tolerance, in metres (see
+            `wrist_kept_locked_stage3` below). Must be a positive finite
+            number.
+        wrist_lock_angle_tolerance_deg : float, default=:data:`_WRIST_LOCK_ANGLE_TOLERANCE_DEG`
+            Stage 3 Phase-1 diagnostic angle tolerance, in degrees (see
+            `wrist_kept_locked_stage3` below). Must be a positive finite
+            number.
+        wrist_lock_gap_tolerance_m : float, default=:data:`_WRIST_LOCK_GAP_TOLERANCE_M`
+            Stage 4 Phase-1 diagnostic tangency-gap tolerance, in metres (see
+            `wrist_kept_locked_stage4` below). Must be a positive finite
+            number.
 
         Returns
         -------
@@ -1506,10 +1619,13 @@ class _HandFittingMixin:
             the seven shoulder/elbow/forearm/wrist coordinates, keyed by
             coordinate name), ``wrist_kept_locked_stage3``/
             ``wrist_kept_locked_stage4`` (bool: whether that stage's Phase 1
-            wrist-locked solve was accepted, i.e. ``wrist_flex``/
-            ``wrist_dev`` are exactly unchanged from the pose entering that
-            stage; ``False`` means Phase 2 ran and the wrist may have
-            moved), ``grip`` (the full dict returned by the stage-5
+            wrist-locked solve alone already satisfied the Phase-1
+            diagnostic tolerance, *before* Phase 2's fine-tuning -- Phase 2
+            always runs afterwards and its result is always what is
+            returned, so even when this flag is ``True`` the wrist may still
+            have moved slightly from the pose entering that stage, unless
+            Phase 2 converges to exactly the same point), ``grip`` (the full
+            dict returned by the stage-5
             :meth:`_fit_handle_grip` call) and ``palm_axis_gap_after_wrap_m``
             (the same signed gap recomputed after stage 5; diagnostic only,
             see Notes).
@@ -1519,8 +1635,10 @@ class _HandFittingMixin:
         TypeError
             If `handle` is not an ``opensim.Body``.
         ValueError
-            If `side` or `soft_tissues_approximation_distance` is invalid,
-            or if `handle`'s mesh or the MCP joint centres are degenerate.
+            If `side`, `soft_tissues_approximation_distance`, or any of the
+            nine stage 2-4 tuning parameters above is invalid (the latter
+            must each be a positive finite number), or if `handle`'s mesh or
+            the MCP joint centres are degenerate.
         RuntimeError
             If the cylinder fit does not converge, if any SLSQP stage fails
             to converge, if the stage-5 :meth:`_fit_handle_grip` call infers
@@ -1562,12 +1680,12 @@ class _HandFittingMixin:
         infeasible. Stage 2 is this method's fix for that sensitivity,
         inserted ahead of stage 3; see this module's test coverage for the
         dataset's current pass/fail state with it in place. Stages 3 and 4
-        each still run one or two SLSQP solves (the five-coordinate
-        wrist-locked Phase 1, and only if needed a two-coordinate wrist-only
-        Phase 2, described above), still with no multistart over either
-        phase's free coordinates, unlike :meth:`_fit_handle_grip`'s own
-        wrist/finger search; a poor starting pose could still converge to a
-        worse local optimum or fail outright in either phase, which is why
+        each still run two SLSQP solves in sequence (the five-coordinate
+        wrist-locked Phase 1, always followed by a two-coordinate wrist-only
+        Phase 2 fine-tuning, described above), still with no multistart over
+        either phase's free coordinates, unlike :meth:`_fit_handle_grip`'s
+        own wrist/finger search; a poor starting pose could still converge to
+        a worse local optimum or fail outright in either phase, which is why
         stage 2 matters. Coordinate ranges are read as currently set on the
         model and never widened (as some equipment-specific coarse arm fits
         do for ``arm_flex``); a `handle` unreachable within the current
@@ -1583,17 +1701,44 @@ class _HandFittingMixin:
         small deviation here is expected and is not itself cause for
         failure. The :data:`_WRIST_LOCK_DISTANCE_TOLERANCE_M`/
         :data:`_WRIST_LOCK_ANGLE_TOLERANCE_DEG`/
-        :data:`_WRIST_LOCK_GAP_TOLERANCE_M` Phase-1 acceptance tolerances are
+        :data:`_WRIST_LOCK_GAP_TOLERANCE_M` Phase-1 diagnostic tolerances are
         engineering choices (not derived from a validated source): they only
-        have to separate "the wrist genuinely needs to move" from "locking
-        it cost nothing", since stage 5's exact-mesh gate remains the real
-        acceptance criterion regardless of which phase stages 3-4 settle in.
+        have to separate "the wrist genuinely needed to move" from "locking
+        it would have cost nothing", reported via ``wrist_kept_locked_stage3``/
+        ``wrist_kept_locked_stage4`` even though Phase 2's fine-tuning always
+        runs afterwards; stage 5's exact-mesh gate remains the real
+        acceptance criterion regardless of this flag's value.
         """
         if side not in ("left", "right"):
             raise ValueError("side must be 'left' or 'right'")
         suffix = "l" if side == "left" else "r"
         prefix = "L" if side == "left" else "R"
         soft_tissue = _validate_soft_tissue_distance(soft_tissues_approximation_distance)
+        axis_distance_weight = _validate_positive_finite("axis_distance_weight", axis_distance_weight)
+        axis_angle_weight = _validate_positive_finite("axis_angle_weight", axis_angle_weight)
+        axis_alignment_regularization_weight = _validate_positive_finite(
+            "axis_alignment_regularization_weight", axis_alignment_regularization_weight
+        )
+        palm_tangency_regularization_weight = _validate_positive_finite(
+            "palm_tangency_regularization_weight", palm_tangency_regularization_weight
+        )
+        axis_alignment_wrist_regularization_weight = _validate_positive_finite(
+            "axis_alignment_wrist_regularization_weight",
+            axis_alignment_wrist_regularization_weight,
+        )
+        palm_tangency_wrist_regularization_weight = _validate_positive_finite(
+            "palm_tangency_wrist_regularization_weight",
+            palm_tangency_wrist_regularization_weight,
+        )
+        wrist_lock_distance_tolerance_m = _validate_positive_finite(
+            "wrist_lock_distance_tolerance_m", wrist_lock_distance_tolerance_m
+        )
+        wrist_lock_angle_tolerance_deg = _validate_positive_finite(
+            "wrist_lock_angle_tolerance_deg", wrist_lock_angle_tolerance_deg
+        )
+        wrist_lock_gap_tolerance_m = _validate_positive_finite(
+            "wrist_lock_gap_tolerance_m", wrist_lock_gap_tolerance_m
+        )
 
         # Stage 1: least-squares cylinder fit to the handle mesh, with the
         # real vertex extent along the fitted axis (see _handle_cylinder).
@@ -1658,19 +1803,26 @@ class _HandFittingMixin:
         # Wrist-posture lexicographic priority (project-wide directive, see
         # this project's wrist-posture-priority-policy notes): wrist_flex and
         # wrist_dev are penalized hierarchically, not with a soft weighted
-        # term, and the priority is "optimize without moving the wrist, then
-        # evaluate whether the wrist itself needs correcting" -- not "try a
-        # wrist-locked attempt and, if it fails, throw it away and re-solve
-        # everything from scratch". `lexicographic_solve` implements that:
-        # Phase 1 locks wrist_flex/wrist_dev at `start`'s own values and
-        # optimizes the remaining five coordinates; this is always the
-        # primary solution, not a discardable attempt. If the result already
-        # satisfies `tolerance_ok`, it is returned as-is -- the wrist is then
-        # *exactly* unchanged from `start`. Only if it falls short does
-        # Phase 2 run, and Phase 2 corrects *only* wrist_flex/wrist_dev (a
-        # two-variable re-solve), starting from `start`'s wrist values, with
-        # Phase 1's five other coordinates kept fixed at their Phase-1
-        # values -- never re-optimized jointly with the wrist again.
+        # term, and the priority is "optimize without moving the wrist first,
+        # then always refine the wrist itself" -- not "try a wrist-locked
+        # attempt and, if it fails, throw it away and re-solve everything
+        # from scratch". `lexicographic_solve` implements that: Phase 1 locks
+        # wrist_flex/wrist_dev at `start`'s own values and optimizes the
+        # remaining five coordinates; this is always the primary solution,
+        # not a discardable attempt. Phase 2 then always runs as a
+        # fine-tuning step on top of Phase 1's solution: it corrects *only*
+        # wrist_flex/wrist_dev (a two-variable re-solve), starting from
+        # `start`'s wrist values, with Phase 1's five other coordinates kept
+        # fixed at their Phase-1 values -- never re-optimized jointly with
+        # the wrist again, plus an explicit quadratic penalty towards
+        # `start`'s own wrist values (on top of the stage objective's own
+        # regularization, which already pulls every coordinate -- wrist
+        # included -- towards the same reference pose, but only with that
+        # stage's general-purpose weight) so that a marginal geometric gain
+        # does not by itself justify moving the wrist. Whether Phase 1 alone
+        # already satisfied `tolerance_ok` (before Phase 2's refinement) is
+        # still reported back as a diagnostic flag, but it no longer decides
+        # whether Phase 2 runs.
         wrist_idx = np.array(
             [_FULL_ARM_COORDINATE_SUFFIXES.index(name) for name in _WRIST_LOCK_COORDINATE_NAMES]
         )
@@ -1683,6 +1835,7 @@ class _HandFittingMixin:
             start: np.ndarray,
             tolerance_ok: Any,
             options: dict[str, Any],
+            wrist_regularization_weight: float,
         ) -> tuple[np.ndarray, bool]:
             # Phase 1 -- primary solution: wrist locked at `start`, only the
             # five non-wrist coordinates vary.
@@ -1705,17 +1858,27 @@ class _HandFittingMixin:
                 )
             x_phase1 = start.copy()
             x_phase1[free_idx] = phase1.x
-            if tolerance_ok(x_phase1):
-                return x_phase1, True
+            wrist_locked = tolerance_ok(x_phase1)
 
-            # Phase 2 -- wrist-only correction: the five non-wrist
-            # coordinates stay fixed at their Phase-1 values; only
+            # Phase 2 -- wrist-only fine tuning, always run: the five
+            # non-wrist coordinates stay fixed at their Phase-1 values; only
             # wrist_flex/wrist_dev are re-solved, starting from `start`'s
-            # own wrist values.
+            # own wrist values. `wrist_locked` is a diagnostic flag only
+            # (whether Phase 1 alone already satisfied `tolerance_ok`); it no
+            # longer gates whether Phase 2 runs. On top of `objective`'s own
+            # regularization towards `start` (shared with Phase 1, over all
+            # seven coordinates), an explicit quadratic penalty towards
+            # `start[wrist_idx]` is added here so that Phase 2 only moves the
+            # wrist away from `start` when the geometric objective's own gain
+            # from doing so outweighs this penalty -- not for a marginal
+            # improvement.
             def objective_wrist_only(x_wrist: np.ndarray) -> float:
                 x_full = x_phase1.copy()
                 x_full[wrist_idx] = x_wrist
-                return objective(x_full)
+                wrist_offset = x_wrist - start[wrist_idx]
+                return objective(x_full) + wrist_regularization_weight * float(
+                    np.dot(wrist_offset, wrist_offset)
+                )
 
             phase2 = minimize(
                 objective_wrist_only,
@@ -1731,7 +1894,7 @@ class _HandFittingMixin:
                 )
             x_phase2 = x_phase1.copy()
             x_phase2[wrist_idx] = phase2.x
-            return x_phase2, False
+            return x_phase2, wrist_locked
 
         # Stage 3: align the MCP line to the cylinder's finite axis segment.
         def step3_objective(x: np.ndarray) -> float:
@@ -1741,9 +1904,9 @@ class _HandFittingMixin:
             angle_term = 1.0 - (direction @ axis) ** 2
             regularization = float(np.dot(x - x0_prepositioned, x - x0_prepositioned))
             return (
-                _AXIS_DISTANCE_WEIGHT * distance**2
-                + _AXIS_ANGLE_WEIGHT * angle_term
-                + _AXIS_ALIGNMENT_REGULARIZATION_WEIGHT * regularization
+                axis_distance_weight * distance**2
+                + axis_angle_weight * angle_term
+                + axis_alignment_regularization_weight * regularization
             )
 
         def stage3_tolerance_ok(x: np.ndarray) -> bool:
@@ -1752,14 +1915,15 @@ class _HandFittingMixin:
             distance = axis_segment_distance(point)
             angle_error = math.degrees(math.acos(min(1.0, abs(float(direction @ axis)))))
             return (
-                distance <= _WRIST_LOCK_DISTANCE_TOLERANCE_M
-                and angle_error <= _WRIST_LOCK_ANGLE_TOLERANCE_DEG
+                distance <= wrist_lock_distance_tolerance_m
+                and angle_error <= wrist_lock_angle_tolerance_deg
             )
 
         try:
             x1, wrist_locked_stage3 = lexicographic_solve(
                 step3_objective, x0_prepositioned, stage3_tolerance_ok,
                 {"maxiter": 200, "ftol": 1e-10},
+                axis_alignment_wrist_regularization_weight,
             )
         except RuntimeError as error:
             raise RuntimeError(
@@ -1784,15 +1948,16 @@ class _HandFittingMixin:
             apply(x)
             gap = palm_axis_gap()
             regularization = float(np.dot(x - x1, x - x1))
-            return gap**2 + _PALM_TANGENCY_REGULARIZATION_WEIGHT * regularization
+            return gap**2 + palm_tangency_regularization_weight * regularization
 
         def stage4_tolerance_ok(x: np.ndarray) -> bool:
             apply(x)
-            return abs(palm_axis_gap()) <= _WRIST_LOCK_GAP_TOLERANCE_M
+            return abs(palm_axis_gap()) <= wrist_lock_gap_tolerance_m
 
         try:
             x3, wrist_locked_stage4 = lexicographic_solve(
-                step4_objective, x1, stage4_tolerance_ok, {"maxiter": 200, "ftol": 1e-12}
+                step4_objective, x1, stage4_tolerance_ok, {"maxiter": 200, "ftol": 1e-12},
+                palm_tangency_wrist_regularization_weight,
             )
         except RuntimeError as error:
             raise RuntimeError(
