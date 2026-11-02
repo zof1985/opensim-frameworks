@@ -778,6 +778,73 @@ def _validate_positive_finite(name: str, value: Any) -> float:
     return float(value)
 
 
+def _validate_non_negative_finite(name: str, value: Any) -> float:
+    """Validate `fit_handle`'s ``posture_regularization_weight`` and return it as a float.
+
+    Unlike :func:`_validate_positive_finite`, zero is accepted and is in fact
+    the default: this weight's contract is "no-op when zero, optional soft
+    nudge otherwise", not "always strictly positive".
+
+    Parameters
+    ----------
+    name : str
+        Parameter name, used in the error message.
+    value : Any
+        Candidate value, expected to be a non-negative finite number.
+
+    Returns
+    -------
+    float
+        The validated value.
+
+    Raises
+    ------
+    ValueError
+        If `value` is not a non-negative finite number (bools are rejected
+        even though ``bool`` is a subclass of ``int``).
+    """
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value < 0
+    ):
+        raise ValueError(f"{name} must be a non-negative finite number")
+    return float(value)
+
+
+def _validate_optional_finite(name: str, value: Any) -> float | None:
+    """Validate one of `fit_handle`'s optional posture targets.
+
+    Shared by ``arm_add_target_rad``/``elbow_flex_target_rad``/
+    ``pro_sup_target_rad``: each is either ``None`` (that coordinate is not
+    penalized) or a finite number (radians).
+
+    Parameters
+    ----------
+    name : str
+        Parameter name, used in the error message.
+    value : Any
+        Candidate value, expected to be ``None`` or a finite number.
+
+    Returns
+    -------
+    float or None
+        The validated value.
+
+    Raises
+    ------
+    ValueError
+        If `value` is neither ``None`` nor a finite number (bools are
+        rejected even though ``bool`` is a subclass of ``int``).
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError(f"{name} must be None or a finite number")
+    return float(value)
+
+
 class _HandFittingMixin:
     """Finger coordinates, surface-intersection checks, and fit_handle."""
 
@@ -1460,6 +1527,10 @@ class _HandFittingMixin:
         wrist_lock_distance_tolerance_m: float = _WRIST_LOCK_DISTANCE_TOLERANCE_M,
         wrist_lock_angle_tolerance_deg: float = _WRIST_LOCK_ANGLE_TOLERANCE_DEG,
         wrist_lock_gap_tolerance_m: float = _WRIST_LOCK_GAP_TOLERANCE_M,
+        posture_regularization_weight: float = 0.0,
+        arm_add_target_rad: float | None = None,
+        elbow_flex_target_rad: float | None = None,
+        pro_sup_target_rad: float | None = None,
     ) -> dict[str, Any]:
         """Fit shoulder, elbow, forearm, wrist and finger coordinates to a grip body.
 
@@ -1510,9 +1581,11 @@ class _HandFittingMixin:
            axis direction, regularized towards stage 2's pre-positioned
            pose (not the raw pose `fit_handle` was called with -- stage 2
            replaces it as both the starting point and the regularization
-           anchor for every later stage), over the same seven coordinates
-           -- but ``wrist_flex``/``wrist_dev`` are given **lexicographic
-           priority** over the other five (project-wide policy: optimize
+           anchor for every later stage), plus `posture_regularization_weight`'s
+           optional soft posture-preference term (see Parameters above; a
+           no-op at its default), over the same seven coordinates -- but
+           ``wrist_flex``/``wrist_dev`` are given **lexicographic priority**
+           over the other five (project-wide policy: optimize
            without moving the wrist first, then always refine the wrist
            itself, rather than folding it into one soft weighted term).
            Phase 1 -- the primary solution, not a discardable attempt --
@@ -1538,10 +1611,11 @@ class _HandFittingMixin:
            priority and the same structure as stage 3 (including Phase 2's
            explicit wrist regularization, here weighted by
            `palm_tangency_wrist_regularization_weight`, default
-           :data:`_PALM_TANGENCY_WRIST_REGULARIZATION_WEIGHT`), from stage
-           3's solution, brings the palm marker to tangency with the
-           cylinder (its distance to the axis equal to the fitted radius),
-           regularized towards stage 3's pose, over the same seven
+           :data:`_PALM_TANGENCY_WRIST_REGULARIZATION_WEIGHT`, and the same
+           `posture_regularization_weight` soft posture-preference term),
+           from stage 3's solution, brings the palm marker to tangency with
+           the cylinder (its distance to the axis equal to the fitted
+           radius), regularized towards stage 3's pose, over the same seven
            coordinates; Phase 1's diagnostic tolerance here is
            `wrist_lock_gap_tolerance_m` (default
            :data:`_WRIST_LOCK_GAP_TOLERANCE_M`) on the tangency gap itself.
@@ -1605,6 +1679,30 @@ class _HandFittingMixin:
             Stage 4 Phase-1 diagnostic tangency-gap tolerance, in metres (see
             `wrist_kept_locked_stage4` below). Must be a positive finite
             number.
+        posture_regularization_weight : float, default=0.0
+            Weight on an optional soft posture-preference term, added to
+            both `step3_objective` and `step4_objective`: the squared
+            distance of `arm_add`/`elbow_flex`/`pro_sup` (whichever of
+            `arm_add_target_rad`/`elbow_flex_target_rad`/`pro_sup_target_rad`
+            below is not ``None``) from its target. Zero (the default) is a
+            strict no-op -- the term is always computed but multiplied by
+            zero -- reproducing today's behaviour exactly when omitted. This
+            is a soft preference, not a lexicographic priority like the
+            wrist's: it competes with the stage's own geometric objective
+            and can be outweighed by it. By construction (depends only on
+            coordinates that are never part of the wrist-lock lexicographic
+            pair, see `lexicographic_solve`'s own comments) it can never
+            change wrist_flex/wrist_dev itself. Must be a non-negative
+            finite number.
+        arm_add_target_rad : float or None, default=None
+            Target value for ``arm_add`` (shoulder adduction; this model's
+            convention is positive = adduction, i.e. towards the body) used
+            by `posture_regularization_weight` above. ``None`` (the default)
+            leaves ``arm_add`` unpenalized by this term.
+        elbow_flex_target_rad : float or None, default=None
+            Target value for ``elbow_flex``, same role as `arm_add_target_rad`.
+        pro_sup_target_rad : float or None, default=None
+            Target value for ``pro_sup``, same role as `arm_add_target_rad`.
 
         Returns
         -------
@@ -1635,10 +1733,13 @@ class _HandFittingMixin:
         TypeError
             If `handle` is not an ``opensim.Body``.
         ValueError
-            If `side`, `soft_tissues_approximation_distance`, or any of the
+            If `side`, `soft_tissues_approximation_distance`, any of the
             nine stage 2-4 tuning parameters above is invalid (the latter
-            must each be a positive finite number), or if `handle`'s mesh or
-            the MCP joint centres are degenerate.
+            must each be a positive finite number), `posture_regularization_weight`
+            is invalid (must be a non-negative finite number), any of the
+            three posture targets is invalid (must be ``None`` or a finite
+            number), or if `handle`'s mesh or the MCP joint centres are
+            degenerate.
         RuntimeError
             If the cylinder fit does not converge, if any SLSQP stage fails
             to converge, if the stage-5 :meth:`_fit_handle_grip` call infers
@@ -1739,6 +1840,14 @@ class _HandFittingMixin:
         wrist_lock_gap_tolerance_m = _validate_positive_finite(
             "wrist_lock_gap_tolerance_m", wrist_lock_gap_tolerance_m
         )
+        posture_regularization_weight = _validate_non_negative_finite(
+            "posture_regularization_weight", posture_regularization_weight
+        )
+        arm_add_target_rad = _validate_optional_finite("arm_add_target_rad", arm_add_target_rad)
+        elbow_flex_target_rad = _validate_optional_finite(
+            "elbow_flex_target_rad", elbow_flex_target_rad
+        )
+        pro_sup_target_rad = _validate_optional_finite("pro_sup_target_rad", pro_sup_target_rad)
 
         # Stage 1: least-squares cylinder fit to the handle mesh, with the
         # real vertex extent along the fitted axis (see _handle_cylinder).
@@ -1830,6 +1939,38 @@ class _HandFittingMixin:
             [i for i in range(len(_FULL_ARM_COORDINATE_SUFFIXES)) if i not in wrist_idx]
         )
 
+        # Posture-preference soft term (not lexicographic, unlike the wrist):
+        # an optional additive quadratic nudge of arm_add/elbow_flex/pro_sup
+        # towards caller-supplied targets, added into both step3_objective
+        # and step4_objective below. Opt-in and a strict no-op by
+        # construction whenever every target is None (posture_targets stays
+        # empty) or posture_regularization_weight is 0.0 (its default),
+        # which is why this does not change fit_handle's default behaviour.
+        # Safe for the wrist's own lexicographic priority *by construction*,
+        # not by convention: arm_add/elbow_flex/pro_sup are all in free_idx
+        # and none is in wrist_idx, so in lexicographic_solve's Phase 1
+        # (wrist locked at `start`, free_idx variable) this term competes
+        # normally with the stage's geometric objective over those five
+        # coordinates, while in Phase 2 (only wrist_idx variable, free_idx
+        # fixed at their Phase 1 values) this term's value is constant with
+        # respect to Phase 2's optimization variable (`x_wrist`) -- it
+        # cannot appear in Phase 2's gradient and therefore cannot move the
+        # wrist, for any weight or target.
+        posture_targets = {}
+        if arm_add_target_rad is not None:
+            posture_targets[_FULL_ARM_COORDINATE_SUFFIXES.index("arm_add")] = arm_add_target_rad
+        if elbow_flex_target_rad is not None:
+            posture_targets[_FULL_ARM_COORDINATE_SUFFIXES.index("elbow_flex")] = (
+                elbow_flex_target_rad
+            )
+        if pro_sup_target_rad is not None:
+            posture_targets[_FULL_ARM_COORDINATE_SUFFIXES.index("pro_sup")] = pro_sup_target_rad
+
+        def posture_regularization_term(x: np.ndarray) -> float:
+            if not posture_targets:
+                return 0.0
+            return float(sum((x[index] - target) ** 2 for index, target in posture_targets.items()))
+
         def lexicographic_solve(
             objective: Any,
             start: np.ndarray,
@@ -1907,6 +2048,7 @@ class _HandFittingMixin:
                 axis_distance_weight * distance**2
                 + axis_angle_weight * angle_term
                 + axis_alignment_regularization_weight * regularization
+                + posture_regularization_weight * posture_regularization_term(x)
             )
 
         def stage3_tolerance_ok(x: np.ndarray) -> bool:
@@ -1948,7 +2090,11 @@ class _HandFittingMixin:
             apply(x)
             gap = palm_axis_gap()
             regularization = float(np.dot(x - x1, x - x1))
-            return gap**2 + palm_tangency_regularization_weight * regularization
+            return (
+                gap**2
+                + palm_tangency_regularization_weight * regularization
+                + posture_regularization_weight * posture_regularization_term(x)
+            )
 
         def stage4_tolerance_ok(x: np.ndarray) -> bool:
             apply(x)
