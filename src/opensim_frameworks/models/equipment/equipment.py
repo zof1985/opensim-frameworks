@@ -450,3 +450,30 @@ class Equipment(opensim.Model, ABC):
             If the concrete equipment does not implement a fitting procedure.
         """
         raise NotImplementedError
+
+    def simulate_on_user(self, user: Any, **kwargs: Any) -> Any:
+        """Simulate a user performing this equipment's exercise gesture.
+
+        Equipment that models a repeatable exercise gesture must override
+        this method so callers can generate an animated, biomechanically
+        fitted repetition starting from :meth:`fit_user`'s pose. This is a
+        concrete method, not an :func:`abc.abstractmethod`, so that existing
+        subclasses without a simulated gesture (e.g. ``Bike``) keep working
+        unchanged, matching :meth:`set_screen_position`'s pattern.
+
+        Parameters
+        ----------
+        user : Any
+            User to simulate, in whatever type the concrete equipment's
+            ``fit_user`` expects.
+        **kwargs : Any
+            Equipment-specific simulation parameters.
+
+        Raises
+        ------
+        NotImplementedError
+            If the equipment does not implement gesture simulation.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement user motion simulation"
+        )
