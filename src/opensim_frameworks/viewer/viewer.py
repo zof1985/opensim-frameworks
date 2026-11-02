@@ -8,50 +8,15 @@ from typing import Any
 
 import numpy as np
 
-from ..bodies.shapes import MESHES_DIR
 from ..framework import Framework
 from ..utils.constants import DEFAULT_SIZE
-from ..utils.opensim import import_opensim, resolve_geometry_file
-from .animation import save_animation as _render_animation
+from ..utils.opensim import import_opensim
+from .animation import _ViewerModel, save_animation as _render_animation
 from .export import save_image as _save_image
 from .player import MotionData, PlayerWindow, _apply_time, start_player
 from .visualizer import VTKVisualizer
 
 __all__ = ["VTKViewer"]
-
-
-class _ViewerModel:
-    """Provide viewer state and geometry lookup around a native model."""
-
-    def __init__(self, model: Any, state: Any = None) -> None:
-        self.model = model
-        self.opensim = import_opensim()
-        if state is None:
-            state = getattr(model, "state", None)
-        self.state = state if state is not None else model.initSystem()
-        self._geometry_dirs = (
-            *getattr(model, "geometry_directories", ()),
-            MESHES_DIR,
-        )
-        self._visualizer = None
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self.model, name)
-
-    @property
-    def visualizer(self) -> VTKVisualizer | None:
-        return self._visualizer
-
-    @visualizer.setter
-    def visualizer(self, value: VTKVisualizer | None) -> None:
-        self._visualizer = value
-        if hasattr(self.model, "_visualizer"):
-            self.model._visualizer = value
-
-    def _resolve_geometry_file(self, filename: str) -> Path | None:
-        return resolve_geometry_file(
-            self.opensim, self.model, filename, self._geometry_dirs
-        )
 
 
 def _camera_vector(

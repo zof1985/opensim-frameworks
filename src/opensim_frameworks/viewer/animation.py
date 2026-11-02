@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -11,10 +10,47 @@ import numpy as np
 from ..utils.constants import DEFAULT_SIZE, MESHES_DIR
 from ..utils.opensim import import_opensim
 from ..utils.opensim import resolve_geometry_file as _resolve_geometry_file
+from .visualizer import VTKVisualizer
 
 
-def _user_dirs(model: Any) -> tuple:
-    return tuple(getattr(model, "geometry_directories", ()))
+class _ViewerModel:
+    """Provide viewer state and geometry lookup around a native model.
+
+    Shared by :func:`save_animation` and the interactive/snapshot viewer in
+    ``viewer.py`` (which imports it from here, not the reverse, since
+    ``viewer.py`` already imports :func:`save_animation` from this module).
+    """
+
+    def __init__(self, model: Any, state: Any = None) -> None:
+        self.model = model
+        self.opensim = import_opensim()
+        if state is None:
+            state = getattr(model, "state", None)
+        self.state = state if state is not None else model.initSystem()
+        self._geometry_dirs = (
+            *getattr(model, "geometry_directories", ()),
+            MESHES_DIR,
+        )
+        self._visualizer = None
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.model, name)
+
+    @property
+    def visualizer(self) -> VTKVisualizer | None:
+        return self._visualizer
+
+    @visualizer.setter
+    def visualizer(self, value: VTKVisualizer | None) -> None:
+        self._visualizer = value
+        if hasattr(self.model, "_visualizer"):
+            self.model._visualizer = value
+
+    def _resolve_geometry_file(self, filename: str) -> Path | None:
+        return _resolve_geometry_file(
+            self.opensim, self.model, filename, self._geometry_dirs
+        )
+
 
 __all__ = ["save_animation"]
 
@@ -107,18 +143,7 @@ def save_animation(
         raise TypeError("model must be an opensim.Model")
     raw_model = model
     state = model.state if hasattr(model, "state") else model.initSystem()
-
-    def resolve_geometry_file(filename: str) -> Path | None:
-        return _resolve_geometry_file(
-            opensim, raw_model, filename, (*_user_dirs(raw_model), MESHES_DIR)
-        )
-
-    visualizer_model = SimpleNamespace(
-        model=raw_model,
-        state=state,
-        opensim=opensim,
-        _resolve_geometry_file=resolve_geometry_file,
-    )
+    visualizer_model = _ViewerModel(raw_model, state)
 
     if isinstance(sto_table, (str, Path)):
         table = opensim.TimeSeriesTable(str(sto_table))
