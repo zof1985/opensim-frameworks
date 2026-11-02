@@ -3,11 +3,18 @@
 Everything here supports three public operations exposed on :class:`User`
 through :class:`_HandFittingMixin`: reading/writing individual finger
 coordinates, exact triangle-surface intersection checks
-(``hand_surface_intersections``/``hand_handle_intersections``), and the
-``fit_handle`` SLSQP solver that wraps a hand around a grip body using cheap
-PCA-capsule proxies for its hard non-penetration constraints. This is
-fitting-time logic only: the anatomical construction of the articulated hand
-bodies themselves (joints, axes, rest pose) lives in :mod:`.hand`.
+(``hand_surface_intersections``/``hand_handle_intersections``), and
+``fit_handle``, a staged solver that fits shoulder, elbow, forearm, wrist and
+every finger coordinate to a grip body. ``fit_handle`` is built on an inner
+engine, :meth:`_HandFittingMixin._fit_handle_grip` (the original, narrower
+``fit_handle`` validated first, before shoulder/elbow were in scope): a
+cheap-PCA-capsule-proxy SLSQP solver that wraps a hand around a grip body
+assuming the arm is already coarsely positioned nearby. ``fit_handle`` itself
+adds three stages ahead of that engine (cylinder fit to the grip mesh, MCP-
+axis alignment, palm-cylinder tangency) so no prior arm positioning is
+required; see its own docstring. This is fitting-time logic only: the
+anatomical construction of the articulated hand bodies themselves (joints,
+axes, rest pose) lives in :mod:`.hand`.
 """
 
 from __future__ import annotations
@@ -20,7 +27,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
-from scipy.optimize import minimize
+from scipy.optimize import least_squares, minimize
 
 from ...utils.geometry import enclosing_capsule, segment_pair_distance
 from ...utils.opensim import (
@@ -254,6 +261,49 @@ _SIDE_INFERENCE_MAX_DISTANCE_M = 0.3
 _SIDE_INFERENCE_MARGIN_M = 0.02
 
 
+# -- fit_handle tuning (the staged cylinder-fit + two-stage IK ahead of the
+# -- _fit_handle_grip engine below, that also moves the shoulder and elbow,
+# -- instead of assuming the arm is already coarsely positioned).
+
+#: Fingers whose MCP joint centres define the least-squares line used in
+#: fit_handle's step 1. Each MCP joint's child-frame location is the
+#: joint centre itself, which does not move under that joint's own
+#: coordinates (a revolute/universal joint's coordinates rotate the child
+#: body about its own fixed attachment point), so this line moves rigidly
+#: with the hand body under any shoulder/elbow/forearm/wrist coordinate
+#: change, independent of the current finger pose.
+_MCP_LINE_FINGERS = ("middle", "ring", "little")
+
+#: Shoulder, elbow, forearm and wrist coordinates fit_handle moves in its
+#: steps 2-3, on top of every finger coordinate _fit_handle_grip itself
+#: adjusts in step 4. Distinct from _WRIST_COORDINATE_SUFFIXES (forearm and
+#: wrist only, no shoulder/elbow), which _fit_handle_grip keeps using
+#: unchanged when called directly (not through fit_handle).
+_FULL_ARM_COORDINATE_SUFFIXES = (
+    "arm_flex",
+    "arm_add",
+    "arm_rot",
+    "elbow_flex",
+    "pro_sup",
+    "wrist_flex",
+    "wrist_dev",
+)
+
+#: fit_handle step 2 (MCP-axis alignment) objective weights: the
+#: point-to-segment distance term dominates over the angle-misalignment
+#: term, which in turn dominates over the regularization towards the pose
+#: fit_handle was called with. Tuned on one real case (ANSUR M-150,
+#: High Row equipment, neutral grip); not derived from a validated source,
+#: like the comparable _fit_handle_grip weights above.
+_AXIS_DISTANCE_WEIGHT = 50.0
+_AXIS_ANGLE_WEIGHT = 5.0
+_AXIS_ALIGNMENT_REGULARIZATION_WEIGHT = 1e-3
+
+#: fit_handle step 3 (palm-to-cylinder tangency) regularization
+#: weight, towards the step 2 solution. Same tuning caveat as above.
+_PALM_TANGENCY_REGULARIZATION_WEIGHT = 1e-2
+
+
 @dataclass(frozen=True)
 class _HandCapsule:
     """A bone-enclosing PCA capsule for one attached hand mesh, in its own frame."""
@@ -398,8 +448,12 @@ def _self_collision_pairs(
     return pairs, np.minimum(reference_gaps, 0.0)
 
 
-def _handle_capsule(handle: Any, label: str) -> tuple[np.ndarray, np.ndarray, float]:
-    """Build a single PCA capsule enclosing a grip body's attached mesh, in Ground.
+def _handle_mesh_vertices(handle: Any, label: str) -> np.ndarray:
+    """Return a grip body's attached mesh vertices, in Ground.
+
+    Shared by :func:`_handle_capsule` (PCA axis proxy) and
+    :func:`_handle_cylinder` (least-squares cylinder fit): both need the same
+    scaled, ground-frame vertices, just fitted with a different model.
 
     Parameters
     ----------
@@ -414,10 +468,9 @@ def _handle_capsule(handle: Any, label: str) -> tuple[np.ndarray, np.ndarray, fl
 
     Returns
     -------
-    start, end : numpy.ndarray, shape (3,)
-        Capsule centre-segment endpoints in Ground, in metres.
-    radius : float
-        Capsule radius in metres.
+    numpy.ndarray, shape (n, 3)
+        Scaled vertices of every mesh attached to `handle`, in Ground, in
+        metres.
 
     Raises
     ------
@@ -456,7 +509,199 @@ def _handle_capsule(handle: Any, label: str) -> tuple[np.ndarray, np.ndarray, fl
         rotation = rotation_to_numpy(transform.R())
         translation = vec3_to_numpy(transform.p())
         vertex_arrays.append(vertices @ rotation.T + translation)
-    return enclosing_capsule(np.vstack(vertex_arrays))
+    return np.vstack(vertex_arrays)
+
+
+def _handle_capsule(handle: Any, label: str) -> tuple[np.ndarray, np.ndarray, float]:
+    """Build a single PCA capsule enclosing a grip body's attached mesh, in Ground.
+
+    Parameters
+    ----------
+    handle : opensim.Body
+        Grip body; see :func:`_handle_mesh_vertices`.
+    label : str
+        Capitalized noun used in error messages (for example ``"Handle"``).
+
+    Returns
+    -------
+    start, end : numpy.ndarray, shape (3,)
+        Capsule centre-segment endpoints in Ground, in metres.
+    radius : float
+        Capsule radius in metres.
+
+    Raises
+    ------
+    TypeError, ValueError, FileNotFoundError
+        See :func:`_handle_mesh_vertices`.
+    """
+    return enclosing_capsule(_handle_mesh_vertices(handle, label))
+
+
+def _handle_cylinder(
+    handle: Any, label: str
+) -> tuple[np.ndarray, np.ndarray, float, np.ndarray, np.ndarray]:
+    """Fit a least-squares cylinder to a grip body's attached mesh, in Ground.
+
+    Unlike :func:`_handle_capsule`'s PCA axis, which only orients a capsule
+    without estimating a surface-fitting radius, this minimizes every
+    vertex's perpendicular distance to the fitted cylindrical surface over
+    its axis direction, a point on the axis, and the radius jointly
+    (:func:`scipy.optimize.least_squares`). Initialized from the same PCA
+    axis and capsule radius used elsewhere, so a degenerate or near-planar
+    point cloud is rejected the same way before any nonlinear solve is
+    attempted.
+
+    Parameters
+    ----------
+    handle : opensim.Body
+        Grip body; see :func:`_handle_mesh_vertices`.
+    label : str
+        Capitalized noun used in error messages.
+
+    Returns
+    -------
+    axis_point, axis : numpy.ndarray, shape (3,)
+        A point on the fitted axis, close to the mesh centroid, and its unit
+        direction (arbitrary sign).
+    radius : float
+        Fitted cylinder radius, in metres.
+    segment_start, segment_end : numpy.ndarray, shape (3,)
+        Extremes of the vertex projections onto the fitted axis: the
+        physical extent actually covered by the mesh along that axis, as
+        opposed to the mathematically infinite line the axis alone implies.
+        Used by :meth:`_HandFittingMixin.fit_handle` to bound its
+        alignment target -- confirmed necessary on a real case, see that
+        method's Notes.
+
+    Raises
+    ------
+    TypeError, ValueError, FileNotFoundError
+        See :func:`_handle_mesh_vertices`.
+    RuntimeError
+        If the nonlinear least-squares cylinder fit does not converge.
+    ValueError
+        If the fitted radius is not finite and positive.
+    """
+    vertices = _handle_mesh_vertices(handle, label)
+    pca_start, pca_end, pca_radius = enclosing_capsule(vertices)
+    axis0 = pca_end - pca_start
+    axis0 = axis0 / np.linalg.norm(axis0)
+    point0 = (pca_start + pca_end) / 2
+
+    def residuals(params: np.ndarray) -> np.ndarray:
+        point, theta, phi, radius = params[:3], params[3], params[4], params[5]
+        direction = np.array(
+            [math.sin(theta) * math.cos(phi), math.sin(theta) * math.sin(phi), math.cos(theta)]
+        )
+        offset = vertices - point
+        perpendicular = offset - np.outer(offset @ direction, direction)
+        return np.linalg.norm(perpendicular, axis=1) - radius
+
+    theta0 = math.acos(float(np.clip(axis0[2], -1.0, 1.0)))
+    phi0 = math.atan2(float(axis0[1]), float(axis0[0]))
+    result = least_squares(
+        residuals, np.array([*point0, theta0, phi0, pca_radius]), method="lm"
+    )
+    if not result.success:
+        raise RuntimeError(
+            f"Cylinder least-squares fit did not converge for {label.lower()} "
+            f"{handle.getName()!r}: {result.message}"
+        )
+    point, theta, phi, radius = result.x[:3], result.x[3], result.x[4], result.x[5]
+    axis = np.array(
+        [math.sin(theta) * math.cos(phi), math.sin(theta) * math.sin(phi), math.cos(theta)]
+    )
+    if radius <= 0 or not math.isfinite(radius):
+        raise ValueError(
+            f"Degenerate cylinder radius fitted for {label.lower()} {handle.getName()!r}"
+        )
+    # Re-anchor the axis point near the mesh centroid (any point on the line
+    # is equivalent for a direction/line representation; this choice keeps
+    # it numerically close to the data instead of wherever the unconstrained
+    # least-squares solve happened to place it along the infinite line).
+    centroid = vertices.mean(axis=0)
+    axis_point = point + ((centroid - point) @ axis) * axis
+    projections = (vertices - axis_point) @ axis
+    segment_start = axis_point + float(projections.min()) * axis
+    segment_end = axis_point + float(projections.max()) * axis
+    return axis_point, axis, float(radius), segment_start, segment_end
+
+
+def _mcp_axis_in_ground(user: Any, suffix: str) -> tuple[np.ndarray, np.ndarray]:
+    """Fit a least-squares line to the middle/ring/little MCP joint centres.
+
+    Parameters
+    ----------
+    user : User
+        User whose state is realized through Position.
+    suffix : {'r', 'l'}
+        Hand side.
+
+    Returns
+    -------
+    point, direction : numpy.ndarray, shape (3,)
+        The centroid of the three MCP joint centres and the line's unit
+        direction (arbitrary sign), in Ground, in metres.
+
+    Raises
+    ------
+    ValueError
+        If the three joint centres do not define a unique direction (for
+        example if they are nearly coincident).
+
+    Notes
+    -----
+    Each MCP joint's child-frame location is the joint centre itself, which
+    does not move under that joint's own coordinates: a revolute or
+    universal joint's coordinates rotate the child body about its own fixed
+    attachment point, which stays fixed in Ground regardless of the
+    rotation. So this line moves rigidly with the hand body under any
+    shoulder/elbow/forearm/wrist coordinate change, independent of the
+    current finger pose -- no reference finger pose needs to be fixed to
+    compute it, confirmed against this model's actual joint definitions
+    (:func:`opensim_frameworks.models.user.hand.add_articulated_hands`).
+    """
+    user.realizePosition(user.state)
+    points = np.array(
+        [user._joint_center(f"{finger}_mcp_{suffix}") for finger in _MCP_LINE_FINGERS]
+    )
+    center = points.mean(axis=0)
+    _, singular, axes = np.linalg.svd(points - center, full_matrices=False)
+    if singular[0] <= 0:
+        raise ValueError("MCP joint centres do not define a unique direction")
+    return center, axes[0]
+
+
+def _validate_soft_tissue_distance(value: Any) -> float:
+    """Validate ``soft_tissues_approximation_distance`` and return it as a float.
+
+    Parameters
+    ----------
+    value : Any
+        Candidate value, expected to be a positive finite number in metres.
+
+    Returns
+    -------
+    float
+        The validated value.
+
+    Raises
+    ------
+    ValueError
+        If `value` is not a positive finite number (bools are rejected even
+        though ``bool`` is a subclass of ``int``).
+    """
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value <= 0
+    ):
+        raise ValueError(
+            "soft_tissues_approximation_distance must be a positive "
+            "finite number in metres"
+        )
+    return float(value)
 
 
 class _HandFittingMixin:
@@ -720,7 +965,7 @@ class _HandFittingMixin:
 
         return _surfaces_intersecting_pairs(hand_surfaces, handle_surfaces)
 
-    def fit_handle(
+    def _fit_handle_grip(
         self,
         handle: Any,
         function: Literal["push", "pull"] = "push",
@@ -728,13 +973,26 @@ class _HandFittingMixin:
     ) -> dict[str, Any]:
         """Wrap one hand around a grip body without shoulder/elbow motion.
 
+        This is the original ``fit_handle`` solver, validated first and kept
+        unchanged: a cheap-PCA-capsule-proxy SLSQP engine that only unlocks
+        the wrist, forearm and fingers, assuming the arm is already coarsely
+        positioned near `handle`. It is now a private engine reused by the
+        public :meth:`fit_handle` as that method's final stage (after
+        shoulder/elbow/wrist have already been moved close to `handle`), but
+        every detail below -- its push/pull strategies, its side-inference
+        rule and its capsule-proxy/exact-mesh guarantees -- is unchanged and
+        still applies exactly as described, whether called directly (if an
+        arm is already known to be close to `handle`) or through
+        :meth:`fit_handle`.
+
         Only the wrist (flexion and deviation), forearm pronation/supination
         and every finger coordinate of the inferred hand are unlocked and
         optimized; shoulder and elbow coordinates are never touched. The side
         is not a parameter: it is inferred as whichever palm marker
         (:attr:`palm_markers`) is nearest `handle`'s capsule centre. Call this
         after positioning the arm near `handle` (for example with an
-        equipment-specific ``fit_user``); it does not search for the handle.
+        equipment-specific ``fit_user``, or with :meth:`fit_handle` itself);
+        it does not search for the handle.
 
         For ``function="push"``, the palm (its four metacarpal-head capsules)
         is held in hard contact with `handle` within
@@ -832,8 +1090,8 @@ class _HandFittingMixin:
         clears `handle`, and the full SLSQP search for wrist and fingers
         together is started from there in addition to the original pose.
         This still cannot resolve an overlap that only shoulder/elbow motion
-        (outside fit_handle's scope) could clear; such cases surface as the
-        ``RuntimeError`` below.
+        (outside this method's scope, but within :meth:`fit_handle`'s) could
+        clear; such cases surface as the ``RuntimeError`` below.
 
         The exact triangle-surface check only runs once, after the solver
         converges, as an accept/reject gate; it is not re-applied along a
@@ -841,17 +1099,7 @@ class _HandFittingMixin:
         """
         if function not in ("push", "pull"):
             raise ValueError("function must be 'push' or 'pull'")
-        if (
-            isinstance(soft_tissues_approximation_distance, bool)
-            or not isinstance(soft_tissues_approximation_distance, (int, float))
-            or not math.isfinite(soft_tissues_approximation_distance)
-            or soft_tissues_approximation_distance <= 0
-        ):
-            raise ValueError(
-                "soft_tissues_approximation_distance must be a positive "
-                "finite number in metres"
-            )
-        soft_tissue = float(soft_tissues_approximation_distance)
+        soft_tissue = _validate_soft_tissue_distance(soft_tissues_approximation_distance)
 
         # Infer which hand to fit from palm-marker proximity to the handle.
         handle_start, handle_end, handle_radius = _handle_capsule(handle, "Handle")
@@ -871,8 +1119,9 @@ class _HandFittingMixin:
                 f"Cannot determine which hand to fit to handle {handle.getName()!r}: "
                 f"right palm is {distances['right']:.4f} m and left palm is "
                 f"{distances['left']:.4f} m from its capsule centre. Position the arm "
-                "near the handle (for example with an equipment fit_user) before "
-                "calling fit_handle."
+                "near the handle (for example with an equipment fit_user, or with "
+                "fit_handle itself, which can reposition the arm from further away) "
+                "before calling _fit_handle_grip."
             )
         side = nearest_side
         suffix = "l" if side == "left" else "r"
@@ -978,7 +1227,7 @@ class _HandFittingMixin:
         # not that the palm and finger bones actually clear `handle` (confirmed
         # on a real equipment model, whose own contact marker sits roughly
         # 15 mm inside the handle mesh): the wrist-only starting pose handed to
-        # fit_handle can already overlap `handle`. Since the wrist/forearm
+        # this method can already overlap `handle`. Since the wrist/forearm
         # coordinates alone move every hand capsule (finger coordinates move
         # only the fingers, never the palm), a grid search over just those 3
         # coordinates cheaply finds a wrist pose with the least combined
@@ -1097,7 +1346,7 @@ class _HandFittingMixin:
         handle_intersections = self.hand_handle_intersections(side, handle)
         if self_intersections or handle_intersections:
             raise RuntimeError(
-                "fit_handle solution failed the exact surface-intersection check: "
+                "Grip solution failed the exact surface-intersection check: "
                 f"{len(self_intersections)} self intersection(s), "
                 f"{len(handle_intersections)} hand-handle intersection(s)"
             )
@@ -1117,4 +1366,269 @@ class _HandFittingMixin:
             ),
             "minimum_self_gap_m": float(np.min(self_gaps)),
             "minimum_handle_gap_m": float(np.min(handle_gaps)),
+        }
+
+    def fit_handle(
+        self,
+        handle: Any,
+        side: Literal["left", "right"],
+        function: Literal["push", "pull"] = "push",
+        soft_tissues_approximation_distance: float = 0.01,
+    ) -> dict[str, Any]:
+        """Fit shoulder, elbow, forearm, wrist and finger coordinates to a grip body.
+
+        This is the framework's primary public grip-fitting entry point. It
+        extends :meth:`_fit_handle_grip` -- the original ``fit_handle``,
+        validated first and kept unchanged as the internal engine for its
+        own stage below -- with three stages ahead of it that also move the
+        shoulder (``arm_flex``, ``arm_add``, ``arm_rot``) and elbow
+        (``elbow_flex``), so no prior arm positioning is required: only
+        `handle` itself must already be placed in its own model's working
+        state (for example by an equipment-specific lever mechanism). `side`
+        is an explicit parameter here, not inferred by palm-marker proximity
+        like :meth:`_fit_handle_grip`: before this method runs, the arm can
+        be arbitrarily far from `handle`, which is exactly the regime where
+        that proximity-based inference (kept unchanged in
+        :meth:`_fit_handle_grip` itself, still appropriate once the arm is
+        already coarsely positioned) is not reliable.
+
+        The fit proceeds in four stages:
+
+        1. A least-squares cylinder (axis direction, a point on the axis,
+           and radius; :func:`_handle_cylinder`) is fitted to `handle`'s
+           attached mesh vertices, together with the real extent of those
+           vertices along the fitted axis (a finite segment, not the
+           mathematically infinite line the axis direction alone implies).
+        2. A least-squares line is fitted to the middle/ring/little MCP
+           joint centres (:func:`_mcp_axis_in_ground`); it moves rigidly
+           with the hand body under any shoulder/elbow/forearm/wrist
+           coordinate change, independent of the current finger pose. One
+           SLSQP run, over the seven continuous shoulder/elbow/forearm/wrist
+           coordinates, minimizes this line's distance to the cylinder's
+           finite axis *segment* plus its angular misalignment to the
+           (sign-free) axis direction, regularized towards the pose
+           `fit_handle` was called with.
+        3. A second SLSQP run, from stage 2's solution, brings the palm
+           marker (``{prefix}PALM``) to tangency with the cylinder (its
+           distance to the axis equal to the fitted radius), regularized
+           towards stage 2's pose, over the same seven coordinates.
+        4. :meth:`_fit_handle_grip` refines the wrist, forearm and finger
+           coordinates against the real palm, finger and handle meshes: it
+           already enforces a palmar contact target (gap at most
+           `soft_tissues_approximation_distance`, for ``function="push"``)
+           as a hard capsule-proxy constraint, finger-wrap closure as a soft
+           objective, and the exact mesh non-interpenetration gate -- all
+           reused unchanged here, not reimplemented.
+
+        Parameters
+        ----------
+        handle : opensim.Body
+            Grip body belonging to a separately initialized OpenSim model,
+            with its pose already set in that model's own working state.
+        side : {'left', 'right'}
+            Hand to fit; not inferred (see above).
+        function : {'push', 'pull'}, default='push'
+            Forwarded to the stage-4 :meth:`_fit_handle_grip` call; see its
+            docstring for the push/pull difference. Only that final stage
+            uses it (stages 1-3 only align the arm to the handle geometry,
+            independent of grip strategy).
+        soft_tissues_approximation_distance : float, default=0.01
+            Forwarded to the stage-4 :meth:`_fit_handle_grip` call; see its
+            docstring.
+
+        Returns
+        -------
+        dict
+            Report with keys ``side``, ``cylinder_axis_point_m``,
+            ``cylinder_axis_direction``, ``cylinder_radius_m`` (stage 1),
+            ``axis_alignment_distance_m`` and
+            ``axis_alignment_angle_error_deg`` (stage 2 residuals),
+            ``palm_axis_gap_m`` (stage 3 residual: the palm's perpendicular
+            distance to the cylinder axis minus its radius, near zero at
+            tangency), ``full_arm_coordinates_rad`` (stage 3 solution for
+            the seven shoulder/elbow/forearm/wrist coordinates, keyed by
+            coordinate name), ``grip`` (the full dict returned by the
+            stage-4 :meth:`_fit_handle_grip` call) and
+            ``palm_axis_gap_after_wrap_m`` (the same signed gap recomputed
+            after stage 4; diagnostic only, see Notes).
+
+        Raises
+        ------
+        TypeError
+            If `handle` is not an ``opensim.Body``.
+        ValueError
+            If `side`, `function` or `soft_tissues_approximation_distance`
+            is invalid, or if `handle`'s mesh or the MCP joint centres are
+            degenerate.
+        RuntimeError
+            If the cylinder fit does not converge, if either SLSQP stage
+            fails to converge, if the stage-4 :meth:`_fit_handle_grip` call
+            infers the wrong side (the stage-3 pose placed the opposite palm
+            closer to `handle`), or if :meth:`_fit_handle_grip` itself
+            raises (no feasible capsule-proxy wrap, or a failed exact-mesh
+            gate).
+
+        Notes
+        -----
+        Validated so far on the complete High Row reference dataset (ANSUR
+        M/F x 150/175/205 cm, both sides, neutral grip, ``function="push"``):
+        all 12 neutral-grip fits converged with zero mesh intersection and
+        sub-millimetre residuals. The supine grip on that same equipment
+        failed in every one of the 6 tested cases with ``function="push"``
+        (stage 4 could not find a feasible hard-palm-contact pose); this is
+        consistent with a previously observed push/pull asymmetry on
+        supinated handles (see the project's grip-ergonomics notes) and is
+        expected to require ``function="pull"`` for that handle -- not yet
+        re-verified end to end at the time of this note. See this module's
+        test coverage before relying on this method for other anthropometry
+        or equipment. Stages 2 and 3 each run a single SLSQP from the pose
+        `fit_handle` was called with (no multistart), unlike
+        :meth:`_fit_handle_grip`'s own wrist/finger search; a poor starting
+        pose could converge to a worse local optimum or fail outright.
+        Coordinate ranges are read as currently set on the model and never
+        widened (as some equipment-specific coarse arm fits do for
+        ``arm_flex``); a `handle` unreachable within the current range fails
+        stage 2 or 3 rather than silently ignoring the limit. Like
+        :meth:`_fit_handle_grip`, this method does not lock any coordinate
+        back after moving it -- a caller's own pipeline is responsible for
+        that. It does not check for self-collision between the
+        forearm/upper arm and the rest of the body or the equipment frame,
+        the same unaddressed scope as the existing coarse arm fits in this
+        project. `palm_axis_gap_after_wrap_m` is purely diagnostic:
+        :meth:`_fit_handle_grip`'s own hard capsule-proxy constraint and the
+        exact mesh gate are the actual acceptance criteria for stage 4, so a
+        small deviation here is expected and is not itself cause for
+        failure.
+        """
+        if side not in ("left", "right"):
+            raise ValueError("side must be 'left' or 'right'")
+        if function not in ("push", "pull"):
+            raise ValueError("function must be 'push' or 'pull'")
+        suffix = "l" if side == "left" else "r"
+        prefix = "L" if side == "left" else "R"
+        soft_tissue = _validate_soft_tissue_distance(soft_tissues_approximation_distance)
+
+        # Stage 0: least-squares cylinder fit to the handle mesh, with the
+        # real vertex extent along the fitted axis (see _handle_cylinder).
+        axis_point, axis, radius, segment_start, segment_end = _handle_cylinder(
+            handle, "Handle"
+        )
+
+        # Unlock the seven shoulder/elbow/forearm/wrist coordinates moved by
+        # stages 2-3 (finger coordinates are unlocked later, by stage 4's
+        # own _fit_handle_grip call).
+        coordinates = [
+            self.getCoordinateSet().get(f"{name}_{suffix}")
+            for name in _FULL_ARM_COORDINATE_SUFFIXES
+        ]
+        for coordinate in coordinates:
+            coordinate.set_locked(False)
+            coordinate.setLocked(self.state, False)
+        self.realizePosition(self.state)
+        bounds = [(c.getRangeMin(), c.getRangeMax()) for c in coordinates]
+        x0 = np.array([c.getValue(self.state) for c in coordinates])
+
+        def apply(x: np.ndarray) -> None:
+            for coordinate, value in zip(coordinates, x):
+                coordinate.setValue(self.state, float(value), False)
+            self.realizePosition(self.state)
+
+        def axis_segment_distance(point: np.ndarray) -> float:
+            return float(
+                segment_pair_distance(
+                    point[None, :], point[None, :], segment_start[None, :], segment_end[None, :]
+                )[0]
+            )
+
+        # Stage 2: align the MCP line to the cylinder's finite axis segment.
+        def step2_objective(x: np.ndarray) -> float:
+            apply(x)
+            point, direction = _mcp_axis_in_ground(self, suffix)
+            distance = axis_segment_distance(point)
+            angle_term = 1.0 - (direction @ axis) ** 2
+            regularization = float(np.dot(x - x0, x - x0))
+            return (
+                _AXIS_DISTANCE_WEIGHT * distance**2
+                + _AXIS_ANGLE_WEIGHT * angle_term
+                + _AXIS_ALIGNMENT_REGULARIZATION_WEIGHT * regularization
+            )
+
+        stage2 = minimize(
+            step2_objective,
+            x0,
+            method="SLSQP",
+            bounds=bounds,
+            options={"maxiter": 200, "ftol": 1e-10},
+        )
+        if not stage2.success:
+            raise RuntimeError(
+                "fit_handle stage 2 (MCP-axis alignment) failed for "
+                f"handle {handle.getName()!r}: {stage2.message}"
+            )
+        apply(stage2.x)
+        point, direction = _mcp_axis_in_ground(self, suffix)
+        axis_alignment_distance = axis_segment_distance(point)
+        axis_alignment_angle_error = math.degrees(
+            math.acos(min(1.0, abs(float(direction @ axis))))
+        )
+        x1 = stage2.x
+
+        # Stage 3: bring the palm marker to tangency with the cylinder.
+        def palm_axis_gap() -> float:
+            palm = np.array(self._marker_location(f"{prefix}PALM"))
+            offset = palm - axis_point
+            perpendicular = offset - (offset @ axis) * axis
+            return float(np.linalg.norm(perpendicular)) - radius
+
+        def step3_objective(x: np.ndarray) -> float:
+            apply(x)
+            gap = palm_axis_gap()
+            regularization = float(np.dot(x - x1, x - x1))
+            return gap**2 + _PALM_TANGENCY_REGULARIZATION_WEIGHT * regularization
+
+        stage3 = minimize(
+            step3_objective,
+            x1,
+            method="SLSQP",
+            bounds=bounds,
+            options={"maxiter": 200, "ftol": 1e-12},
+        )
+        if not stage3.success:
+            raise RuntimeError(
+                "fit_handle stage 3 (palm-cylinder tangency) failed "
+                f"for handle {handle.getName()!r}: {stage3.message}"
+            )
+        apply(stage3.x)
+        stage3_palm_axis_gap = palm_axis_gap()
+
+        # Stage 4: delegate the wrist/finger wrap entirely to the existing,
+        # already-validated _fit_handle_grip engine (already enforces the
+        # palmar contact target for push, finger wrap as a soft objective,
+        # and the exact mesh gate, for whichever `function` was requested).
+        grip_report = self._fit_handle_grip(
+            handle, function=function, soft_tissues_approximation_distance=soft_tissue
+        )
+        if grip_report["side"] != side:
+            raise RuntimeError(
+                f"_fit_handle_grip inferred side {grip_report['side']!r} while "
+                f"fitting the {side!r} arm with fit_handle: the stage-3 pose "
+                "placed the opposite palm closer to handle than the intended one"
+            )
+
+        return {
+            "side": side,
+            "cylinder_axis_point_m": tuple(axis_point.tolist()),
+            "cylinder_axis_direction": tuple(axis.tolist()),
+            "cylinder_radius_m": radius,
+            "axis_alignment_distance_m": axis_alignment_distance,
+            "axis_alignment_angle_error_deg": axis_alignment_angle_error,
+            "palm_axis_gap_m": float(stage3_palm_axis_gap),
+            "full_arm_coordinates_rad": dict(
+                zip(
+                    (f"{name}_{suffix}" for name in _FULL_ARM_COORDINATE_SUFFIXES),
+                    stage3.x.tolist(),
+                )
+            ),
+            "grip": grip_report,
+            "palm_axis_gap_after_wrap_m": float(palm_axis_gap()),
         }

@@ -178,19 +178,26 @@ def test_hand_handle_intersections_reports_no_intersection_when_far_away(user, t
 def test_fit_handle_rejects_invalid_function(user, tmp_path, function):
     handle = _handle_near(user, tmp_path, "right")
     with pytest.raises(ValueError, match="function"):
-        user.fit_handle(handle, function=function)
+        user.fit_handle(handle, side="right", function=function)
+
+
+@pytest.mark.parametrize("side", ["up", "r", "", "Right"])
+def test_fit_handle_rejects_invalid_side(user, tmp_path, side):
+    handle = _handle_near(user, tmp_path, "right")
+    with pytest.raises(ValueError, match="side"):
+        user.fit_handle(handle, side=side)
 
 
 @pytest.mark.parametrize("distance", [0.0, -0.01, float("nan"), float("inf"), "0.01"])
 def test_fit_handle_rejects_invalid_soft_tissue_distance(user, tmp_path, distance):
     handle = _handle_near(user, tmp_path, "right")
     with pytest.raises(ValueError, match="soft_tissues_approximation_distance"):
-        user.fit_handle(handle, soft_tissues_approximation_distance=distance)
+        user.fit_handle(handle, side="right", soft_tissues_approximation_distance=distance)
 
 
 def test_fit_handle_rejects_non_body_handle(user):
     with pytest.raises(TypeError, match="opensim.Body"):
-        user.fit_handle(object())
+        user.fit_handle(object(), side="right")
 
 
 def test_fit_handle_rejects_handle_without_model(user):
@@ -198,18 +205,44 @@ def test_fit_handle_rejects_handle_without_model(user):
         "orphan", 0.1, opensim.Vec3(0, 0, 0), opensim.Inertia(1e-4, 1e-4, 1e-4)
     )
     with pytest.raises(ValueError, match="initialized OpenSim model"):
-        user.fit_handle(handle)
-
-
-def test_fit_handle_rejects_ambiguous_side(user, tmp_path):
-    # Far from both palms: neither hand can be inferred.
-    handle = _make_handle(tmp_path, np.array([0.0, 0.0, 0.0]))
-    with pytest.raises(ValueError, match="Cannot determine which hand"):
-        user.fit_handle(handle)
+        user.fit_handle(handle, side="right")
 
 
 @pytest.mark.parametrize("side", ["right", "left"])
-def test_fit_handle_infers_side_and_leaves_other_side_untouched(user, tmp_path, side):
+def test_fit_handle_leaves_other_side_untouched(user, tmp_path, side):
+    # Unlike the inner `_fit_handle_grip` engine (still side-inferring, see
+    # test_fit_handle_grip_infers_side_and_leaves_other_side_untouched
+    # below), the public `fit_handle` takes `side` explicitly and *does*
+    # move the fitted side's own shoulder/elbow (that is its whole point):
+    # only the untouched other side is asserted here.
+    other = "left" if side == "right" else "right"
+    other_suffix = "l" if other == "left" else "r"
+    before_other_fingers = {
+        key: user.finger_coordinate(other, *key).getValue(user.state)
+        for key in (("index", "mcp", "flexion"), ("thumb", "cmc", "opposition"))
+    }
+    before_other_shoulder_elbow = {
+        name: user.getCoordinateSet().get(name).getValue(user.state)
+        for name in (f"arm_flex_{other_suffix}", f"elbow_flex_{other_suffix}")
+    }
+
+    handle = _handle_near(user, tmp_path, side)
+    report = user.fit_handle(handle, side=side, function="push")
+
+    assert report["side"] == side
+    for key, value in before_other_fingers.items():
+        assert user.finger_coordinate(other, *key).getValue(user.state) == pytest.approx(value)
+        assert user.finger_coordinate(other, *key).getLocked(user.state)
+    for name, value in before_other_shoulder_elbow.items():
+        assert user.getCoordinateSet().get(name).getValue(user.state) == pytest.approx(value)
+
+
+@pytest.mark.parametrize("side", ["right", "left"])
+def test_fit_handle_grip_infers_side_and_leaves_other_side_untouched(user, tmp_path, side):
+    # `_fit_handle_grip` is the original fit_handle engine, kept unchanged:
+    # side is still inferred from palm proximity, and shoulder/elbow of
+    # *both* sides (including the fitted one) are still never touched, since
+    # this inner engine assumes the arm is already coarsely positioned.
     other = "left" if side == "right" else "right"
     other_suffix = "l" if other == "left" else "r"
     before_other_fingers = {
@@ -227,7 +260,7 @@ def test_fit_handle_infers_side_and_leaves_other_side_untouched(user, tmp_path, 
     }
 
     handle = _handle_near(user, tmp_path, side)
-    report = user.fit_handle(handle, function="push")
+    report = user._fit_handle_grip(handle, function="push")
 
     assert report["side"] == side
     for key, value in before_other_fingers.items():
@@ -237,17 +270,29 @@ def test_fit_handle_infers_side_and_leaves_other_side_untouched(user, tmp_path, 
         assert user.getCoordinateSet().get(name).getValue(user.state) == pytest.approx(value)
 
 
+def test_fit_handle_grip_rejects_ambiguous_side(user, tmp_path):
+    # Far from both palms: neither hand can be inferred. Only the inner
+    # `_fit_handle_grip` engine infers side at all; the public `fit_handle`
+    # takes it explicitly (see test_fit_handle_rejects_invalid_side above).
+    handle = _make_handle(tmp_path, np.array([0.0, 0.0, 0.0]))
+    with pytest.raises(ValueError, match="Cannot determine which hand"):
+        user._fit_handle_grip(handle)
+
+
 @pytest.mark.parametrize("side", ["right", "left"])
 def test_fit_handle_push_satisfies_contact_and_no_intersections(user, tmp_path, side):
     tolerance = 0.01
     handle = _handle_near(user, tmp_path, side)
 
-    report = user.fit_handle(handle, function="push", soft_tissues_approximation_distance=tolerance)
+    report = user.fit_handle(
+        handle, side=side, function="push", soft_tissues_approximation_distance=tolerance
+    )
 
-    assert report["function"] == "push"
-    assert report["solver_success"] is True
-    assert max(report["palm_handle_gaps_m"].values()) <= tolerance + 1e-6
-    assert min(report["palm_handle_gaps_m"].values()) >= -1e-6
+    assert report["side"] == side
+    assert report["grip"]["function"] == "push"
+    assert report["grip"]["solver_success"] is True
+    assert max(report["grip"]["palm_handle_gaps_m"].values()) <= tolerance + 1e-6
+    assert min(report["grip"]["palm_handle_gaps_m"].values()) >= -1e-6
     assert user.hand_surface_intersections(side) == ()
     assert user.hand_handle_intersections(side, handle) == ()
 
@@ -255,23 +300,25 @@ def test_fit_handle_push_satisfies_contact_and_no_intersections(user, tmp_path, 
 def test_fit_handle_pull_does_not_require_palm_contact(user, tmp_path):
     handle = _handle_near(user, tmp_path, "left")
 
-    report = user.fit_handle(handle, function="pull", soft_tissues_approximation_distance=0.01)
+    report = user.fit_handle(
+        handle, side="left", function="pull", soft_tissues_approximation_distance=0.01
+    )
 
-    assert report["function"] == "pull"
-    assert report["solver_success"] is True
+    assert report["grip"]["function"] == "pull"
+    assert report["grip"]["solver_success"] is True
     # Pull only has to avoid interference; it may leave the palm farther than
     # the push contact tolerance.
     assert user.hand_surface_intersections("left") == ()
     assert user.hand_handle_intersections("left", handle) == ()
     # The primary pull objective is finger wrap: expect every finger/thumb
     # capsule within a modest margin of the soft-tissue target gap.
-    deviations = [abs(gap - 0.01) for gap in report["finger_handle_gaps_m"].values()]
+    deviations = [abs(gap - 0.01) for gap in report["grip"]["finger_handle_gaps_m"].values()]
     assert max(deviations) < 0.015
 
 
 def test_fit_handle_unlocks_finger_coordinates_for_the_fitted_side(user, tmp_path):
     handle = _handle_near(user, tmp_path, "right")
-    report = user.fit_handle(handle, function="push")
+    report = user.fit_handle(handle, side="right", function="push")
     assert report["side"] == "right"
     for finger in ("index", "middle", "ring", "little"):
         coordinate = user.finger_coordinate("right", finger, "mcp", "flexion")
