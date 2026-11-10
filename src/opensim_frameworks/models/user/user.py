@@ -9,8 +9,9 @@ setter/getter pairs for the bundled model's native coordinates
 (:mod:`.neck_posture`), per-joint centre properties
 (:mod:`.joint_centers_generated`) and aggregated landmark/marker properties
 (:mod:`.landmarks`), anthropometric scaling internals (:mod:`.scaling`),
-derived body-segment measurements (:mod:`.segment_measurements`), and
-hand-to-grip fitting (:mod:`.hand_fitting`).
+derived body-segment measurements (:mod:`.segment_measurements`), finger
+coordinates and hand intersection checks (:mod:`.fingers`), and the grasp of
+a handle (:mod:`.grasp`).
 """
 
 from __future__ import annotations
@@ -30,8 +31,9 @@ from ...utils.opensim import (
     register_geometry_search_path,
 )
 from .data import DEFAULT_DATASET, resolve_reference
+from .fingers import _FingerMixin
+from .grasp import _GraspMixin
 from .hand import MOVING_HAND_SEGMENTS, add_articulated_hands
-from .hand_fitting import _HandFittingMixin
 from .joint_center_table import JOINT_CENTER_NAMES as _JOINT_CENTER_NAMES
 from .joint_centers_generated import _JointCenterMixin
 from .landmarks import _FOOT_MARKER_NAMES, _LandmarkMixin
@@ -90,7 +92,8 @@ class User(
     _AnthropometricScalingMixin,
     _LandmarkMixin,
     _SegmentMeasurementMixin,
-    _HandFittingMixin,
+    _FingerMixin,
+    _GraspMixin,
 ):
     """An ANSUR-based anthropometric user backed by an OpenSim model.
 
@@ -739,3 +742,22 @@ class User(
                 if body_set.contains(candidate):
                     expanded[candidate] = values
         return expanded
+
+    @property
+    def mesh_path(self) -> Path:
+        """Return the path to the bundled OpenSim model file.
+
+        Returns
+        -------
+        pathlib.Path
+            Path to ``rajagopalaiulrich2023.osim`` in the package's assets.
+        """
+        return DEFAULT_MESHES_DIR
+
+    @property
+    def meshes(self) -> list[Path]:
+        """List of all mesh files in the mesh directory."""
+        mesh_path = self.mesh_path
+        if mesh_path is None:
+            return []
+        return sorted(mesh_path.glob("*.vtp"))

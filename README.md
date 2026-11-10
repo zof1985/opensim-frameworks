@@ -744,8 +744,11 @@ and `VIEW_NAMES`.
 `extract_step_body_and_mesh`, and `weld_step_body_mesh_tree` are available
 from `opensim_frameworks.models.equipment`. `read_vtp_vertices`,
 `body_mass_center_array`, `get_referenced_meshes`, `vec3_to_numpy`,
-`numpy_to_vec3`, `rotation_to_numpy`, and `numpy_to_rotation` are also
-exposed from the top-level namespace.
+`numpy_to_vec3`, `rotation_to_numpy`, `numpy_to_rotation`, and
+`translate_model` are also exposed from the top-level namespace.
+`translate_model(model, state, axes, vector)` moves a model through its
+translational coordinates (for example `pelvis_tx/ty/tz` or a slider) by the
+projection of a Ground displacement on each coordinate's axis.
 `VisualErgonomicsFramework` is available from
 `opensim_frameworks.framework`. Geometric primitives and OpenSim body
 builders are exposed from `opensim_frameworks.bodies`, including `Box`,

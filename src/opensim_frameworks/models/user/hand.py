@@ -23,6 +23,7 @@ __all__ = [
     "FINGER_SEGMENTS",
     "MOVING_HAND_SEGMENTS",
     "JOINT_SEPARATION_MM",
+    "FINGER_MAX_FLEXION_DEG",
     "add_articulated_hands",
 ]
 
@@ -45,6 +46,11 @@ JOINT_SEPARATION_MM = {
     "little": (2.5, 0.0, 0.0),
     "thumb": (0.0, 1.25, 2.5),
 }
+
+# Maximum flexion of the MCP, PIP and DIP coordinates of the four fingers, in
+# degrees, as read by ``User.finger_angle`` (that is, relative to the corrected
+# reference pose of the hand, not absolute anatomical angles).
+FINGER_MAX_FLEXION_DEG = {"mcp": 90.0, "pip": 110.0, "dip": 70.0}
 
 
 def _vertices(mesh: Any, directory: Path) -> np.ndarray:
@@ -402,18 +408,20 @@ def add_articulated_hands(model: Any, opensim: Any, mesh_directory: Path) -> Non
                     abduction.setRangeMin(math.radians(-15))
                     abduction.setRangeMax(math.radians(30 if digit in ("index", "little") else 15))
                     abduction.set_locked(True)
-                    limits = (-50, 90)
+                    minimum = -50
                 else:
                     joint = opensim.PinJoint(
                         f"{digit}_{joint_name}_{side}",
                         parent_body, location, opensim.Vec3(0),
                         bodies[child_name], child_location, opensim.Vec3(0),
                     )
-                    limits = (0, 120) if joint_name == "pip" else (-30, 90)
+                    minimum = 0 if joint_name == "pip" else -30
                 coordinate = joint.updCoordinate(0)
                 coordinate.setName(f"{digit}_{joint_name}_flexion_{side}")
-                coordinate.setRangeMin(math.radians(limits[0]) - flexion)
-                coordinate.setRangeMax(math.radians(limits[1]) - flexion)
+                coordinate.setRangeMin(math.radians(minimum) - flexion)
+                # il massimo e' il valore della coordinata, cioe' quello letto da
+                # ``User.finger_angle``, non un angolo anatomico assoluto
+                coordinate.setRangeMax(math.radians(FINGER_MAX_FLEXION_DEG[joint_name]))
                 coordinate.set_locked(True)
                 model.addJoint(joint)
                 parent_body = bodies[child_name]

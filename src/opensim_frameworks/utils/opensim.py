@@ -23,11 +23,14 @@ __all__ = [
     "numpy_to_rotation",
     "local_to_global",
     "global_to_local",
+    "translate_model",
     "weld_bodies",
     "read_vtp_vertices",
     "body_mass_center_array",
     "get_referenced_meshes",
 ]
+
+
 def _ensure_visualizer_dll_path() -> None:
     if not sys.platform.startswith("win"):
         return
@@ -321,6 +324,73 @@ def global_to_local(frame: Any, state: Any, point: Any) -> Any:
     opensim = import_opensim()
     ground_point = _as_vec3(point, opensim)
     return frame.getTransformInGround(state).shiftBaseStationToFrame(ground_point)
+
+
+def translate_model(
+    model: Any,
+    state: Any,
+    axes: dict[str, Iterable[float]],
+    vector: Iterable[float],
+) -> np.ndarray:
+    """Translate a model through its translational coordinates.
+
+    Each coordinate named in ``axes`` is increased by the projection of
+    ``vector`` on its own translation axis, so the same call moves a user
+    (pelvis translations along x, y and z) or a seat (one slider along its
+    sliding direction).
+
+    Parameters
+    ----------
+    model
+        OpenSim model owning the coordinates.
+    state
+        State belonging to ``model``; it is updated and realized to Position.
+    axes : dict
+        Coordinate name to its translation axis in Ground. The axes must be
+        mutually orthogonal and non-zero; they are normalized here.
+    vector : iterable of float
+        Requested displacement in Ground, in metres.
+
+    Returns
+    -------
+    numpy.ndarray, shape (3,)
+        Displacement actually obtained, in metres. It differs from ``vector``
+        by its component outside the span of ``axes``.
+
+    Raises
+    ------
+    ValueError
+        If ``vector`` is not three finite numbers, or an axis is invalid.
+    RuntimeError
+        If a coordinate would leave its range. No coordinate is modified in
+        that case.
+    """
+    displacement = np.asarray(vector, dtype=float)
+    if displacement.shape != (3,) or not np.all(np.isfinite(displacement)):
+        raise ValueError("vector must contain three finite coordinates")
+    coordinates = model.getCoordinateSet()
+    achieved = np.zeros(3)
+    values = {}
+    for name, axis in axes.items():
+        direction = np.asarray(axis, dtype=float)
+        norm = np.linalg.norm(direction)
+        if direction.shape != (3,) or not np.isfinite(norm) or norm == 0.0:
+            raise ValueError(f"axis of {name} must be a non-zero 3D vector")
+        direction = direction / norm
+        coordinate = coordinates.get(name)
+        increment = float(displacement @ direction)
+        value = coordinate.getValue(state) + increment
+        if not coordinate.getRangeMin() <= value <= coordinate.getRangeMax():
+            raise RuntimeError(
+                f"{name}={value:.6g} outside its range "
+                f"[{coordinate.getRangeMin():.6g}, {coordinate.getRangeMax():.6g}]"
+            )
+        values[name] = value
+        achieved += increment * direction
+    for name, value in values.items():
+        coordinates.get(name).setValue(state, value, False)
+    model.realizePosition(state)
+    return achieved
 
 
 def _step_name(value: str, used: set[str]) -> str:
@@ -684,7 +754,9 @@ def read_vtp_vertices(paths: str | Path | Iterable[str | Path]) -> np.ndarray:
         try:
             path_values = tuple(paths)
         except TypeError as error:
-            raise TypeError("paths must be a VTP path or an iterable of paths") from error
+            raise TypeError(
+                "paths must be a VTP path or an iterable of paths"
+            ) from error
         if any(not isinstance(path, (str, Path)) for path in path_values):
             raise TypeError("all VTP paths must be strings or pathlib.Path instances")
         mesh_paths = tuple(Path(path).expanduser() for path in path_values)

@@ -470,15 +470,9 @@ class VTKVisualizer:
             actor = self._vtk.vtkActor()
             actor.SetMapper(mapper)
             body_name = body.getName().rsplit("/", 1)[-1]
-            # an actor's default (unset) material is plain white, which
-            # under VTK's default headlight looks indistinguishable from
-            # the light-gray background it was mistaken for exactly that,
-            # at a glance, more than once while debugging this module.
-            actor.GetProperty().SetColor(0.75, 0.76, 0.8)
+            color = geometry.getColor()
+            actor.GetProperty().SetColor(color.get(0), color.get(1), color.get(2))
             opacity = appearance.get_opacity()
-            if opacity < 1.0 or body_name.startswith("vision_cone_axis"):
-                color = geometry.getColor()
-                actor.GetProperty().SetColor(color.get(0), color.get(1), color.get(2))
             if opacity < 1.0:
                 actor.GetProperty().SetOpacity(opacity)
             if body_name.startswith("reach_"):

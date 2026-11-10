@@ -31,8 +31,19 @@ def test_hand_module_wildcard_exports():
         "FINGER_SEGMENTS",
         "MOVING_HAND_SEGMENTS",
         "JOINT_SEPARATION_MM",
+        "FINGER_MAX_FLEXION_DEG",
         "add_articulated_hands",
     }
+
+
+@pytest.mark.parametrize("side", ["right", "left"])
+@pytest.mark.parametrize("finger", ["index", "middle", "ring", "little"])
+def test_finger_flexion_maxima_are_the_documented_defaults(side, finger):
+    """The MCP, PIP and DIP flexion coordinates reach 90, 110 and 70 degrees."""
+    user = User("M", height_cm=175)
+    for joint, maximum in (("mcp", 90.0), ("pip", 110.0), ("dip", 70.0)):
+        coordinate = user.finger_coordinate(side, finger, joint, "flexion")
+        assert math.degrees(coordinate.getRangeMax()) == pytest.approx(maximum)
 
 
 def _finger_mesh_names(side):

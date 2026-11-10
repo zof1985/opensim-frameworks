@@ -324,3 +324,61 @@ def test_extract_step_body_and_mesh_can_preserve_input_trees():
 def test_extract_step_body_and_mesh_raises_for_missing_key():
     with pytest.raises(KeyError, match="not imported"):
         extract_step_body_and_mesh({}, {}, "missing")
+
+
+def _slider_model(range_max: float = 1.0):
+    """Body on a slider whose axis is Ground (cos 105 deg, sin 105 deg, 0)."""
+    model = opensim.Model()
+    body = _body("slid")
+    model.addBody(body)
+    orientation = opensim.Vec3(0, 0, np.radians(105))
+    joint = opensim.SliderJoint(
+        "slide",
+        model.getGround(),
+        opensim.Vec3(0, 0, 0),
+        orientation,
+        body,
+        opensim.Vec3(0, 0, 0),
+        orientation,
+    )
+    model.addJoint(joint)
+    coordinate = joint.updCoordinate()
+    coordinate.setName("slide_position")
+    coordinate.setRangeMin(0.0)
+    coordinate.setRangeMax(range_max)
+    state = model.initSystem()
+    model.realizePosition(state)
+    return model, body, state
+
+
+def test_translate_model_projects_the_displacement_on_each_axis():
+    model, body, state = _slider_model()
+    axis = np.array([np.cos(np.radians(105)), np.sin(np.radians(105)), 0.0])
+
+    achieved = osf.translate_model(
+        model, state, {"slide_position": tuple(axis)}, (0.1, 0.2, 0.3)
+    )
+
+    expected = (np.array([0.1, 0.2, 0.3]) @ axis) * axis
+    assert achieved == pytest.approx(expected)
+    position = osf.vec3_to_numpy(body.getTransformInGround(state).p())
+    assert position == pytest.approx(expected)
+
+
+def test_translate_model_raises_without_modifying_when_out_of_range():
+    model, body, state = _slider_model(range_max=0.05)
+    axis = (np.cos(np.radians(105)), np.sin(np.radians(105)), 0.0)
+
+    with pytest.raises(RuntimeError, match="outside its range"):
+        osf.translate_model(model, state, {"slide_position": axis}, (0.0, 1.0, 0.0))
+
+    coordinate = model.getCoordinateSet().get("slide_position")
+    assert coordinate.getValue(state) == 0.0
+
+
+@pytest.mark.parametrize("vector", [(1.0, 2.0), (np.nan, 0.0, 0.0)])
+def test_translate_model_rejects_invalid_vector(vector):
+    model, _, state = _slider_model()
+
+    with pytest.raises(ValueError, match="three finite"):
+        osf.translate_model(model, state, {"slide_position": (1, 0, 0)}, vector)
