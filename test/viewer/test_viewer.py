@@ -319,3 +319,33 @@ def test_save_animation_delegates_to_the_renderer(monkeypatch, tmp_path):
         "show_reachability": True,
         "show_vision_cone": True,
     }
+
+
+def test_save_player_delegates_with_model_and_basic_options(monkeypatch, tmp_path):
+    model = make_pin_model()
+    captured = {}
+
+    def fake_save(adapter, motion, path, **options):
+        captured.update(adapter=adapter, motion=motion, path=path, options=options)
+        return path
+
+    monkeypatch.setattr(viewer_module, "_save_player_executable", fake_save)
+    viewer = VTKViewer()
+    destination = tmp_path / "player.exe"
+    result = viewer.save_player(
+        model,
+        destination,
+        fps=24.0,
+        clean=True,
+    )
+
+    assert result == destination
+    assert captured["adapter"].model is model
+    assert captured["motion"] is None
+    assert captured["path"] == destination
+    assert captured["options"] == {
+        "fps": 24.0,
+        "clean": True,
+        "overwrite": True,
+        "path_map": None,
+    }

@@ -13,8 +13,9 @@ window embedding the (VTK-based, see :mod:`opensim_frameworks.viewer.visualizer`
   toggles, plus a preset-camera dropdown) -- unlike the playback controls,
   never disabled, since these act on the 3D view itself rather than a loaded
   motion.
-- Export (save the current view as a PNG, a loaded motion as an MP4, or
-  the marker/joint tables as ``.xlsx`` files -- see
+- Export (save the current view as a PNG or SVG, a loaded motion as an
+  MP4, the marker/joint tables as ``.xlsx`` files, or a self-contained
+  Windows player executable -- see
   :mod:`opensim_frameworks.viewer.export`); the animation button is disabled
   under the same condition as the playback controls, since there is
   nothing to animate without a loaded motion.
@@ -71,7 +72,7 @@ from typing import Any
 import numpy as np
 
 from . import export as _export
-from .tooltip import HoverTooltip
+from .tooltip import HoverTooltip, WidgetTooltip
 from .win32_embed import (
     IS_WINDOWS,
     embed_visualizer_window,
@@ -546,6 +547,7 @@ def start_player(
             "<ButtonRelease-1>", lambda event: user_is_dragging.update(value=False)
         )
         slider.grid(row=0, column=0, columnspan=3, padx=4, pady=(0, 2), sticky="ew")
+        WidgetTooltip(root, slider, "Drag to seek through the motion")
 
         ttk.Label(controls_frame, textvariable=time_var).grid(
             row=1, column=0, columnspan=3, pady=(0, 8)
@@ -595,6 +597,7 @@ def start_player(
             command=do_fast_backward,
         )
         rew_button.grid(row=0, column=0, padx=2)
+        WidgetTooltip(root, rew_button, "Play backward faster")
         play_button = ttk.Button(
             playback_group,
             text="▶",
@@ -603,6 +606,7 @@ def start_player(
             command=do_play_pause,
         )
         play_button.grid(row=0, column=1, padx=2)
+        WidgetTooltip(root, play_button, "Play or pause")
         stop_button = ttk.Button(
             playback_group,
             text="⏹",
@@ -611,6 +615,7 @@ def start_player(
             command=do_stop,
         )
         stop_button.grid(row=0, column=2, padx=2)
+        WidgetTooltip(root, stop_button, "Stop and return to the start")
         ff_button = ttk.Button(
             playback_group,
             text="⏩",
@@ -619,6 +624,7 @@ def start_player(
             command=do_fast_forward,
         )
         ff_button.grid(row=0, column=3, padx=2)
+        WidgetTooltip(root, ff_button, "Play forward faster")
         cycle_check = ttk.Checkbutton(
             playback_group,
             text="Cycle",
@@ -626,6 +632,7 @@ def start_player(
             command=do_toggle_loop,
         )
         cycle_check.grid(row=0, column=4, padx=(10, 2))
+        WidgetTooltip(root, cycle_check, "Repeat playback at the end")
 
         # Matches vtkActor's own default visibility (True), so this needs
         # no sync against the visualizer at startup -- ground_check's
@@ -643,6 +650,7 @@ def start_player(
             command=do_toggle_ground,
         )
         ground_check.grid(row=0, column=0, padx=2, sticky="w")
+        WidgetTooltip(root, ground_check, "Show or hide the ground grid")
 
         # Same deferred-read trick as ground_var above: these commands only
         # touch model.visualizer once a click can actually happen.
@@ -658,6 +666,7 @@ def start_player(
             command=do_toggle_muscles,
         )
         muscles_check.grid(row=0, column=1, padx=2, sticky="w")
+        WidgetTooltip(root, muscles_check, "Show or hide muscle paths")
 
         markers_var = tk.BooleanVar(value=True)
 
@@ -671,6 +680,7 @@ def start_player(
             command=do_toggle_markers,
         )
         markers_check.grid(row=0, column=2, padx=2, sticky="w")
+        WidgetTooltip(root, markers_check, "Show or hide markers")
 
         axes_var = tk.BooleanVar(value=True)
 
@@ -684,6 +694,7 @@ def start_player(
             command=do_toggle_axes,
         )
         axes_check.grid(row=0, column=3, padx=2, sticky="w")
+        WidgetTooltip(root, axes_check, "Show or hide the coordinate axes")
 
         vision_cone_var = tk.BooleanVar(value=True)
 
@@ -697,6 +708,7 @@ def start_player(
             command=do_toggle_vision_cone,
         )
         vision_cone_check.grid(row=2, column=0, columnspan=2, padx=2, sticky="w")
+        WidgetTooltip(root, vision_cone_check, "Show or hide the vision cone and axis")
 
         reachability_var = tk.BooleanVar(value=True)
 
@@ -710,6 +722,7 @@ def start_player(
             command=do_toggle_reachability,
         )
         reachability_check.grid(row=2, column=2, columnspan=2, padx=2, sticky="w")
+        WidgetTooltip(root, reachability_check, "Show or hide reachability regions")
 
         def do_set_view(event: Any = None) -> None:
             model.visualizer.set_view(view_var.get().lower())
@@ -727,18 +740,22 @@ def start_player(
         )
         view_combo.bind("<<ComboboxSelected>>", do_set_view)
         view_combo.grid(row=1, column=1, columnspan=2, pady=(6, 0), sticky="w")
+        WidgetTooltip(root, view_combo, "Choose a preset camera direction")
 
         def do_save_image() -> None:
             path = filedialog.asksaveasfilename(
                 parent=root,
                 title="Save image",
                 defaultextension=".png",
-                filetypes=[("PNG image", "*.png")],
+                filetypes=[("PNG image", "*.png"), ("SVG image", "*.svg")],
             )
             if not path:
                 return
             try:
-                _export.save_image(visualizer, path)
+                if Path(path).suffix.lower() == ".svg":
+                    visualizer.save_svg(path)
+                else:
+                    _export.save_image(visualizer, path)
             except (
                 Exception
             ) as error:  # noqa: BLE001 -- reported via a dialog, not swallowed
@@ -752,6 +769,7 @@ def start_player(
             command=do_save_image,
         )
         image_button.grid(row=0, column=0, padx=2)
+        WidgetTooltip(root, image_button, "Save the current view as PNG or SVG")
 
         def do_save_animation() -> None:
             path = filedialog.asksaveasfilename(
@@ -792,6 +810,7 @@ def start_player(
             command=do_save_animation,
         )
         animation_button.grid(row=0, column=1, padx=2)
+        WidgetTooltip(root, animation_button, "Export the motion as an MP4 video")
 
         def do_save_tables() -> None:
             directory = filedialog.askdirectory(
@@ -845,6 +864,151 @@ def start_player(
             command=do_save_tables,
         )
         tables_button.grid(row=0, column=2, padx=2)
+        WidgetTooltip(root, tables_button, "Export marker and joint tables as XLSX")
+
+        def ask_player_export() -> tuple[str, bool] | None:
+            dialog = tk.Toplevel(root)
+            dialog.title("Save standalone player")
+            dialog.transient(root)
+            dialog.resizable(False, False)
+            dialog.columnconfigure(0, weight=1)
+
+            path_var = tk.StringVar(master=dialog)
+            clean_var = tk.BooleanVar(master=dialog, value=False)
+            selection: list[tuple[str, bool]] = []
+
+            ttk.Label(dialog, text="Executable file").grid(
+                row=0, column=0, columnspan=2, padx=12, pady=(12, 4), sticky="w"
+            )
+            path_entry = ttk.Entry(dialog, textvariable=path_var, width=54)
+            path_entry.grid(row=1, column=0, padx=(12, 4), pady=4, sticky="ew")
+
+            def browse() -> None:
+                options: dict[str, str] = {"initialfile": "player.exe"}
+                current = path_var.get().strip()
+                if current:
+                    candidate = Path(current)
+                    options["initialfile"] = candidate.name
+                    if candidate.parent.is_dir():
+                        options["initialdir"] = str(candidate.parent)
+                selected = filedialog.asksaveasfilename(
+                    parent=dialog,
+                    title="Select executable path",
+                    defaultextension=".exe",
+                    filetypes=[("Windows executable", "*.exe")],
+                    **options,
+                )
+                if selected:
+                    path_var.set(selected)
+
+            ttk.Button(dialog, text="Browse...", command=browse).grid(
+                row=1, column=1, padx=(4, 12), pady=4
+            )
+
+            clean_check = ttk.Checkbutton(
+                dialog,
+                text="Clean build (rebuild cached player runtime)",
+                variable=clean_var,
+            )
+            clean_check.grid(
+                row=2, column=0, columnspan=2, padx=12, pady=(8, 4), sticky="w"
+            )
+            WidgetTooltip(
+                root,
+                clean_check,
+                "Rebuild the PyInstaller runtime instead of reusing the cached build",
+            )
+
+            def save() -> None:
+                raw_path = path_var.get().strip()
+                if not raw_path:
+                    messagebox.showwarning(
+                        "Missing file name",
+                        "Choose where to save the executable.",
+                        parent=dialog,
+                    )
+                    return
+                destination = Path(raw_path)
+                if destination.suffix.lower() != ".exe":
+                    if destination.suffix:
+                        messagebox.showerror(
+                            "Invalid file name",
+                            "The standalone player must be saved as an .exe file.",
+                            parent=dialog,
+                        )
+                        return
+                    destination = destination.with_suffix(".exe")
+                if destination.exists() and not messagebox.askyesno(
+                    "Overwrite executable",
+                    f"The file already exists:\n{destination}\n\nReplace it?",
+                    parent=dialog,
+                ):
+                    return
+                selection.append((str(destination), clean_var.get()))
+                dialog.destroy()
+
+            buttons = ttk.Frame(dialog)
+            buttons.grid(
+                row=3, column=0, columnspan=2, padx=12, pady=(8, 12), sticky="e"
+            )
+            ttk.Button(buttons, text="Cancel", command=dialog.destroy).pack(
+                side="right", padx=(4, 0)
+            )
+            ttk.Button(buttons, text="Save", command=save).pack(
+                side="right", padx=4
+            )
+            dialog.grab_set()
+            path_entry.focus_set()
+            root.wait_window(dialog)
+            return selection[0] if selection else None
+
+        def do_save_player() -> None:
+            selection = ask_player_export()
+            if selection is None:
+                return
+            path, clean = selection
+            was_playing = player is not None and player.playing
+            if was_playing:
+                player.play_pause()
+                play_button.config(text="▶")
+            original_time = None if player is None else player.time
+            root.config(cursor="wait")
+            root.update()
+            try:
+                from .standalone import save_player_executable
+
+                save_player_executable(
+                    model,
+                    data,
+                    path,
+                    fps=fps,
+                    clean=clean,
+                    overwrite=True,
+                    path_map=getattr(model, "path_map", None),
+                )
+            except Exception as error:  # noqa: BLE001 -- reported via a dialog
+                messagebox.showerror("Export failed", str(error), parent=root)
+            finally:
+                root.config(cursor="")
+                if data is not None:
+                    _apply_time(model, data, original_time)
+                if was_playing:
+                    player.play_pause()
+                    play_button.config(text="⏸")
+
+        player_button = ttk.Button(
+            export_group,
+            text="📦",
+            width=3,
+            style="Icon.TButton",
+            command=do_save_player,
+        )
+        player_button.grid(row=0, column=3, padx=2)
+        WidgetTooltip(
+            root,
+            player_button,
+            "Build a self-contained Windows player executable",
+        )
 
         playback_widgets = (
             slider,

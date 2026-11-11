@@ -4,10 +4,8 @@ from pathlib import Path
 
 MM_TO_M = 1e-3
 IRON_DENSITY_KG_M3 = 7870.0
-MESHES_DIR = (
-    Path(__file__).resolve().parents[1] / "bodies" / "assets" / "meshes"
-)
-DEFAULT_SIZE = (900, 700)
+MESHES_DIR = Path(__file__).resolve().parents[1] / "bodies" / "assets" / "meshes"
+DEFAULT_SIZE = (1920, 1080)
 VIEW_NAMES = ("front", "back", "left", "right", "top", "bottom")
 
 __all__ = [

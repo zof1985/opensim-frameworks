@@ -1,9 +1,8 @@
 """Vector SVG export of a VTK scene.
 
-VTK's GL2PS exporter rasterises the polygonal props drawn by the OpenGL2
-backend, so the scene is projected here with the active camera instead:
-every triangle becomes an SVG polygon (painter's algorithm, flat shading)
-and every polyline an SVG polyline.
+VTK's GL2PS exporter rasterises polygonal props. This implementation projects
+the scene with its active camera and writes visible polygons and polylines as
+SVG elements.
 """
 
 from __future__ import annotations
@@ -48,22 +47,7 @@ def _actor_geometry(vtk: Any, actor: Any) -> tuple[Any, Any] | None:
 
 
 def write_svg(renderer: Any, window_size: tuple[int, int], path: str | Path) -> Path:
-    """Write ``renderer``'s visible polygonal props as a vector SVG.
-
-    Parameters
-    ----------
-    renderer : vtkRenderer
-        Renderer whose actors and active camera define the picture.
-    window_size : tuple[int, int]
-        Picture size in pixels as ``(width, height)``.
-    path : str or pathlib.Path
-        Destination file.
-
-    Returns
-    -------
-    pathlib.Path
-        The destination path.
-    """
+    """Write ``renderer``'s visible polygonal props as a vector SVG."""
     import vtk
     from vtkmodules.util.numpy_support import vtk_to_numpy
 
@@ -72,12 +56,11 @@ def write_svg(renderer: Any, window_size: tuple[int, int], path: str | Path) -> 
     projection = camera.GetCompositeProjectionTransformMatrix(width / height, -1, 1)
     view = np.array([[projection.GetElement(r, c) for c in range(4)] for r in range(4)])
     view_matrix = camera.GetModelViewTransformMatrix()
-    model_view = np.array([[view_matrix.GetElement(r, c) for c in range(4)] for r in range(4)])
-
+    model_view = np.array(
+        [[view_matrix.GetElement(r, c) for c in range(4)] for r in range(4)]
+    )
     background = renderer.GetBackground()
-    # (depth, svg element) pairs; larger depth is further from the camera.
     elements: list[tuple[float, str]] = []
-
     actors = renderer.GetActors()
     actors.InitTraversal()
     for _ in range(actors.GetNumberOfItems()):
@@ -87,8 +70,7 @@ def write_svg(renderer: Any, window_size: tuple[int, int], path: str | Path) -> 
             continue
         poly, world_points = geometry
         clip = world_points @ view.T
-        w = clip[:, 3:4]
-        w = np.where(np.abs(w) < 1e-12, 1e-12, w)
+        w = np.where(np.abs(clip[:, 3:4]) < 1e-12, 1e-12, clip[:, 3:4])
         ndc = clip[:, :3] / w
         screen = np.column_stack(
             [(ndc[:, 0] + 1.0) / 2.0 * width, (1.0 - ndc[:, 1]) / 2.0 * height]
@@ -100,14 +82,20 @@ def write_svg(renderer: Any, window_size: tuple[int, int], path: str | Path) -> 
         opacity_attr = f' opacity="{opacity:.3f}"' if opacity < 1.0 else ""
 
         connectivity = vtk_to_numpy(poly.GetPolys().GetConnectivityArray())
-        triangles = connectivity.reshape(-1, 3) if connectivity.size else np.empty((0, 3), int)
+        triangles = (
+            connectivity.reshape(-1, 3) if connectivity.size else np.empty((0, 3), int)
+        )
         if len(triangles):
             eye = (world_points @ model_view.T)[:, :3]
             tri_eye = eye[triangles]
-            normals = np.cross(tri_eye[:, 1] - tri_eye[:, 0], tri_eye[:, 2] - tri_eye[:, 0])
+            normals = np.cross(
+                tri_eye[:, 1] - tri_eye[:, 0], tri_eye[:, 2] - tri_eye[:, 0]
+            )
             lengths = np.linalg.norm(normals, axis=1)
             lengths[lengths == 0] = 1.0
-            shade = 0.35 + 0.65 * np.abs((normals / lengths[:, None]) @ _LIGHT_DIRECTION)
+            shade = 0.35 + 0.65 * np.abs(
+                (normals / lengths[:, None]) @ _LIGHT_DIRECTION
+            )
             keep = visible[triangles].all(axis=1)
             for index in np.flatnonzero(keep):
                 polygon = screen[triangles[index]]

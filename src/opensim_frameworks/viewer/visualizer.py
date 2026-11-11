@@ -628,6 +628,21 @@ class VTKVisualizer:
         self._renderer.ResetCameraClippingRange()
         self._render_window.Render()
 
+    def get_camera(
+        self,
+    ) -> tuple[
+        tuple[float, float, float],
+        tuple[float, float, float],
+        tuple[float, float, float],
+    ]:
+        """Return the active camera's position, focal point, and up direction."""
+        camera = self._renderer.GetActiveCamera()
+        return (
+            tuple(camera.GetPosition()),
+            tuple(camera.GetFocalPoint()),
+            tuple(camera.GetViewUp()),
+        )
+
     def set_view(self, name: str) -> None:
         """Point the camera at one of :data:`VIEW_NAMES`'s preset directions.
 

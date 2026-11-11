@@ -16,7 +16,7 @@ from typing import Any
 
 from .win32_embed import IS_WINDOWS
 
-__all__ = ["HoverTooltip"]
+__all__ = ["HoverTooltip", "WidgetTooltip"]
 
 _BG = "#2b2b2b"
 _FG = "#ffffff"
@@ -155,4 +155,53 @@ class HoverTooltip:
         pointer_x = self._root.winfo_pointerx() + _OFFSET
         pointer_y = self._root.winfo_pointery() + _OFFSET
         self._window.geometry(f"{width}x{height}+{pointer_x}+{pointer_y}")
+        self._window.deiconify()
+
+
+class WidgetTooltip:
+    """Show a short text tooltip after the pointer rests on a widget."""
+
+    def __init__(self, root: Any, widget: Any, text: str, *, delay_ms: int = 1000):
+        import tkinter as tk
+
+        self._root = root
+        self._widget = widget
+        self._text = text
+        self._delay_ms = delay_ms
+        self._after_id: str | None = None
+        self._window = tk.Toplevel(root)
+        self._window.withdraw()
+        self._window.overrideredirect(True)
+        self._window.attributes("-topmost", True)
+        tk.Label(
+            self._window,
+            text=text,
+            bg=_BG,
+            fg=_FG,
+            padx=8,
+            pady=4,
+            relief="solid",
+            borderwidth=1,
+        ).pack()
+        widget.bind("<Enter>", self._schedule, add="+")
+        widget.bind("<Leave>", self._cancel, add="+")
+        widget.bind("<ButtonPress>", self._cancel, add="+")
+
+    def _schedule(self, _event: Any = None) -> None:
+        self._cancel()
+        self._after_id = self._root.after(self._delay_ms, self._show)
+
+    def _cancel(self, _event: Any = None) -> None:
+        if self._after_id is not None:
+            self._root.after_cancel(self._after_id)
+            self._after_id = None
+        self._window.withdraw()
+
+    def _show(self) -> None:
+        self._after_id = None
+        if not self._widget.winfo_exists():
+            return
+        x = self._root.winfo_pointerx() + _OFFSET
+        y = self._root.winfo_pointery() + _OFFSET
+        self._window.geometry(f"+{x}+{y}")
         self._window.deiconify()

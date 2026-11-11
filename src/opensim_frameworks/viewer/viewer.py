@@ -14,6 +14,10 @@ from ..utils.opensim import import_opensim
 from .animation import _ViewerModel, save_animation as _render_animation
 from .export import export_tables_to_xlsx as _export_tables, save_image as _save_image
 from .player import MotionData, PlayerWindow, _apply_time, start_player
+from .standalone import (
+    _player_runtime as _prepare_player_runtime,
+    save_player_executable as _save_player_executable,
+)
 from .visualizer import VTKVisualizer
 
 __all__ = ["VTKViewer"]
@@ -103,6 +107,91 @@ class VTKViewer:
         # Lets the player's xlsx export restore the members' original names.
         adapter.path_map = path_map
         return start_player(adapter, motion, loop=loop, fps=fps)
+
+    def save_player(
+        self,
+        object: Framework | Any,
+        path: str | Path,
+        motion: Any = None,
+        *,
+        fps: float = 30.0,
+        clean: bool = False,
+        overwrite: bool = True,
+    ) -> Path:
+        """Build a self-contained Windows player executable.
+
+        The model is sampled and its VTK geometry is packaged frame by frame.
+        The generated executable keeps the interactive camera, visibility,
+        playback, and export controls, but does not include or load OpenSim.
+
+        Parameters
+        ----------
+        object : opensim.Model or Framework
+            Model or framework to package.
+        path : str or pathlib.Path
+            Destination ``.exe`` file.
+        motion : str, pathlib.Path, opensim.TimeSeriesTable, or None
+            Optional motion to precalculate into the player.
+        fps : float, default=30.0
+            Frame rate used for the precalculated motion and MP4 export.
+        clean : bool, default=False
+            Rebuild the model-independent PyInstaller runtime instead of
+            reusing a compatible cached build.
+        overwrite : bool, default=True
+            Replace an existing executable at ``path``.
+
+        Returns
+        -------
+        pathlib.Path
+            The generated executable path.
+
+        Notes
+        -----
+        The exported player starts with standard size, camera, visibility, and
+        loop settings. If ``motion`` is provided, its animation is included;
+        the current player window's view and playback-control settings are not
+        copied.
+
+        The model-independent PyInstaller runtime is cached in AppData and
+        reused by later exports. If that location is not writable, the runtime
+        is built in a temporary directory, with a warning, and removed after
+        the executable is created.
+
+        Raises
+        ------
+        ImportError
+            If PyInstaller is not installed.
+        RuntimeError
+            If the current platform is not Windows.
+        FileExistsError
+            If the destination exists and ``overwrite`` is false.
+        """
+        model, path_map = self._native_model_and_map(object)
+        adapter = _ViewerModel(model)
+        try:
+            adapter.state = self._opensim.State(model.getWorkingState())
+        except RuntimeError:
+            adapter.state = self._opensim.State(adapter.state)
+        adapter.path_map = path_map
+        data = None if motion is None else MotionData(adapter, self._table(motion))
+        return _save_player_executable(
+            adapter,
+            data,
+            path,
+            fps=fps,
+            clean=clean,
+            overwrite=overwrite,
+            path_map=path_map,
+        )
+
+    def prepare_player_export(self) -> None:
+        """Prebuild the reusable runtime for future :meth:`save_player` calls.
+
+        If the persistent cache is unavailable, the temporary build is removed
+        after this call and will need to be rebuilt during export.
+        """
+        with _prepare_player_runtime():
+            pass
 
     def save_snapshot(
         self,

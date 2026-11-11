@@ -17,12 +17,11 @@ dependencies = [
     "imageio>=2.30",
     "imageio-ffmpeg>=0.4",
     "openpyxl>=3.1",
+    "pyinstaller>=6",
+    "opensim",
+    "pythonocc-core>=7.7",
+    "pytest>=8",
 ]
-
-[project.optional-dependencies]
-opensim = ["opensim"]
-step = ["pythonocc-core>=7.7"]
-test = ["pytest>=8"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
