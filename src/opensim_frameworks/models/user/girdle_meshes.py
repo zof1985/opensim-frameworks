@@ -256,11 +256,13 @@ def attach_girdle_meshes(model: Any, opensim: Any) -> None:
             frame = opensim.PhysicalOffsetFrame(
                 f"{bone}_{side}_mesh_frame", body, opensim.Transform()
             )
+            # the frame joins the body first: a mesh attached to a frame that
+            # is not yet connected to the model makes OpenSim log an error
+            body.addComponent(frame)
             mesh = opensim.Mesh(files[side])
             mesh.setName(f"{bone}_{side}_geom")
             mesh.setColor(thorax.getColor())
             frame.attachGeometry(mesh)
-            body.addComponent(frame)
     update_girdle_meshes(model, opensim)
 
 
