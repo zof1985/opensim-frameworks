@@ -41,7 +41,11 @@ from .mapping import segment_scale_factors
 from .measurement_generated import _MeasurementMixin
 from .neck_posture import _NeckPostureMixin
 from .posture_generated import _PostureMixin
+from .scapulothoracic import _ScapulothoracicMixin
+from .scapular_protraction import _ScapularProtractionMixin
 from .scaling import _AnthropometricScalingMixin, _validate_mass_kg
+from .girdle_meshes import attach_girdle_meshes, update_girdle_meshes
+from .shoulder import CLAVICLE_TO_BIACROMIAL_RATIO, add_shoulder_girdle
 from .segment_measurements import _SegmentMeasurementMixin
 
 __all__ = ["User"]
@@ -94,6 +98,8 @@ class User(
     _SegmentMeasurementMixin,
     _FingerMixin,
     _GraspMixin,
+    _ScapulothoracicMixin,
+    _ScapularProtractionMixin,
 ):
     """An ANSUR-based anthropometric user backed by an OpenSim model.
 
@@ -234,6 +240,18 @@ class User(
             self.gender, percentile=50.0, dataset=dataset
         )
         self._add_anatomical_bodies()
+        # Insert clavicle and scapula between torso and humerus.
+        # Its length is a fraction of the biacromial breadth (estimate).
+        add_shoulder_girdle(
+            self,
+            opensim,
+            _remove_segment_mass,
+            CLAVICLE_TO_BIACROMIAL_RATIO
+            * self._baseline.values["biacromialbreadth"]
+            / 1000.0,
+        )
+        # The bones of the girdle are drawn on the bodies that move them.
+        attach_girdle_meshes(self, opensim)
         # Split the hand meshes into articulated bodies before initialization.
         add_articulated_hands(self, opensim, DEFAULT_MESHES_DIR)
         self.finalizeConnections()
@@ -535,6 +553,8 @@ class User(
             scale.setApply(True)
             scale_set.adoptAndAppend(scale)
         self.scale(self.state, scale_set, True)
+        # the meshes of clavicles and scapulae follow the new scale
+        update_girdle_meshes(self, self.opensim)
         for side in ("left", "right"):
             marker = self.getMarkerSet().get("LPALM" if side == "left" else "RPALM")
             marker.set_location(

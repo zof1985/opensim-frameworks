@@ -39,9 +39,9 @@ DEFAULT_BODY_NAMES = (
 SEGMENT_MEASURES: Mapping[str, tuple[tuple[str, str, str], ...]] = {
     "pelvis": (("hipbreadth", "pelvis", "x"), ("buttockdepth", "pelvis", "z")),
     "torso": (
-        ("chestbreadth", "torso", "x"),
+        ("chestdepth", "torso", "x"),
         ("sittingheight", "torso", "y"),
-        ("chestdepth", "torso", "z"),
+        ("chestbreadth", "torso", "z"),
     ),
     "neck": (("neckcircumference", "neck", "x"), ("neckcircumference", "neck", "z")),
     "femur": (("buttockkneelength", "femur", "y"),),
@@ -95,4 +95,13 @@ def segment_scale_factors(
                 continue
             axes = factors.setdefault(body, [stature_ratio] * 3)
             axes["xyz".index(axis)] = target_value / base_value
+    # The shoulder girdle bodies are drawn in torso-aligned frames: they follow
+    # the torso scaling along x and y, and the biacromial breadth along the
+    # lateral axis z, so that the clavicle length stays proportional to it.
+    biacromial_target = target.values.get("biacromialbreadth")
+    biacromial_base = baseline.values.get("biacromialbreadth")
+    for body in ("clavicle", "scapula"):
+        factors[body] = list(factors["torso"])
+        if biacromial_target is not None and biacromial_base:
+            factors[body][2] = biacromial_target / biacromial_base
     return {body: tuple(axes) for body, axes in factors.items()}

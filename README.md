@@ -238,6 +238,43 @@ There are no finger muscles or general hand-object surface-contact model.
 Neither moving the fingers nor a marker coincidence establishes a realistic
 grip or guarantees absence of penetration.
 
+The clavicles and the scapulae move with the shoulder girdle (`sc_*` and `ac_*`
+coordinates), so their meshes are drawn on the bodies `clavicle_<side>` and
+`scapula_<side>`. The bundled model has them in the same mesh as the thorax
+(`hat_ribs_scap.vtp`); `models/user/girdle_meshes.py` splits it, keeping the
+original, into `hat_ribs_torso.vtp`, `hat_clavicle_<side>.vtp` and
+`hat_scapula_<side>.vtp` (run `python -m opensim_frameworks.models.user.girdle_meshes` or
+`split_thorax_mesh(overwrite=True)`; the files are written in ASCII, as OpenSim
+requires). With the girdle at zero the thorax and the
+scapulae are exactly where they were before the split (checked on the vertices
+at 175 and 205 cm); the clavicle mesh is only adapted visually (scaled along its
+axis, about +19 % to +22 %, and moved so that its ends coincide with the
+sternoclavicular and acromioclavicular centres); no kinematic quantity depends
+on it.
+
+The shoulder girdle can be driven by ONE angle, the protraction of the scapula
+(`user.set_right_scapular_protraction(degrees)`, `user.right_scapular_protraction`
+and the left-side equivalents; positive protracts, the shoulder goes forward,
+negative retracts; degrees). The other four coordinates (`sc_elevation`,
+`ac_protraction`, `ac_upward_rotation`, `ac_axial_rotation`) are computed so that
+the scapula stays in contact with the rib cage (the `scapulothoracic_*`
+residuals, kept as diagnostics), the height of the glenohumeral centre in the
+torso frame is that of the rest pose (its lateral position is free), and, among
+the solutions, the norm of the four coordinates from the rest pose is minimal.
+The map is the nominal table of `scapular_protraction.NOMINAL_MAP` (values of the
+biomechanics specialist: scapula at about 1 mm from the thorax mesh, height of the
+glenohumeral centre as at rest, minimum norm; nearly independent of size), interpolated
+with a monotone cubic. At the first use per user and side it is sampled every 2.5
+degrees and each sample is checked with the exact collision of the scapula mesh against
+the thorax and spine meshes (`opensim_frameworks.collision_detector`, both orders): the
+samples that collide are excluded and `user.right_scapular_protraction_range`
+(`left_...`) is the contiguous interval of valid values around the rest pose, -15 to
++25 degrees at 175 and 205 cm. A value outside it raises `ValueError` (no clamping).
+`user.scapular_girdle_from_protraction("r", degrees)` returns the four dependent
+coordinates for solvers. The cache is rebuilt when the user is rescaled. At
+`sc_protraction = 0` the dependent coordinates are not exactly zero (up to 0.6 degrees):
+the contact target is 1 mm, not the 0.3 mm of the rest pose.
+
 `to_osim()` exports the scaled model in its current pose. By default, it also
 copies referenced meshes into a `Geometry` directory next to the `.osim` file.
 `show()` opens the interactive viewer for the model.
