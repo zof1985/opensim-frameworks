@@ -382,3 +382,51 @@ def test_translate_model_rejects_invalid_vector(vector):
 
     with pytest.raises(ValueError, match="three finite"):
         osf.translate_model(model, state, {"slide_position": (1, 0, 0)}, vector)
+
+
+def test_extend_coordinate_range_widens_only_in_the_given_units():
+    model, _, _ = _slider_model(range_max=0.5)
+    coordinate = model.getCoordinateSet().get("slide_position")
+
+    # a translation is in metres whatever the units
+    assert not osf.extend_coordinate_range(model, "slide_position", 0.1, 0.4)
+    assert (coordinate.getRangeMin(), coordinate.getRangeMax()) == (0.0, 0.5)
+    assert osf.extend_coordinate_range(model, "slide_position", -0.2, 0.9, "native")
+    assert (coordinate.getRangeMin(), coordinate.getRangeMax()) == (-0.2, 0.9)
+
+
+def test_extend_coordinate_range_converts_degrees_for_a_rotation():
+    model = opensim.Model()
+    body = _body("turning")
+    model.addBody(body)
+    joint = opensim.PinJoint(
+        "pin",
+        model.getGround(),
+        opensim.Vec3(0, 0, 0),
+        opensim.Vec3(0, 0, 0),
+        body,
+        opensim.Vec3(0, 0, 0),
+        opensim.Vec3(0, 0, 0),
+    )
+    model.addJoint(joint)
+    coordinate = joint.updCoordinate()
+    coordinate.setName("angle")
+    coordinate.setRangeMin(0.0)
+    coordinate.setRangeMax(np.radians(120.0))
+
+    assert osf.extend_coordinate_range(model, "angle", None, 150.0)
+    assert coordinate.getRangeMax() == pytest.approx(np.radians(150.0))
+    assert osf.extend_coordinate_range(model, "angle", None, 2.7, "radians")
+    assert coordinate.getRangeMax() == pytest.approx(2.7)
+    assert coordinate.getRangeMin() == 0.0
+    # with the new range the model initialises with a default beyond the old one
+    coordinate.setDefaultValue(np.radians(150.0))
+    assert model.initSystem() is not None
+
+
+@pytest.mark.parametrize("units, value", [("turns", 1.0), ("degrees", float("nan"))])
+def test_extend_coordinate_range_rejects_invalid_arguments(units, value):
+    model, _, _ = _slider_model()
+
+    with pytest.raises(ValueError):
+        osf.extend_coordinate_range(model, "slide_position", None, value, units)

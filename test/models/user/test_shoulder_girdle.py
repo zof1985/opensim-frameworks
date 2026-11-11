@@ -372,3 +372,36 @@ def test_protraction_map_has_no_penetration_in_the_admissible_range(user):
 
     inside = (built.grid >= built.low) & (built.grid <= built.high)
     assert np.all(built.contacts[inside] <= built.rest_contacts)
+
+
+# -- Widening of the range of a coordinate.
+
+
+def test_extend_coordinate_range_widens_only_and_keeps_the_value(user):
+    coordinate = user.getCoordinateSet().get("pro_sup_r")
+    low, high = coordinate.getRangeMin(), coordinate.getRangeMax()
+
+    assert not user.extend_coordinate_range("pro_sup_r", 10.0, 100.0)
+    assert (coordinate.getRangeMin(), coordinate.getRangeMax()) == (low, high)
+    assert user.extend_coordinate_range("pro_sup_r", None, np.degrees(high) + 30.0)
+    try:
+        assert coordinate.getRangeMax() == pytest.approx(high + np.radians(30.0))
+        assert coordinate.getRangeMin() == low
+        with pytest.raises(ValueError):
+            user.extend_coordinate_range("pro_sup_r", float("nan"), None)
+    finally:
+        coordinate.setRangeMax(high)
+
+
+def test_framework_merges_a_model_with_a_value_outside_the_original_range():
+    from opensim_frameworks import Framework
+
+    fitted = User("M", height_cm=175)
+    maximum = fitted.getCoordinateSet().get("pro_sup_r").getRangeMax()
+    fitted._set_coordinate_degrees("pro_sup_r", np.degrees(maximum) + 20.0)
+    fitted.extend_coordinate_range("pro_sup_r", None, np.degrees(maximum) + 25.0)
+    fitted.reinitialize()
+
+    merged = Framework(user=fitted).merge_to_model()
+
+    assert merged.initSystem() is not None

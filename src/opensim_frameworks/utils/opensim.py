@@ -24,6 +24,7 @@ __all__ = [
     "local_to_global",
     "global_to_local",
     "translate_model",
+    "extend_coordinate_range",
     "weld_bodies",
     "read_vtp_vertices",
     "body_mass_center_array",
@@ -324,6 +325,73 @@ def global_to_local(frame: Any, state: Any, point: Any) -> Any:
     opensim = import_opensim()
     ground_point = _as_vec3(point, opensim)
     return frame.getTransformInGround(state).shiftBaseStationToFrame(ground_point)
+
+
+def extend_coordinate_range(
+    model: Any,
+    name: str,
+    minimum: float | None = None,
+    maximum: float | None = None,
+    units: str = "degrees",
+) -> bool:
+    """Widen the range of a coordinate so that it contains given values.
+
+    The range is only ever widened, never narrowed; the value, the default
+    value and the ``clamped`` flag of the coordinate are left as they are.
+    OpenSim does not clamp the state when a value is set outside the range
+    (``Coordinate.setValue`` with ``enforceConstraints=False``), but it
+    refuses to initialise a system whose default value is outside it
+    (``Default coordinate value is greater than range maximum``), which is
+    what happens when a model driven without joint limits is merged into a
+    framework or shown by the viewer. The function neither reads nor needs a
+    state: re-initialise the model afterwards (``model.initSystem()``, or the
+    ``reinitialize`` of the owner of the model, which also copies the current
+    values to the defaults) so that the new range takes effect.
+
+    Parameters
+    ----------
+    model
+        OpenSim model owning the coordinate.
+    name : str
+        Name of the coordinate.
+    minimum, maximum : float or None, optional
+        Values that the range must contain; None leaves that end as it is.
+    units : {"degrees", "radians", "native"}, default="degrees"
+        Unit of `minimum` and `maximum`. For a rotational coordinate
+        "degrees" converts to radians, the unit of OpenSim; "radians" and
+        "native" (and any unit for a translational coordinate, always in
+        metres) use the values as they are.
+
+    Returns
+    -------
+    bool
+        True if the range was widened.
+
+    Raises
+    ------
+    ValueError
+        If `units` is not valid or a limit is not finite.
+    """
+    if units not in ("degrees", "radians", "native"):
+        raise ValueError("units must be 'degrees', 'radians' or 'native'")
+    opensim = import_opensim()
+    coordinate = model.getCoordinateSet().get(name)
+    rotational = coordinate.getMotionType() == opensim.Coordinate.Rotational
+    scale = math.pi / 180.0 if (rotational and units == "degrees") else 1.0
+    widened = False
+    for value, current, setter, better in (
+        (minimum, coordinate.getRangeMin(), coordinate.setRangeMin, min),
+        (maximum, coordinate.getRangeMax(), coordinate.setRangeMax, max),
+    ):
+        if value is None:
+            continue
+        if not math.isfinite(value):
+            raise ValueError("range limit must be finite")
+        target = better(current, value * scale)
+        if target != current:
+            setter(target)
+            widened = True
+    return widened
 
 
 def translate_model(

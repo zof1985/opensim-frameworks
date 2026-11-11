@@ -275,6 +275,17 @@ coordinates for solvers. The cache is rebuilt when the user is rescaled. At
 `sc_protraction = 0` the dependent coordinates are not exactly zero (up to 0.6 degrees):
 the contact target is 1 mm, not the 0.3 mm of the rest pose.
 
+`opensim_frameworks.extend_coordinate_range(model, name, minimum, maximum, units="degrees")`
+(`utils/opensim.py`, for any `opensim.Model`) widens the range of a coordinate so that it
+contains the given values; it never narrows a range and leaves the value, the default
+and the `clamped` flag as they are (`User.extend_coordinate_range(name, minimum, maximum)`
+is a thin adapter, in degrees for rotations). OpenSim does not clamp the state when a
+value is set outside the range of a coordinate, but `initSystem()` refuses a default
+value outside it, which makes `Framework.merge_to_model()` and the viewer fail for a
+pose or a motion obtained without joint limits: widen the ranges, then re-initialise
+(`model.initSystem()`, or `user.reinitialize()`, which copies the current values to the
+defaults and gives the user a new state).
+
 `to_osim()` exports the scaled model in its current pose. By default, it also
 copies referenced meshes into a `Geometry` directory next to the `.osim` file.
 `show()` opens the interactive viewer for the model.

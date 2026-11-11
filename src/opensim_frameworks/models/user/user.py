@@ -25,6 +25,7 @@ import numpy as np
 
 from ...bodies.shapes import MESHES_DIR
 from ...utils.opensim import (
+    extend_coordinate_range,
     get_referenced_meshes,
     import_opensim,
     read_vtp_vertices,
@@ -749,6 +750,35 @@ class User(
         self.getCoordinateSet().get(name).setValue(
             self.state, math.radians(degrees), False
         )
+
+    def extend_coordinate_range(
+        self, name: str, minimum: float | None = None, maximum: float | None = None
+    ) -> bool:
+        """Widen the range of a coordinate of the user, in degrees if rotational.
+
+        Thin adapter of :func:`opensim_frameworks.extend_coordinate_range`
+        (degrees for rotations, metres for translations); call
+        :meth:`reinitialize` afterwards so that the defaults and the state
+        follow.
+
+        Parameters
+        ----------
+        name : str
+            Name of the coordinate (for instance ``"pro_sup_r"``).
+        minimum, maximum : float or None, optional
+            Values that the range must contain.
+
+        Returns
+        -------
+        bool
+            True if the range was widened.
+
+        Raises
+        ------
+        ValueError
+            If a value is not finite.
+        """
+        return extend_coordinate_range(self, name, minimum, maximum, units="degrees")
 
     def _coordinate_degrees(self, name: str) -> float:
         value = self.getCoordinateSet().get(name).getValue(self.state)
