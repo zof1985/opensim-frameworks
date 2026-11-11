@@ -12,7 +12,7 @@ from ..framework import Framework
 from ..utils.constants import DEFAULT_SIZE
 from ..utils.opensim import import_opensim
 from .animation import _ViewerModel, save_animation as _render_animation
-from .export import save_image as _save_image
+from .export import export_tables_to_xlsx as _export_tables, save_image as _save_image
 from .player import MotionData, PlayerWindow, _apply_time, start_player
 from .visualizer import VTKVisualizer
 
@@ -46,6 +46,11 @@ class VTKViewer:
 
     def __init__(self) -> None:
         self._opensim = import_opensim()
+
+    def _native_model_and_map(self, obj: Any) -> tuple[Any, Any]:
+        if isinstance(obj, Framework):
+            return obj.merge_to_model(return_mapping=True)
+        return self._native_model(obj), None
 
     def _native_model(self, obj: Any) -> Any:
         if isinstance(obj, Framework):
@@ -93,8 +98,11 @@ class VTKViewer:
         TypeError
             If ``object`` is neither an OpenSim model nor a ``Framework``.
         """
-        model = self._native_model(object)
-        return start_player(_ViewerModel(model), motion, loop=loop, fps=fps)
+        model, path_map = self._native_model_and_map(object)
+        adapter = _ViewerModel(model)
+        # Lets the player's xlsx export restore the members' original names.
+        adapter.path_map = path_map
+        return start_player(adapter, motion, loop=loop, fps=fps)
 
     def save_snapshot(
         self,
@@ -316,3 +324,60 @@ class VTKViewer:
             show_reachability=show_reachability,
             show_vision_cone=show_vision_cone,
         )
+
+    def save_tables(
+        self,
+        object: Framework | Any,
+        directory: str | Path,
+        motion: Any = None,
+        *,
+        overwrite: bool = False,
+    ) -> list[Path]:
+        """Export marker and joint tables to ``.xlsx`` files without a window.
+
+        Same export as the viewer's Export button: one file per framework
+        member (``<member>.xlsx``) or a single file for a model, each with a
+        ``markers`` sheet (Ground-frame ``X``/``Y``/``Z`` per marker, metres)
+        and a ``joints`` sheet (one column per coordinate, degrees for
+        rotational and metres for translational, locked ones included), with
+        a ``time [s]`` column and one row per row of ``motion`` (a single row
+        at time 0 without a motion).
+
+        Parameters
+        ----------
+        object : opensim.Model or Framework
+            Model or framework to export. It is not modified.
+        directory : str or pathlib.Path
+            Destination directory, created when missing.
+        motion : str, pathlib.Path, opensim.TimeSeriesTable, or None, default=None
+            Motion whose coordinate columns drive the model; ``None`` exports
+            the current pose.
+        overwrite : bool, default=False
+            Replace existing files. When ``False``, ``FileExistsError`` is
+            raised before anything is written if a target file exists (the
+            safe default, since several files are produced at once).
+
+        Returns
+        -------
+        list[pathlib.Path]
+            The files written.
+
+        Raises
+        ------
+        FileExistsError
+            If a target file exists and ``overwrite`` is ``False``.
+        ImportError
+            If ``openpyxl`` is not installed.
+        ValueError
+            If ``motion`` has fewer than 2 rows or two members map to the
+            same file name.
+        """
+        model, path_map = self._native_model_and_map(object)
+        meta = _ViewerModel(model)
+        # Work on a copy of the state so the given model keeps its pose.
+        try:
+            meta.state = self._opensim.State(model.getWorkingState())
+        except RuntimeError:
+            meta.state = self._opensim.State(meta.state)
+        data = None if motion is None else MotionData(meta, self._table(motion))
+        return _export_tables(meta, data, directory, path_map=path_map, overwrite=overwrite)

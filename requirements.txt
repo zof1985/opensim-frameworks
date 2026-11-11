@@ -6,6 +6,7 @@ sv-ttk>=2.6
 Pillow>=9
 imageio>=2.30
 imageio-ffmpeg>=0.4
+openpyxl>=3.1
 opensim
 pythonocc-core>=7.7
 pytest>=8

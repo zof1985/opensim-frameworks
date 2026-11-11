@@ -1665,3 +1665,33 @@ class Framework(dict[str, opensim.Model]):
         from ..viewer import VTKViewer
 
         return VTKViewer().show(self, motion, loop=loop, fps=fps)
+
+    def save_tables(
+        self,
+        directory: Any,
+        motion: Any = None,
+        *,
+        overwrite: bool = False,
+    ) -> list[Any]:
+        """Export marker and joint tables of this framework to ``.xlsx`` files.
+
+        Shortcut for :meth:`opensim_frameworks.viewer.VTKViewer.save_tables`,
+        mirroring :meth:`show`: one file per member model.
+
+        Parameters
+        ----------
+        directory : str or pathlib.Path
+            Destination directory, created when missing.
+        motion : str, pathlib.Path, opensim.TimeSeriesTable, or None, default=None
+            Optional motion; ``None`` exports the current pose.
+        overwrite : bool, default=False
+            Replace existing files instead of raising ``FileExistsError``.
+
+        Returns
+        -------
+        list[pathlib.Path]
+            The files written.
+        """
+        from ..viewer import VTKViewer
+
+        return VTKViewer().save_tables(self, directory, motion, overwrite=overwrite)

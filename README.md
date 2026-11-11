@@ -768,6 +768,36 @@ additionally accepts a `Framework`. If any camera option is supplied, omitted
 vectors retain their current automatic values. `User.show()` and
 `Framework.show()` also provide a shortcut to open the viewer.
 
+### Export marker and joint tables (xlsx)
+
+```python
+files = viewer.save_tables(framework, "output/tables", motion="motion.sto")
+files = framework.save_tables("output/tables", motion="motion.sto", overwrite=True)
+```
+
+`save_tables()` (also `Framework.save_tables()`, like `show()`) writes
+`.xlsx` files without opening a window and returns the list of files. The
+viewer's Export window has the same command (the table button): it asks for a
+directory, confirms before replacing existing files and restores the pose that
+was shown. A `Framework` gives one `<member>.xlsx` per member model, with the
+members' original marker and coordinate names (not the prefixed composite
+ones); a single model gives one file named after the model. Each file has two
+sheets, with one row per row of the motion table (a single row at time 0
+without a motion) and a first column `time [s]`:
+
+- `markers`: `<marker>.X [m]`, `.Y [m]`, `.Z [m]`, the position in the Ground
+  frame, in metres.
+- `joints`: one column per coordinate, `<name> [deg]` for rotational and
+  `<name> [m]` for translational coordinates, locked coordinates included.
+
+The motion is applied as the viewer does: columns naming an unlocked
+coordinate are set (radians/metres internally, `inDegrees` honoured), other
+coordinates keep their current value, and the model is realized once per row.
+With `overwrite=False` (default) `FileExistsError` is raised before writing
+anything if a target file exists. Requires `openpyxl>=3.1` (a package
+dependency). The lower-level function is
+`opensim_frameworks.viewer.export.export_tables_to_xlsx()`.
+
 ## Tests
 
 The repository configures pytest through `pyproject.toml`; tests are grouped

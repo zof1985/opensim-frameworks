@@ -13,8 +13,9 @@ window embedding the (VTK-based, see :mod:`opensim_frameworks.viewer.visualizer`
   toggles, plus a preset-camera dropdown) -- unlike the playback controls,
   never disabled, since these act on the 3D view itself rather than a loaded
   motion.
-- Export (save the current view as a PNG, or a loaded motion as an MP4 --
-  see :mod:`opensim_frameworks.viewer.export`); the animation button is disabled
+- Export (save the current view as a PNG, a loaded motion as an MP4, or
+  the marker/joint tables as ``.xlsx`` files -- see
+  :mod:`opensim_frameworks.viewer.export`); the animation button is disabled
   under the same condition as the playback controls, since there is
   nothing to animate without a loaded motion.
 
@@ -328,21 +329,13 @@ class MotionPlayer:
 
 
 def _apply_time(model: Any, data: MotionData, time: float) -> None:
-    native_model = getattr(model, "model", model)
-    state = getattr(model, "state", None)
-    if state is None:
-        state = native_model.getWorkingState()
-    coordinate_set = native_model.getCoordinateSet()
-    for name, value in data.values_at(time).items():
-        if not coordinate_set.contains(name):
-            continue
-        coordinate = coordinate_set.get(name)
-        if coordinate.get_locked():
-            continue
-        coordinate.setValue(state, value, False)
-    native_model.realizePosition(state)
+    _export._set_pose(model, data, time)
     visualizer = getattr(model, "visualizer", None)
     if visualizer is not None:
+        native_model = getattr(model, "model", model)
+        state = getattr(model, "state", None)
+        if state is None:
+            state = native_model.getWorkingState()
         visualizer.show(state)
 
 
@@ -799,6 +792,59 @@ def start_player(
             command=do_save_animation,
         )
         animation_button.grid(row=0, column=1, padx=2)
+
+        def do_save_tables() -> None:
+            directory = filedialog.askdirectory(
+                parent=root, title="Export marker and joint tables (.xlsx)"
+            )
+            if not directory:
+                return
+            path_map = getattr(model, "path_map", None)
+            try:
+                targets = _export.xlsx_export_paths(model, directory, path_map=path_map)
+                existing = [path.name for path in targets if path.exists()]
+                if existing and not messagebox.askyesno(
+                    "Overwrite files",
+                    "These files already exist and will be replaced:\n"
+                    + "\n".join(existing),
+                    parent=root,
+                ):
+                    return
+            except Exception as error:  # noqa: BLE001 -- reported via a dialog
+                messagebox.showerror("Export failed", str(error), parent=root)
+                return
+            was_playing = player is not None and player.playing
+            if was_playing:
+                player.play_pause()
+                play_button.config(text="▶")
+            original_time = None if player is None else player.time
+            root.config(cursor="wait")
+            root.update()
+            try:
+                _export.export_tables_to_xlsx(
+                    model, data, directory, path_map=path_map, overwrite=True
+                )
+            except (
+                Exception
+            ) as error:  # noqa: BLE001 -- reported via a dialog, not swallowed
+                messagebox.showerror("Export failed", str(error), parent=root)
+            finally:
+                root.config(cursor="")
+                # Restore the pose the viewer was showing before the export.
+                if data is not None:
+                    _apply_time(model, data, original_time)
+                if was_playing:
+                    player.play_pause()
+                    play_button.config(text="⏸")
+
+        tables_button = ttk.Button(
+            export_group,
+            text="📊",
+            width=3,
+            style="Icon.TButton",
+            command=do_save_tables,
+        )
+        tables_button.grid(row=0, column=2, padx=2)
 
         playback_widgets = (
             slider,
