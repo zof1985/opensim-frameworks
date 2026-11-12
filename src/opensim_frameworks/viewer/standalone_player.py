@@ -93,6 +93,13 @@ def _close_startup_splash() -> None:
         pyi_splash.close()
 
 
+def _update_startup_splash(message: str) -> None:
+    if getattr(sys, "frozen", False):
+        import pyi_splash
+
+        pyi_splash.update_text(message)
+
+
 class _Tooltips:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
@@ -168,8 +175,13 @@ class Player:
         self.frame_index = -1
         self._last_tick = time.monotonic()
         self._readers: list[Any] = []
+        self._muscle_geometry: dict[str, Any] = {}
         self._actor_info: dict[Any, str] = {}
         self._hover_info: tuple[str, float, float, float] | None = None
+
+        if any(path for frame in self.frames for path in frame["muscles"]):
+            _update_startup_splash("Preparing animation geometry...")
+            self._preload_muscle_geometry()
 
         self._build_ui()
         self._build_scene()
@@ -371,6 +383,19 @@ class Player:
             self._readers.append(reader)
         return reader, reader.GetOutput()
 
+    def _preload_muscle_geometry(self) -> None:
+        paths = dict.fromkeys(
+            path
+            for frame in self.frames
+            for path in frame["muscles"]
+            if path
+        )
+        for relative in paths:
+            _, polydata = self._load_polydata(relative, retain=False)
+            geometry = vtkPolyData()
+            geometry.DeepCopy(polydata)
+            self._muscle_geometry[relative] = geometry
+
     def _load_actors(self, specifications: list[dict[str, Any]], kind: str) -> None:
         target = {
             "body": self.body_actors,
@@ -451,9 +476,8 @@ class Player:
             if path != item["geometry"]:
                 item["actor"].SetVisibility(False)
                 if path is not None:
-                    reader, _ = self._load_polydata(path, retain=False)
-                    item["mapper"].SetInputConnection(reader.GetOutputPort())
-                    item["reader"] = reader
+                    item["mapper"].SetInputData(self._muscle_geometry[path])
+                    item["reader"] = None
                     item["geometry"] = path
                 else:
                     item["mapper"].SetInputData(vtkPolyData())

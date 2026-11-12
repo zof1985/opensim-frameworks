@@ -147,10 +147,10 @@ class VTKViewer:
 
         Notes
         -----
-        The exported player starts with standard size, camera, visibility, and
-        loop settings. If ``motion`` is provided, its animation is included;
-        the current player window's view and playback-control settings are not
-        copied.
+        The exported player's default window is half the standard viewer size.
+        It starts with standard camera, visibility, and loop settings. If
+        ``motion`` is provided, its animation is included; the current player
+        window's view and playback-control settings are not copied.
 
         The model-independent PyInstaller runtime is cached in AppData and
         reused by later exports. If that location is not writable, the runtime

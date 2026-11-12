@@ -94,8 +94,10 @@ def test_executable_passes_clean_and_appends_scene_archive(tmp_path, monkeypatch
     runtime = tmp_path / "runtime.exe"
     runtime.write_bytes(b"generic-player-runtime")
     clean_values = []
+    sizes = []
 
     def fake_make_frames(model, data, output, **options):
+        sizes.append(options["size"])
         assets = output / "assets"
         assets.mkdir()
         (assets / "manifest.json").write_text(
@@ -122,6 +124,7 @@ def test_executable_passes_clean_and_appends_scene_archive(tmp_path, monkeypatch
 
     assert result == destination
     assert clean_values == [True]
+    assert sizes == [(960, 540)]
     with zipfile.ZipFile(destination) as archive:
         assert json.loads(archive.read("manifest.json")) == {
             "has_motion": False,
@@ -243,6 +246,54 @@ def test_standalone_player_selects_nearest_frame_with_binary_search():
     assert player._frame_at_time(0.5) == 0
     assert player._frame_at_time(0.8) == 1
     assert player._frame_at_time(3.0) == 2
+
+
+def test_standalone_player_preloads_muscle_geometry_for_playback(monkeypatch):
+    class CachedGeometry:
+        def DeepCopy(self, source):
+            self.source = source
+
+    player = Player.__new__(Player)
+    player.frames = [
+        {"time": 0.0, "body_matrices": [], "muscles": ["m0.vtp"], "markers": []},
+        {"time": 1.0, "body_matrices": [], "muscles": ["m1.vtp"], "markers": []},
+        {"time": 2.0, "body_matrices": [], "muscles": ["m0.vtp"], "markers": []},
+    ]
+    loaded = []
+    sources = {"m0.vtp": object(), "m1.vtp": object()}
+
+    def load_polydata(path, *, retain):
+        assert retain is False
+        loaded.append(path)
+        return object(), sources[path]
+
+    monkeypatch.setattr(standalone_player_module, "vtkPolyData", CachedGeometry)
+    player._load_polydata = load_polydata
+    player._muscle_geometry = {}
+    player._preload_muscle_geometry()
+
+    assert loaded == ["m0.vtp", "m1.vtp"]
+    assert player._muscle_geometry["m0.vtp"].source is sources["m0.vtp"]
+
+    applied = []
+    player.body_actors = []
+    player.muscle_actors = [
+        {
+            "actor": SimpleNamespace(SetVisibility=lambda _visible: None),
+            "mapper": SimpleNamespace(SetInputData=applied.append),
+            "geometry": None,
+        }
+    ]
+    player.marker_actors = []
+    player.frame_index = -1
+    player.current_time = 0.0
+    player.window = SimpleNamespace(Render=lambda: None)
+    player._update_visibility = lambda render=True: None
+
+    player._apply_frame(0)
+
+    assert applied == [player._muscle_geometry["m0.vtp"]]
+    assert loaded == ["m0.vtp", "m1.vtp"]
 
 
 def test_standalone_player_frame_step_pauses_and_clamps():

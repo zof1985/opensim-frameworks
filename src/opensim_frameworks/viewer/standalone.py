@@ -26,6 +26,7 @@ from .player import MotionData
 from .visualizer import VTKVisualizer
 
 _OVERLAY_MAGIC = b"OSFPLAY1"
+_DEFAULT_PLAYER_SIZE = (DEFAULT_SIZE[0] // 2, DEFAULT_SIZE[1] // 2)
 
 
 def _write_splash_image(path: Path) -> None:
@@ -395,7 +396,7 @@ def save_player_executable(
     *,
     fps: float = 30.0,
     clean: bool = False,
-    size: tuple[int, int] = DEFAULT_SIZE,
+    size: tuple[int, int] = _DEFAULT_PLAYER_SIZE,
     loop: bool = False,
     camera_position: tuple[float, float, float] | None = None,
     camera_focal_point: tuple[float, float, float] | None = None,
