@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 import importlib
 from pathlib import Path
 
@@ -14,6 +15,27 @@ from opensim_frameworks.models.equipment.equipment import opensim
 from opensim_frameworks.utils.step import StepBodyImport
 
 step_module = importlib.import_module("opensim_frameworks.utils.step")
+
+
+def test_read_step_explains_how_to_install_optional_pythonocc(tmp_path, monkeypatch):
+    original_import = builtins.__import__
+
+    def import_without_pythonocc(name, *args, **kwargs):
+        if name == "OCC" or name.startswith("OCC."):
+            raise ModuleNotFoundError("No module named 'OCC'", name="OCC")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_pythonocc)
+
+    with pytest.raises(
+        ImportError, match="STEP import requires the optional package"
+    ) as error:
+        step_module._read_step_imports(tmp_path / "part.step", tmp_path)
+
+    message = str(error.value)
+    assert "pythonocc-core" in message
+    assert "conda install -c conda-forge pythonocc-core" in message
+    assert 'pip install -e ".[step]"' in message
 
 
 def _write_box_step(path):

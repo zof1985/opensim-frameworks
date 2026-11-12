@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from vtkmodules.vtkFiltersCore import vtkTriangleFilter
 
 __all__ = ["write_svg"]
 
@@ -22,7 +23,7 @@ def _hex(color: np.ndarray) -> str:
     return f"#{red:02x}{green:02x}{blue:02x}"
 
 
-def _actor_geometry(vtk: Any, actor: Any) -> tuple[Any, Any] | None:
+def _actor_geometry(actor: Any) -> tuple[Any, Any] | None:
     from vtkmodules.util.numpy_support import vtk_to_numpy
 
     mapper = actor.GetMapper()
@@ -32,7 +33,7 @@ def _actor_geometry(vtk: Any, actor: Any) -> tuple[Any, Any] | None:
     data = mapper.GetInput()
     if data is None or data.GetNumberOfPoints() == 0:
         return None
-    triangulator = vtk.vtkTriangleFilter()
+    triangulator = vtkTriangleFilter()
     triangulator.SetInputData(data)
     triangulator.PassLinesOn()
     triangulator.PassVertsOff()
@@ -48,7 +49,6 @@ def _actor_geometry(vtk: Any, actor: Any) -> tuple[Any, Any] | None:
 
 def write_svg(renderer: Any, window_size: tuple[int, int], path: str | Path) -> Path:
     """Write ``renderer``'s visible polygonal props as a vector SVG."""
-    import vtk
     from vtkmodules.util.numpy_support import vtk_to_numpy
 
     width, height = window_size
@@ -65,7 +65,7 @@ def write_svg(renderer: Any, window_size: tuple[int, int], path: str | Path) -> 
     actors.InitTraversal()
     for _ in range(actors.GetNumberOfItems()):
         actor = actors.GetNextActor()
-        geometry = _actor_geometry(vtk, actor)
+        geometry = _actor_geometry(actor)
         if geometry is None:
             continue
         poly, world_points = geometry

@@ -20,6 +20,8 @@ tools.
 - **Visualization**: `VTKViewer` and `VTKVisualizer` display models. The
   interactive player supports `.mot` and `.sto` motions; export tools save SVG
   snapshots and MP4 animations.
+- **Portable viewer**: export a self-contained Windows `.exe` player with a
+  startup splash screen while the scene loads.
 
 ## Architecture
 
@@ -65,16 +67,18 @@ Install the package with the OpenSim extra from a local repository checkout:
 python -m pip install -e ".[opensim]"
 ```
 
-To import STEP files, install the `step` extra, which adds `pythonocc-core`:
+STEP import is optional and requires `pythonocc-core`. On Windows, install it
+from conda-forge in the target environment:
 
 ```powershell
-python -m pip install -e ".[opensim,step]"
+conda install -c conda-forge pythonocc-core
 ```
 
-To install the test dependencies as well:
+The `step` extra declares `pythonocc-core` for platforms where a compatible
+pip distribution is available:
 
 ```powershell
-python -m pip install -e ".[opensim,step,test]"
+python -m pip install -e ".[step]"
 ```
 
 The `opensim` extra requires bindings that can be installed with `pip` in the
@@ -82,7 +86,8 @@ current environment. If OpenSim is managed by Conda or a separate
 installation, use that environment and confirm that `import opensim` works
 before importing `opensim_frameworks`. On Windows, the package prepares the
 current Python environment's native-library paths before loading OpenSim.
-`requirements.txt` also includes `pythonocc-core>=7.7` for STEP import.
+Installing the base project does not install `pythonocc-core`; calls that
+import STEP files explain how to add this optional dependency when it is absent.
 
 The OpenSim model, ANSUR II data, and meshes used by `User` are included in the
 package. `Bike` uses bundled primitives and meshes.

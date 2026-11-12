@@ -4,10 +4,11 @@ Used by :meth:`~opensim_frameworks.viewer.show`: opens a single Tk
 window embedding the (VTK-based, see :mod:`opensim_frameworks.viewer.visualizer`)
 3D view in its upper area, with three groups of controls below it:
 
-- Playback (play/pause, stop, fast-forward, fast-backward, a loop/cycle
-  toggle, and a draggable progress slider) driving a motion loaded via
-  ``show(motion=...)`` -- disabled whenever no motion is loaded, rather
-  than the controls disappearing, so there is always somewhere to look
+- Playback (play/pause, stop, fast-forward, fast-backward, frame stepping,
+  a loop/cycle toggle, and a draggable progress slider) driving a motion
+  loaded via ``show(motion=...)``; Space toggles playback and the arrow keys
+  step between frames. Playback controls are disabled when no motion is
+  loaded, rather than disappearing, so there is always somewhere to look
   for them.
 - View (ground/muscles/markers/axes, reachability, and visual-cone visibility
   toggles, plus a preset-camera dropdown) -- unlike the playback controls,
@@ -64,6 +65,7 @@ later ``process_events()`` pump need to happen on that same thread.
 
 from __future__ import annotations
 
+from bisect import bisect_left
 import threading
 import time as _time
 from pathlib import Path
@@ -198,12 +200,32 @@ class MotionData:
         }
 
 
+def _step_frame_time(times: Any, current_time: float, direction: int) -> float:
+    if direction not in (-1, 1):
+        raise ValueError("direction must be -1 or 1")
+    upper = bisect_left(times, current_time)
+    if upper == 0:
+        nearest = 0
+    elif upper == len(times):
+        nearest = len(times) - 1
+    else:
+        lower = upper - 1
+        nearest = (
+            lower
+            if current_time - times[lower] <= times[upper] - current_time
+            else upper
+        )
+    target = min(max(nearest + direction, 0), len(times) - 1)
+    return float(times[target])
+
+
 class MotionPlayer:
     """Pure playback state machine for a motion -- no GUI, no OpenSim call.
 
     Kept independent of both so its transitions (play/pause, stop,
-    fast-forward/fast-backward, cycle, seek, advancing by elapsed real
-    time) are exercised directly by unit tests, without a live visualizer.
+    fast-forward/fast-backward, frame stepping, cycle, seek, advancing by
+    elapsed real time) are exercised directly by unit tests, without a live
+    visualizer.
 
     Parameters
     ----------
@@ -259,6 +281,11 @@ class MotionPlayer:
     def play_pause(self) -> None:
         """Toggle between playing and paused, keeping the current position/speed."""
         self.playing = not self.playing
+
+    def step_frame(self, times: Any, direction: int) -> None:
+        """Pause playback and move to the adjacent sample in ``times``."""
+        self.time = _step_frame_time(times, self.time, direction)
+        self.playing = False
 
     def stop(self) -> None:
         """Stop playback and reset to the start, at normal forward speed."""
@@ -554,8 +581,22 @@ def start_player(
         )
 
         def do_play_pause() -> None:
+            if player is None:
+                return
             player.play_pause()
             play_button.config(text="⏸" if player.playing else "▶")
+
+        def do_step_frame(direction: int) -> None:
+            if player is None or data is None:
+                return
+            player.step_frame(data.times, direction)
+            play_button.config(text="▶")
+            _apply_time(model, data, player.time)
+            slider_var.set(player.fraction * 1000.0)
+            time_var.set(
+                f"{player.time - player.start_time:6.2f} / "
+                f"{player.end_time - player.start_time:.2f} s  ({player.speed:+.0f}x)"
+            )
 
         def do_stop() -> None:
             player.stop()
@@ -569,6 +610,38 @@ def start_player(
         def do_fast_backward() -> None:
             player.fast_backward()
             play_button.config(text="⏸")
+
+        def handle_playback_key(key: str) -> bool:
+            normalized = key.casefold()
+            if normalized == "space":
+                do_play_pause()
+            elif normalized == "left":
+                do_step_frame(-1)
+            elif normalized == "right":
+                do_step_frame(1)
+            else:
+                return False
+            return True
+
+        def on_tk_keypress(event: Any) -> str | None:
+            widget_class = event.widget.winfo_class()
+            key = event.keysym.casefold()
+            if key == "space" and widget_class in {
+                "TButton",
+                "TCheckbutton",
+                "TCombobox",
+                "TEntry",
+            }:
+                return None
+            if key in {"left", "right"} and widget_class in {
+                "TCombobox",
+                "TEntry",
+            }:
+                return None
+            return "break" if handle_playback_key(event.keysym) else None
+
+        def on_vtk_keypress(_interactor: Any, _event: str) -> None:
+            handle_playback_key(visualizer._interactor.GetKeySym())
 
         cycle_var = tk.BooleanVar(value=player.loop if player is not None else loop)
 
@@ -598,6 +671,15 @@ def start_player(
         )
         rew_button.grid(row=0, column=0, padx=2)
         WidgetTooltip(root, rew_button, "Play backward faster")
+        step_backward_button = ttk.Button(
+            playback_group,
+            text="◀|",
+            width=3,
+            style="Icon.TButton",
+            command=lambda: do_step_frame(-1),
+        )
+        step_backward_button.grid(row=0, column=1, padx=2)
+        WidgetTooltip(root, step_backward_button, "Step one frame backward")
         play_button = ttk.Button(
             playback_group,
             text="▶",
@@ -605,7 +687,7 @@ def start_player(
             style="Icon.TButton",
             command=do_play_pause,
         )
-        play_button.grid(row=0, column=1, padx=2)
+        play_button.grid(row=0, column=2, padx=2)
         WidgetTooltip(root, play_button, "Play or pause")
         stop_button = ttk.Button(
             playback_group,
@@ -614,8 +696,17 @@ def start_player(
             style="Icon.TButton",
             command=do_stop,
         )
-        stop_button.grid(row=0, column=2, padx=2)
+        stop_button.grid(row=0, column=3, padx=2)
         WidgetTooltip(root, stop_button, "Stop and return to the start")
+        step_forward_button = ttk.Button(
+            playback_group,
+            text="|▶",
+            width=3,
+            style="Icon.TButton",
+            command=lambda: do_step_frame(1),
+        )
+        step_forward_button.grid(row=0, column=4, padx=2)
+        WidgetTooltip(root, step_forward_button, "Step one frame forward")
         ff_button = ttk.Button(
             playback_group,
             text="⏩",
@@ -623,7 +714,7 @@ def start_player(
             style="Icon.TButton",
             command=do_fast_forward,
         )
-        ff_button.grid(row=0, column=3, padx=2)
+        ff_button.grid(row=0, column=5, padx=2)
         WidgetTooltip(root, ff_button, "Play forward faster")
         cycle_check = ttk.Checkbutton(
             playback_group,
@@ -631,7 +722,7 @@ def start_player(
             variable=cycle_var,
             command=do_toggle_loop,
         )
-        cycle_check.grid(row=0, column=4, padx=(10, 2))
+        cycle_check.grid(row=0, column=6, padx=(10, 2))
         WidgetTooltip(root, cycle_check, "Repeat playback at the end")
 
         # Matches vtkActor's own default visibility (True), so this needs
@@ -1013,11 +1104,18 @@ def start_player(
         playback_widgets = (
             slider,
             rew_button,
+            step_backward_button,
             play_button,
             stop_button,
+            step_forward_button,
             ff_button,
             cycle_check,
         )
+        root.bind_all("<space>", on_tk_keypress, add="+")
+        root.bind_all("<Left>", on_tk_keypress, add="+")
+        root.bind_all("<Right>", on_tk_keypress, add="+")
+        slider.bind("<Left>", on_tk_keypress, add="+")
+        slider.bind("<Right>", on_tk_keypress, add="+")
         if player is None:
             for widget in playback_widgets:
                 widget.config(state="disabled")
@@ -1069,6 +1167,7 @@ def start_player(
         # this thread's own teardown), so reading it late could close the
         # wrong (new) visualizer instead of this thread's own (old) one.
         visualizer = model._visualizer
+        visualizer._interactor.AddObserver("KeyPressEvent", on_vtk_keypress)
 
         if not visualizer.has_vision_cone_and_axis:
             vision_cone_check.config(state="disabled")

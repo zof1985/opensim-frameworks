@@ -7,7 +7,11 @@ from opensim_frameworks.utils.opensim import register_geometry_search_path
 # fixture with both a rotational (hip_flexion_r) and a translational
 # (pelvis_tx) coordinate, to test MotionData's unit handling.
 from opensim_frameworks.models.user.user import DEFAULT_MESHES_DIR, DEFAULT_MODEL_PATH
-from opensim_frameworks.viewer.player import MotionData, MotionPlayer
+from opensim_frameworks.viewer.player import (
+    MotionData,
+    MotionPlayer,
+    _step_frame_time,
+)
 
 opensim = pytest.importorskip("opensim")
 
@@ -114,6 +118,23 @@ def test_motion_data_rejects_fewer_than_two_rows():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    ("current_time", "direction", "expected"),
+    [
+        (0.5, 1, 1.5),
+        (0.8, 1, 1.5),
+        (1.5, -1, 0.5),
+        (-1.0, -1, 0.0),
+        (3.0, 1, 2.0),
+    ],
+)
+def test_step_frame_time_moves_between_samples(current_time, direction, expected):
+    actual = _step_frame_time(
+        np.array([0.0, 0.5, 1.5, 2.0]), current_time, direction
+    )
+    assert actual == expected
+
+
 def test_motion_player_rejects_a_non_positive_time_span():
     with pytest.raises(ValueError, match="end_time must be greater than start_time"):
         MotionPlayer(1.0, 1.0)
@@ -135,6 +156,17 @@ def test_motion_player_play_pause_toggles():
     assert player.playing is True
 
     player.play_pause()
+    assert player.playing is False
+
+
+def test_motion_player_frame_step_moves_one_sample_and_pauses():
+    player = MotionPlayer(0.0, 2.0)
+    player.seek_fraction(0.25)
+    player.play_pause()
+
+    player.step_frame([0.0, 0.5, 1.5, 2.0], 1)
+
+    assert player.time == pytest.approx(1.5)
     assert player.playing is False
 
 

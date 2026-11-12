@@ -9,5 +9,4 @@ imageio-ffmpeg>=0.4
 openpyxl>=3.1
 pyinstaller>=6
 opensim
-pythonocc-core>=7.7
 pytest>=8

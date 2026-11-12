@@ -15,10 +15,25 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Any
 
-import imageio.v2 as imageio
+import imageio_ffmpeg
 import numpy as np
-import vtk
 from PIL import Image
+from vtkmodules.vtkCommonDataModel import vtkPolyData
+from vtkmodules.vtkCommonMath import vtkMatrix4x4
+from vtkmodules.vtkFiltersSources import vtkPlaneSource
+from vtkmodules.vtkIOXML import vtkXMLPolyDataReader
+from vtkmodules.vtkInteractionStyle import vtkInteractorStyleTrackballCamera
+from vtkmodules.vtkRenderingAnnotation import vtkAxesActor
+import vtkmodules.vtkRenderingOpenGL2 as _vtk_rendering_opengl2
+from vtkmodules.vtkRenderingCore import (
+    vtkActor,
+    vtkCellPicker,
+    vtkPolyDataMapper,
+    vtkRenderer,
+    vtkRenderWindow,
+    vtkRenderWindowInteractor,
+    vtkWindowToImageFilter,
+)
 from vtkmodules.util.numpy_support import vtk_to_numpy
 
 if __package__:
@@ -71,6 +86,13 @@ def _prepare_assets() -> None:
                 archive.extract(name, assets)
 
 
+def _close_startup_splash() -> None:
+    if getattr(sys, "frozen", False):
+        import pyi_splash
+
+        pyi_splash.close()
+
+
 class _Tooltips:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
@@ -110,7 +132,7 @@ class _Tooltips:
         self.window.withdraw()
 
 
-class _CameraStyle(vtk.vtkInteractorStyleTrackballCamera):
+class _CameraStyle(vtkInteractorStyleTrackballCamera):
     def OnLeftButtonDown(self) -> None:
         interactor = self.GetInteractor()
         ctrl = bool(interactor.GetControlKey())
@@ -164,6 +186,8 @@ class Player:
             )
         self._apply_frame(0)
         self.root.protocol("WM_DELETE_WINDOW", self.close)
+        self.root.update()
+        _close_startup_splash()
         self._tick()
         self.root.mainloop()
 
@@ -215,8 +239,10 @@ class Player:
 
         controls_spec = [
             (playback, "⏪", self._backward, "Play backward faster"),
+            (playback, "◀|", lambda: self._step_frame(-1), "Step one frame backward"),
             (playback, "▶", self._play_pause, "Play or pause"),
             (playback, "⏹", self._stop, "Stop and return to the start"),
+            (playback, "|▶", lambda: self._step_frame(1), "Step one frame forward"),
             (playback, "⏩", self._forward, "Play forward faster"),
         ]
         self.play_button = None
@@ -233,7 +259,7 @@ class Player:
             variable=self.loop_var,
             command=lambda: setattr(self, "loop", self.loop_var.get()),
         )
-        loop.grid(row=0, column=4, padx=(10, 2))
+        loop.grid(row=0, column=6, padx=(10, 2))
         self.tooltips.bind(loop, "Repeat playback at the end")
 
         self.visibility: dict[str, tk.BooleanVar] = {}
@@ -290,22 +316,28 @@ class Player:
             for child in playback.winfo_children():
                 child.config(state="disabled")
             self.slider.config(state="disabled")
+        self.root.bind_all("<space>", self._on_tk_keypress, add="+")
+        self.root.bind_all("<Left>", self._on_tk_keypress, add="+")
+        self.root.bind_all("<Right>", self._on_tk_keypress, add="+")
+        self.slider.bind("<Left>", self._on_tk_keypress, add="+")
+        self.slider.bind("<Right>", self._on_tk_keypress, add="+")
 
     def _build_scene(self) -> None:
-        self.renderer = vtk.vtkRenderer()
+        self.renderer = vtkRenderer()
         self.renderer.SetBackground(0.92, 0.93, 0.95)
-        self.window = vtk.vtkRenderWindow()
+        self.window = vtkRenderWindow()
         self.window.AddRenderer(self.renderer)
         self.window.SetSize(*self.manifest["size"])
         self.window.SetWindowName(self.manifest["title"])
-        self.interactor = vtk.vtkRenderWindowInteractor()
+        self.interactor = vtkRenderWindowInteractor()
         self.interactor.SetRenderWindow(self.window)
         self._style = _CameraStyle()
         self.interactor.SetInteractorStyle(self._style)
         self.interactor.Initialize()
+        self.interactor.AddObserver("KeyPressEvent", self._on_vtk_keypress)
         self.interactor.AddObserver("MouseMoveEvent", self._on_mouse_move)
         self.interactor.AddObserver("LeaveEvent", self._on_mouse_leave)
-        self.picker = vtk.vtkCellPicker()
+        self.picker = vtkCellPicker()
         self.picker.SetTolerance(0.0005)
 
         self.body_actors = []
@@ -318,7 +350,7 @@ class Player:
         self.renderer.ResetCamera()
         self.ground_actor = self._ground_actor()
         self.renderer.AddActor(self.ground_actor)
-        self.axes_actor = vtk.vtkAxesActor()
+        self.axes_actor = vtkAxesActor()
         self.axes_actor.SetTotalLength(0.5, 0.5, 0.5)
         self.renderer.AddActor(self.axes_actor)
         self._set_window_parent()
@@ -332,7 +364,7 @@ class Player:
     def _load_polydata(
         self, relative: str, *, retain: bool = True
     ) -> tuple[Any, Any]:
-        reader = vtk.vtkXMLPolyDataReader()
+        reader = vtkXMLPolyDataReader()
         reader.SetFileName(str(_asset_path(relative)))
         reader.Update()
         if retain:
@@ -346,8 +378,8 @@ class Player:
             "marker": self.marker_actors,
         }[kind]
         for specification in specifications:
-            actor = vtk.vtkActor()
-            mapper = vtk.vtkPolyDataMapper()
+            actor = vtkActor()
+            mapper = vtkPolyDataMapper()
             actor.SetMapper(mapper)
             actor.GetProperty().SetColor(*specification["color"])
             actor.GetProperty().SetOpacity(float(specification.get("opacity", 1.0)))
@@ -388,15 +420,15 @@ class Player:
 
     @staticmethod
     def _ground_actor() -> Any:
-        plane = vtk.vtkPlaneSource()
+        plane = vtkPlaneSource()
         plane.SetOrigin(-5, 0, -5)
         plane.SetPoint1(5, 0, -5)
         plane.SetPoint2(-5, 0, 5)
         plane.SetXResolution(10)
         plane.SetYResolution(10)
-        mapper = vtk.vtkPolyDataMapper()
+        mapper = vtkPolyDataMapper()
         mapper.SetInputConnection(plane.GetOutputPort())
-        actor = vtk.vtkActor()
+        actor = vtkActor()
         actor.SetMapper(mapper)
         actor.GetProperty().SetColor(0.85, 0.85, 0.82)
         actor.GetProperty().SetAmbient(0.6)
@@ -410,7 +442,7 @@ class Player:
         for item, matrix_values in zip(
             self.body_actors, frame["body_matrices"], strict=True
         ):
-            matrix = vtk.vtkMatrix4x4()
+            matrix = vtkMatrix4x4()
             for row in range(4):
                 for column in range(4):
                     matrix.SetElement(row, column, matrix_values[row * 4 + column])
@@ -424,7 +456,7 @@ class Player:
                     item["reader"] = reader
                     item["geometry"] = path
                 else:
-                    item["mapper"].SetInputData(vtk.vtkPolyData())
+                    item["mapper"].SetInputData(vtkPolyData())
                     item["reader"] = None
                     item["geometry"] = None
         for item, position in zip(self.marker_actors, frame["markers"], strict=True):
@@ -523,8 +555,58 @@ class Player:
         return upper
 
     def _play_pause(self) -> None:
+        if not self.has_motion:
+            return
         self.playing = not self.playing
         self.play_button.config(text="⏸" if self.playing else "▶")
+
+    def _step_frame(self, direction: int) -> None:
+        if not self.has_motion:
+            return
+        self.playing = False
+        self.play_button.config(text="▶")
+        index = min(max(self.frame_index + direction, 0), len(self.frames) - 1)
+        self._apply_frame(index)
+        fraction = (self.current_time - self.start_time) / (
+            self.end_time - self.start_time
+        )
+        self.slider_var.set(fraction * 1000.0)
+        self.time_var.set(
+            f"{self.current_time - self.start_time:6.2f} / "
+            f"{self.end_time - self.start_time:.2f} s  ({self.speed:+.0f}x)"
+        )
+
+    def _handle_playback_key(self, key: str) -> bool:
+        normalized = key.casefold()
+        if normalized == "space":
+            self._play_pause()
+        elif normalized == "left":
+            self._step_frame(-1)
+        elif normalized == "right":
+            self._step_frame(1)
+        else:
+            return False
+        return True
+
+    def _on_tk_keypress(self, event: Any) -> str | None:
+        widget_class = event.widget.winfo_class()
+        key = event.keysym.casefold()
+        if key == "space" and widget_class in {
+            "TButton",
+            "TCheckbutton",
+            "TCombobox",
+            "TEntry",
+        }:
+            return None
+        if key in {"left", "right"} and widget_class in {
+            "TCombobox",
+            "TEntry",
+        }:
+            return None
+        return "break" if self._handle_playback_key(event.keysym) else None
+
+    def _on_vtk_keypress(self, _interactor: Any, _event: str) -> None:
+        self._handle_playback_key(self.interactor.GetKeySym())
 
     def _stop(self) -> None:
         self.playing = False
@@ -583,7 +665,7 @@ class Player:
         self.root.after(delay_ms, self._tick)
 
     def _capture(self) -> np.ndarray:
-        image = vtk.vtkWindowToImageFilter()
+        image = vtkWindowToImageFilter()
         image.SetInput(self.window)
         image.SetInputBufferTypeToRGB()
         image.ReadFrontBufferOff()
@@ -627,12 +709,18 @@ class Player:
         self.root.update()
         writer = None
         try:
-            writer = imageio.get_writer(
-                path, fps=self.fps, codec="libx264", quality=8, macro_block_size=1
+            writer = imageio_ffmpeg.write_frames(
+                path,
+                self.window.GetSize(),
+                fps=self.fps,
+                codec="libx264",
+                quality=8,
+                macro_block_size=1,
             )
+            writer.send(None)
             for index in range(len(self.frames)):
                 self._apply_frame(index)
-                writer.append_data(self._capture())
+                writer.send(np.ascontiguousarray(self._capture()).tobytes())
         except Exception as error:
             messagebox.showerror("Export failed", str(error), parent=self.root)
         finally:

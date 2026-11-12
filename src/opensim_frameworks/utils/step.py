@@ -342,9 +342,15 @@ def _read_step_imports(
             XCAFDoc_ColorSurf,
             XCAFDoc_DocumentTool,
         )
-    except ImportError as error:
+    except ModuleNotFoundError as error:
+        if error.name is None or not error.name.startswith("OCC"):
+            raise
         raise ImportError(
-            "read_step requires pythonocc-core (pip install opensim-frameworks[step])"
+            "STEP import requires the optional package `pythonocc-core`. "
+            "Install it in the active Conda environment with "
+            "`conda install -c conda-forge pythonocc-core`, or install the "
+            "project's `[step]` extra with `python -m pip install -e \".[step]\"` "
+            "when a compatible pip distribution is available."
         ) from error
 
     step_path = Path(file).expanduser().resolve()

@@ -28,6 +28,28 @@ from .visualizer import VTKVisualizer
 _OVERLAY_MAGIC = b"OSFPLAY1"
 
 
+def _write_splash_image(path: Path) -> None:
+    from PIL import Image, ImageDraw, ImageFont
+
+    image = Image.new("RGB", (520, 180), "#202b38")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((0, 0, 10, 180), fill="#00a0df")
+    font_path = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts" / "segoeui.ttf"
+    try:
+        title_font = ImageFont.truetype(str(font_path), 27)
+        message_font = ImageFont.truetype(str(font_path), 17)
+    except OSError:
+        title_font = message_font = ImageFont.load_default()
+    draw.text((40, 48), "OpenSim Frameworks", font=title_font, fill="#ffffff")
+    draw.text(
+        (42, 94),
+        "Opening standalone viewer...",
+        font=message_font,
+        fill="#c6d1de",
+    )
+    image.save(path, format="PNG")
+
+
 def _runtime_cache_directory() -> Path:
     digest = hashlib.sha256()
     digest.update(sys.version.encode())
@@ -37,15 +59,16 @@ def _runtime_cache_directory() -> Path:
     for package in (
         "PyInstaller",
         "vtk",
-        "imageio",
         "imageio-ffmpeg",
         "Pillow",
         "numpy",
     ):
         digest.update(importlib.metadata.version(package).encode())
     for source in (
+        Path(__file__),
         Path(__file__).with_name("standalone_player.py"),
         Path(__file__).with_name("svg.py"),
+        Path(__file__).with_name("win32_embed.py"),
     ):
         digest.update(source.read_bytes())
     local_app_data = Path(
@@ -71,12 +94,16 @@ def _build_runtime(work_dir: Path) -> Path:
     player_script = Path(__file__).with_name("standalone_player.py")
     if not player_script.is_file():
         raise FileNotFoundError(f"standalone player source is missing: {player_script}")
+    splash_image = work_dir / "player-splash.png"
+    _write_splash_image(splash_image)
     PyInstaller.__main__.run(
         [
             "--noconfirm",
             "--clean",
             "--onefile",
             "--windowed",
+            "--splash",
+            str(splash_image),
             "--name",
             "player-runtime",
             "--distpath",
@@ -87,9 +114,7 @@ def _build_runtime(work_dir: Path) -> Path:
             str(work_dir),
             "--paths",
             str(player_script.parent),
-            "--collect-all",
-            "vtkmodules",
-            "--collect-all",
+            "--collect-binaries",
             "imageio_ffmpeg",
             "--exclude-module",
             "opensim",
@@ -176,6 +201,8 @@ def _write_polydata(vtk: Any, polydata: Any, path: Path) -> None:
     writer = vtk.vtkXMLPolyDataWriter()
     writer.SetFileName(str(path))
     writer.SetInputData(polydata)
+    writer.SetCompressorTypeToZLib()
+    writer.SetCompressionLevel(9)
     if not writer.Write():
         raise OSError(f"unable to write VTK geometry: {path}")
 
@@ -472,7 +499,10 @@ def save_player_executable(
         archive_path = work_dir / "player-data.zip"
         assets = work_dir / "assets"
         with zipfile.ZipFile(
-            archive_path, "w", compression=zipfile.ZIP_STORED
+            archive_path,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+            compresslevel=9,
         ) as archive:
             for source in assets.rglob("*"):
                 if source.is_file():
