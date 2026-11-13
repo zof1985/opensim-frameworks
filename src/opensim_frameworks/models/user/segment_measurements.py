@@ -3,7 +3,7 @@
 Each property is either a fixed ANSUR measurement (via
 ``self._side_measurement_value``/``self._reference.values``, independent of
 posture -- see :mod:`.scaling`) or a posture-dependent distance between two
-joint centres (via ``self._joint_center``, see :mod:`.landmarks`). This is
+joint centres (via ``self.joint_center``, see :mod:`.landmarks`). This is
 the read-only counterpart to the explicit setters in
 :mod:`.measurement_generated`.
 """
@@ -65,7 +65,7 @@ class _SegmentMeasurementMixin:
         float
             Height above the ground, in metres.
         """
-        return self._joint_center("ankle_l")[1]
+        return self.joint_center("ankle_l")[1]
 
     @property
     def right_foot_height(self) -> float:
@@ -81,7 +81,7 @@ class _SegmentMeasurementMixin:
         float
             Height above the ground, in metres.
         """
-        return self._joint_center("ankle_r")[1]
+        return self.joint_center("ankle_r")[1]
 
     @property
     def left_thigh_length(self) -> float:
@@ -97,7 +97,7 @@ class _SegmentMeasurementMixin:
             Hip-to-knee distance, in metres.
         """
         return math.dist(
-            self._joint_center("hip_l"), self._joint_center("walker_knee_l")
+            self.joint_center("hip_l"), self.joint_center("walker_knee_l")
         )
 
     @property
@@ -114,7 +114,7 @@ class _SegmentMeasurementMixin:
             Hip-to-knee distance, in metres.
         """
         return math.dist(
-            self._joint_center("hip_r"), self._joint_center("walker_knee_r")
+            self.joint_center("hip_r"), self.joint_center("walker_knee_r")
         )
 
     @property
@@ -131,7 +131,7 @@ class _SegmentMeasurementMixin:
             Knee-to-ankle distance, in metres.
         """
         return math.dist(
-            self._joint_center("walker_knee_l"), self._joint_center("ankle_l")
+            self.joint_center("walker_knee_l"), self.joint_center("ankle_l")
         )
 
     @property
@@ -149,7 +149,7 @@ class _SegmentMeasurementMixin:
             Knee-to-ankle distance, in metres.
         """
         return math.dist(
-            self._joint_center("walker_knee_r"), self._joint_center("ankle_r")
+            self.joint_center("walker_knee_r"), self.joint_center("ankle_r")
         )
 
     @property
@@ -168,10 +168,10 @@ class _SegmentMeasurementMixin:
         float
             Hip-centre-to-shoulder-centre distance, in metres.
         """
-        left_hip, right_hip = self._joint_center("hip_l"), self._joint_center("hip_r")
+        left_hip, right_hip = self.joint_center("hip_l"), self.joint_center("hip_r")
         left_shoulder, right_shoulder = (
-            self._joint_center("acromial_l"),
-            self._joint_center("acromial_r"),
+            self.joint_center("acromial_l"),
+            self.joint_center("acromial_r"),
         )
         hip_center = tuple((a + b) / 2 for a, b in zip(left_hip, right_hip))
         shoulder_center = tuple(
@@ -196,7 +196,7 @@ class _SegmentMeasurementMixin:
             Shoulder-to-shoulder distance, in metres.
         """
         return math.dist(
-            self._joint_center("acromial_l"), self._joint_center("acromial_r")
+            self.joint_center("acromial_l"), self.joint_center("acromial_r")
         )
 
     @property
@@ -231,7 +231,7 @@ class _SegmentMeasurementMixin:
             Shoulder-to-elbow distance, in metres.
         """
         return math.dist(
-            self._joint_center("acromial_l"), self._joint_center("elbow_l")
+            self.joint_center("acromial_l"), self.joint_center("elbow_l")
         )
 
     @property
@@ -249,7 +249,7 @@ class _SegmentMeasurementMixin:
             Shoulder-to-elbow distance, in metres.
         """
         return math.dist(
-            self._joint_center("acromial_r"), self._joint_center("elbow_r")
+            self.joint_center("acromial_r"), self.joint_center("elbow_r")
         )
 
     @property
@@ -267,7 +267,7 @@ class _SegmentMeasurementMixin:
             Elbow-to-wrist distance, in metres.
         """
         return math.dist(
-            self._joint_center("elbow_l"), self._joint_center("radius_hand_l")
+            self.joint_center("elbow_l"), self.joint_center("radius_hand_l")
         )
 
     @property
@@ -285,7 +285,7 @@ class _SegmentMeasurementMixin:
             Elbow-to-wrist distance, in metres.
         """
         return math.dist(
-            self._joint_center("elbow_r"), self._joint_center("radius_hand_r")
+            self.joint_center("elbow_r"), self.joint_center("radius_hand_r")
         )
 
     @property

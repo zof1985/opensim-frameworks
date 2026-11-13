@@ -24,7 +24,7 @@ def _palm_frame(user, side):
     """Return the palm marker, the hand direction and the palmar normal in Ground."""
     suffix = "l" if side == "left" else "r"
     user.realizePosition(user.state)
-    centers = user._joint_center
+    centers = user.joint_center
     mcp = np.mean(
         [centers(f"{f}_mcp_{suffix}") for f in ("index", "middle", "ring", "little")],
         axis=0,

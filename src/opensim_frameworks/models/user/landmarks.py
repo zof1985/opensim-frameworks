@@ -1,8 +1,8 @@
 """Aggregated joint-centre and marker landmarks, in the ground frame.
 
-Complements :mod:`.joint_centers_generated` (per-joint named properties such
-as ``pelvis``/``left_hip``, each a thin wrapper around ``_joint_center``):
-this module defines ``_joint_center`` itself, the aggregated
+complements :mod:`.joint_centers_generated` (per-joint named properties such
+as ``pelvis``/``left_hip``, each a thin wrapper around :meth:`joint_center`):
+this module defines ``joint_center`` itself, the aggregated
 ``joint_centers`` dict, marker-based landmarks (eye/palm/foot markers,
 individual heel/toe/metatarsal properties), the whole-body centre of mass
 and its ground projection, and :meth:`User.set_position`.
@@ -34,11 +34,27 @@ _FOOT_MARKER_NAMES = {
 class _LandmarkMixin:
     """Aggregated joint-centre and marker landmark properties."""
 
-    def _joint_center(self, joint_name: str) -> tuple[float, float, float]:
+    def joint_center(self, joint_name: str) -> tuple[float, float, float]:
+        """Return a named joint's centre in Ground coordinates, in metres.
+
+        Parameters
+        ----------
+        joint_name : str
+            Name of the OpenSim joint whose child-frame position is returned.
+
+        Returns
+        -------
+        tuple[float, float, float]
+            The joint centre as an ``(x, y, z)`` position in the ground frame.
+        """
         self.realizePosition(self.state)
         frame = self.getJointSet().get(joint_name).getChildFrame()
         position = frame.getPositionInGround(self.state)
         return (position.get(0), position.get(1), position.get(2))
+
+    def _joint_center(self, joint_name: str) -> tuple[float, float, float]:
+        """Backward-compatible alias for :meth:`joint_center`."""
+        return self.joint_center(joint_name)
 
     @property
     def joint_centers(self) -> dict[str, tuple[float, float, float]]:
@@ -60,7 +76,7 @@ class _LandmarkMixin:
             z)`` position in the ground frame, in metres.
         """
         return {
-            name: self._joint_center(joint)
+            name: self.joint_center(joint)
             for name, joint in _JOINT_CENTER_NAMES.items()
         }
 

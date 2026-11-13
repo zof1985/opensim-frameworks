@@ -651,6 +651,9 @@ def test_joint_center_property_matches_the_opensim_joint_position(
     assert getattr(user, property_name) == pytest.approx(
         (expected.get(0), expected.get(1), expected.get(2))
     )
+    assert user.joint_center(joint_name) == pytest.approx(
+        (expected.get(0), expected.get(1), expected.get(2))
+    )
 
 
 @requires_opensim

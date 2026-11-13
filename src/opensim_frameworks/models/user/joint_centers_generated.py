@@ -19,7 +19,7 @@ class _JointCenterMixin:
         tuple[float, float, float]
             ``(x, y, z)`` position in metres, in the ground frame.
         """
-        return self._joint_center('ground_pelvis')
+        return self.joint_center('ground_pelvis')
 
     @property
     def left_hip(self) -> tuple[float, float, float]:
@@ -34,7 +34,7 @@ class _JointCenterMixin:
         tuple[float, float, float]
             ``(x, y, z)`` position in metres, in the ground frame.
         """
-        return self._joint_center('hip_l')
+        return self.joint_center('hip_l')
 
     @property
     def right_hip(self) -> tuple[float, float, float]:
@@ -49,7 +49,7 @@ class _JointCenterMixin:
         tuple[float, float, float]
             ``(x, y, z)`` position in metres, in the ground frame.
         """
-        return self._joint_center('hip_r')
+        return self.joint_center('hip_r')
 
     @property
     def left_knee(self) -> tuple[float, float, float]:
@@ -64,7 +64,7 @@ class _JointCenterMixin:
         tuple[float, float, float]
             ``(x, y, z)`` position in metres, in the ground frame.
         """
-        return self._joint_center('walker_knee_l')
+        return self.joint_center('walker_knee_l')
 
     @property
     def right_knee(self) -> tuple[float, float, float]:
@@ -79,7 +79,7 @@ class _JointCenterMixin:
         tuple[float, float, float]
             ``(x, y, z)`` position in metres, in the ground frame.
         """
-        return self._joint_center('walker_knee_r')
+        return self.joint_center('walker_knee_r')
 
     @property
     def left_patella(self) -> tuple[float, float, float]:
@@ -99,7 +99,7 @@ class _JointCenterMixin:
         tuple[float, float, float]
             ``(x, y, z)`` position in metres, in the ground frame.
         """
-        return self._joint_center('patellofemoral_l')
+        return self.joint_center('patellofemoral_l')
 
     @property
     def right_patella(self) -> tuple[float, float, float]:
@@ -119,7 +119,7 @@ class _JointCenterMixin:
         tuple[float, float, float]
             ``(x, y, z)`` position in metres, in the ground frame.
         """
-        return self._joint_center('patellofemoral_r')
+        return self.joint_center('patellofemoral_r')
 
     @property
     def left_ankle(self) -> tuple[float, float, float]:
@@ -135,7 +135,7 @@ class _JointCenterMixin:
         tuple[float, float, float]
             ``(x, y, z)`` position in metres, in the ground frame.
         """
-        return self._joint_center('ankle_l')
+        return self.joint_center('ankle_l')
 
     @property
     def right_ankle(self) -> tuple[float, float, float]:
@@ -151,7 +151,7 @@ class _JointCenterMixin:
         tuple[float, float, float]
             ``(x, y, z)`` position in metres, in the ground frame.
         """
-        return self._joint_center('ankle_r')
+        return self.joint_center('ankle_r')
 
     @property
     def left_subtalar(self) -> tuple[float, float, float]:
@@ -166,7 +166,7 @@ class _JointCenterMixin:
         tuple[float, float, float]
             ``(x, y, z)`` position in metres, in the ground frame.
         """
-        return self._joint_center('subtalar_l')
+        return self.joint_center('subtalar_l')
 
     @property
     def right_subtalar(self) -> tuple[float, float, float]:
@@ -181,7 +181,7 @@ class _JointCenterMixin:
         tuple[float, float, float]
             ``(x, y, z)`` position in metres, in the ground frame.
         """
-        return self._joint_center('subtalar_r')
+        return self.joint_center('subtalar_r')
 
     @property
     def left_mtp(self) -> tuple[float, float, float]:
@@ -196,7 +196,7 @@ class _JointCenterMixin:
         tuple[float, float, float]
             ``(x, y, z)`` position in metres, in the ground frame.
         """
-        return self._joint_center('mtp_l')
+        return self.joint_center('mtp_l')
 
     @property
     def right_mtp(self) -> tuple[float, float, float]:
@@ -211,7 +211,7 @@ class _JointCenterMixin:
         tuple[float, float, float]
             ``(x, y, z)`` position in metres, in the ground frame.
         """
-        return self._joint_center('mtp_r')
+        return self.joint_center('mtp_r')
 
     @property
     def torso(self) -> tuple[float, float, float]:
@@ -227,7 +227,7 @@ class _JointCenterMixin:
         tuple[float, float, float]
             ``(x, y, z)`` position in metres, in the ground frame.
         """
-        return self._joint_center('back')
+        return self.joint_center('back')
 
     @property
     def left_shoulder(self) -> tuple[float, float, float]:
@@ -244,7 +244,7 @@ class _JointCenterMixin:
         tuple[float, float, float]
             ``(x, y, z)`` position in metres, in the ground frame.
         """
-        return self._joint_center('acromial_l')
+        return self.joint_center('acromial_l')
 
     @property
     def right_shoulder(self) -> tuple[float, float, float]:
@@ -261,7 +261,7 @@ class _JointCenterMixin:
         tuple[float, float, float]
             ``(x, y, z)`` position in metres, in the ground frame.
         """
-        return self._joint_center('acromial_r')
+        return self.joint_center('acromial_r')
 
     @property
     def left_elbow(self) -> tuple[float, float, float]:
@@ -276,7 +276,7 @@ class _JointCenterMixin:
         tuple[float, float, float]
             ``(x, y, z)`` position in metres, in the ground frame.
         """
-        return self._joint_center('elbow_l')
+        return self.joint_center('elbow_l')
 
     @property
     def right_elbow(self) -> tuple[float, float, float]:
@@ -291,7 +291,7 @@ class _JointCenterMixin:
         tuple[float, float, float]
             ``(x, y, z)`` position in metres, in the ground frame.
         """
-        return self._joint_center('elbow_r')
+        return self.joint_center('elbow_r')
 
     @property
     def left_radioulnar(self) -> tuple[float, float, float]:
@@ -307,7 +307,7 @@ class _JointCenterMixin:
         tuple[float, float, float]
             ``(x, y, z)`` position in metres, in the ground frame.
         """
-        return self._joint_center('radioulnar_l')
+        return self.joint_center('radioulnar_l')
 
     @property
     def right_radioulnar(self) -> tuple[float, float, float]:
@@ -323,7 +323,7 @@ class _JointCenterMixin:
         tuple[float, float, float]
             ``(x, y, z)`` position in metres, in the ground frame.
         """
-        return self._joint_center('radioulnar_r')
+        return self.joint_center('radioulnar_r')
 
     @property
     def left_wrist(self) -> tuple[float, float, float]:
@@ -338,7 +338,7 @@ class _JointCenterMixin:
         tuple[float, float, float]
             ``(x, y, z)`` position in metres, in the ground frame.
         """
-        return self._joint_center('radius_hand_l')
+        return self.joint_center('radius_hand_l')
 
     @property
     def right_wrist(self) -> tuple[float, float, float]:
@@ -353,4 +353,4 @@ class _JointCenterMixin:
         tuple[float, float, float]
             ``(x, y, z)`` position in metres, in the ground frame.
         """
-        return self._joint_center('radius_hand_r')
+        return self.joint_center('radius_hand_r')
