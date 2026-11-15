@@ -76,6 +76,24 @@ class ChestPress(Equipment, abc.ABC):
             raise RuntimeError(
                 f"Missing required bodies for fitting: {', '.join(sorted(missing))}"
             )
+        for side in ("left", "right"):
+            if not self._handle_meshes(side):
+                raise RuntimeError(f"No meshes attached to {side}_handle")
+
+    def _handle_meshes(self, side: str) -> list[osim.Mesh]:
+        body = self.getBodySet().get(f"{side}_handle")
+        frames = [body]
+        frames.extend(
+            frame
+            for component in body.getComponentsList()
+            if (frame := osim.PhysicalFrame.safeDownCast(component)) is not None
+        )
+        return [
+            mesh
+            for frame in frames
+            for index in range(frame.getPropertyByName("attached_geometry").size())
+            if (mesh := osim.Mesh.safeDownCast(frame.get_attached_geometry(index))) is not None
+        ]
 
     def fit_user(
         self,
@@ -90,7 +108,7 @@ class ChestPress(Equipment, abc.ABC):
         scapular_elevation_weight: float = 1000.0,
         arm_weight: float = 0.05,
         pro_sup_weight: float = 100.0,
-        plane_distance_weight: float = 10000.0,
+        plane_distance_weight: float = 1e6,
         palm_facing_weight: float = 1000.0,
         wrist_extension_weight: float = 1000.0,
         wrist_flexion_weight: float = 10000.0,
@@ -108,7 +126,8 @@ class ChestPress(Equipment, abc.ABC):
            wrist at each angle, recording each successful palm position.
         2. Return the right lever to zero and refit the arm and wrist to the
            saved palm position.
-        3. Mirror the fitted right arm and hand coordinates to the left arm.
+        3. Mirror the fitted right arm to the left arm, then close the four
+           fingers of each hand on the registered meshes of its handle.
 
         The weights shared with :func:`fit_handle` are passed to each
         handle fit during the lever sweep and to the subsequent arm fit.
@@ -131,7 +150,7 @@ class ChestPress(Equipment, abc.ABC):
         wrist_dev_weight : float, default=1000.0
             Weight for neutral radial/ulnar deviation.
         knuckle_weight : float, default=10000.0
-            Weight for the index MCP abduction coordinate.
+            Weight for alignment of the knuckle line and handle axis.
         protraction_weight : float, default=5.0
             Weight penalizing scapular protraction relative to its coordinate
             range minimum.
@@ -141,11 +160,11 @@ class ChestPress(Equipment, abc.ABC):
             Weight for the press-posture tie-break.
         pro_sup_weight : float, default=100.0
             Weight for the neutral forearm rotation of 90 degrees.
-        plane_distance_weight : float, default=10000.0
-            Weight for the palm's local z displacement from the handle marker.
+        plane_distance_weight : float, default=1e6
+            Weight for the elbow's distance from the shoulder-palm plane
+            parallel to the handle axis.
         palm_facing_weight : float, default=1000.0
-            Weight for the angle of the palm position in the handle body's
-            local yz plane; it does not measure palm orientation.
+            Weight for orienting the palmar surface toward the handle axis.
         wrist_extension_weight : float, default=1000.0
             Weight for the phase-3 wrist-extension target.
         wrist_flexion_weight : float, default=10000.0
@@ -269,11 +288,20 @@ class ChestPress(Equipment, abc.ABC):
             raise RuntimeError("The final right arm fit did not converge")
 
         mirror_arm(user=user, to_mirror="right")
+        grasp = {
+            side: user.grasp_handle(
+                side,
+                equipment.getBodySet().get(f"{side}_handle"),
+                equipment._handle_meshes(side),
+            )
+            for side in ("right", "left")
+        }
 
         report["grip"] = {
             "sweep_angle_deg": math.degrees(angle),
             "elbow_flexion_deg": elbow_flexion,
             "palm_handle_position_m": fitted_palm_position,
+            "fingers": grasp,
         }
 
         return F, report
@@ -283,7 +311,6 @@ class ChestPress(Equipment, abc.ABC):
         user: User,
         step_deg: float = 1.0,
         duration_s: float = 5.0,
-        fps: int = 30,
         *,
         wrist_extension_deg: float = 45.0,
         palm_handle_distance_m: float = 0.005,
@@ -293,7 +320,7 @@ class ChestPress(Equipment, abc.ABC):
         scapular_elevation_weight: float = 1000.0,
         arm_weight: float = 0.05,
         pro_sup_weight: float = 100.0,
-        plane_distance_weight: float = 10000.0,
+        plane_distance_weight: float = 1e6,
         palm_facing_weight: float = 1000.0,
         wrist_extension_weight: float = 1000.0,
         wrist_flexion_weight: float = 10000.0,
@@ -314,9 +341,6 @@ class ChestPress(Equipment, abc.ABC):
             Lever-angle increment, in degrees.
         duration_s : float, default=5.0
             Total duration assigned to the state sequence, in seconds.
-        fps : int, default=30
-            Positive playback frame rate in frames per second. It does not
-            change the number of solver states retained in the trajectory.
         wrist_extension_deg : float, default=45.0
             Target wrist extension for each handle fit.
         palm_handle_distance_m : float, default=0.005
@@ -325,7 +349,7 @@ class ChestPress(Equipment, abc.ABC):
         wrist_dev_weight : float, default=1000.0
             Weight for neutral radial/ulnar deviation.
         knuckle_weight : float, default=10000.0
-            Weight for the index MCP abduction coordinate.
+            Weight for alignment of the knuckle line and handle axis.
         protraction_weight : float, default=5.0
             Weight penalizing scapular protraction relative to its coordinate
             range minimum.
@@ -335,11 +359,11 @@ class ChestPress(Equipment, abc.ABC):
             Weight for the arm-posture tie-break.
         pro_sup_weight : float, default=100.0
             Weight for neutral forearm rotation.
-        plane_distance_weight : float, default=10000.0
-            Weight for the palm's local z displacement from the handle marker.
+        plane_distance_weight : float, default=1e6
+            Weight for the elbow's distance from the shoulder-palm plane
+            parallel to the handle axis.
         palm_facing_weight : float, default=1000.0
-            Weight for the angle of the palm position in the handle body's
-            local yz plane; it does not measure palm orientation.
+            Weight for orienting the palmar surface toward the handle axis.
         wrist_extension_weight : float, default=1000.0
             Weight for the wrist-extension target.
         wrist_flexion_weight : float, default=10000.0
@@ -352,27 +376,25 @@ class ChestPress(Equipment, abc.ABC):
         Returns
         -------
         framework : opensim_frameworks.Framework
-            Framework containing the fitted user and equipment with recorded
-            movement states.
+            Framework containing synchronized member and composite state
+            trajectories for the successful movement steps.
 
         Raises
         ------
         ValueError
-            If a numeric parameter is invalid or fewer than two valid states
+            If a numeric parameter is invalid, a simulated right-lever angle
+            is outside the left lever's range, or fewer than two valid states
             are produced.
 
         Notes
         -----
-        The state count is determined by the successful lever-step fits.
-        ``fps`` is a playback setting for visualization, not a resampling rate.
+        The successful steps are uniformly distributed over ``duration_s``.
+        Sampling for playback is handled separately by the framework viewer.
         """
         if not math.isfinite(step_deg) or step_deg <= 0.0:
             raise ValueError("step_deg must be finite and positive")
         if not math.isfinite(duration_s) or duration_s <= 0.0:
             raise ValueError("duration_s must be finite and positive")
-        if isinstance(fps, bool) or not isinstance(fps, int) or fps <= 0:
-            raise ValueError("fps must be a positive integer")
-
         framework, report = self.fit_user(
             user=user,
             step_deg=step_deg,
@@ -396,15 +418,17 @@ class ChestPress(Equipment, abc.ABC):
         right_lever_coord = right_lever_coord.get("right_lever-angle")
         lower = right_lever_coord.getRangeMin()
         upper = right_lever_coord.getRangeMax()
-
+        left_lever_coord = framework.equipment.getCoordinateSet().get("left_lever-angle")
         palm_position_m = report["grip"]["palm_handle_position_m"]
         step_rad = math.radians(step_deg)
         angle = lower
-        max_angle = lower
-        states = []
+        states: list[tuple[osim.State, osim.State]] = []
         while True:
 
+            if not left_lever_coord.getRangeMin() <= angle <= left_lever_coord.getRangeMax():
+                raise ValueError("simulated angle is outside the left lever range")
             right_lever_coord.setValue(framework.equipment.state, angle, False)
+            left_lever_coord.setValue(framework.equipment.state, angle, False)
             framework.equipment.realizePosition(framework.equipment.state)
 
             elbow_flexion, _ = fit_handle(
@@ -429,31 +453,40 @@ class ChestPress(Equipment, abc.ABC):
                 arm_weight=arm_weight,
             )
 
-            mirror_arm(framework.user, "right")
-
             if elbow_flexion is None:
-                break
-            if elbow_flexion < 1.0:
-                break
-
-            states.append(osim.State(framework.state))
-
-            next_angle = angle + step_rad
-            if next_angle <= upper:
-                angle = next_angle
-                max_angle = max(max_angle, angle)
-            else:
                 warnings.warn(
-                    f"The right elbow reached only {max_angle} degrees of flexion"
+                    f"Outward handle fit failed at {math.degrees(angle):.2f} degrees",
+                    RuntimeWarning,
+                    stacklevel=2,
                 )
                 break
 
-        while True:
-            next_angle = angle - step_rad
-            if next_angle >= lower:
-                angle = next_angle
-                max_angle = max(max_angle, angle)
+            mirror_arm(framework.user, "right")
+            states.append(
+                (osim.State(framework.user.state), osim.State(framework.equipment.state))
+            )
+
+            if elbow_flexion < 1.0:
+                break
+            if angle >= upper:
+                warnings.warn(
+                    f"The right lever reached {math.degrees(angle):.2f} degrees "
+                    f"with the elbow still flexed by {elbow_flexion:.2f} degrees",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                break
+            angle = min(angle + step_rad, upper)
+
+        if states:
+            # Resume the return stroke from the last successful outward fit.
+            framework.user.state = osim.State(states[-1][0])
+            framework.equipment.state = osim.State(states[-1][1])
+            angle = right_lever_coord.getValue(framework.equipment.state)
+            while angle > lower:
+                angle = max(lower, angle - step_rad)
                 right_lever_coord.setValue(framework.equipment.state, angle, False)
+                left_lever_coord.setValue(framework.equipment.state, angle, False)
                 framework.equipment.realizePosition(framework.equipment.state)
 
                 elbow_flexion, _ = fit_handle(
@@ -478,12 +511,28 @@ class ChestPress(Equipment, abc.ABC):
                     arm_weight=arm_weight,
                 )
 
-                if elbow_flexion is None or elbow_flexion < 1.0:
+                if elbow_flexion is None:
+                    warnings.warn(
+                        f"Return handle fit failed at {math.degrees(angle):.2f} degrees",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
                     break
 
                 mirror_arm(framework.user, "right")
-                states.append(osim.State(framework.state))
-            else:
-                break
+                states.append(
+                    (osim.State(framework.user.state), osim.State(framework.equipment.state))
+                )
+
+        if len(states) < 2:
+            raise ValueError("fewer than two valid movement states were produced")
+
+        # Record each member snapshot so the framework builds synchronized trajectories.
+        for time, (user_state, equipment_state) in zip(
+            np.linspace(0.0, duration_s, len(states)), states, strict=True
+        ):
+            framework.user.state = user_state
+            framework.equipment.state = equipment_state
+            framework.record_state(float(time))
 
         return framework

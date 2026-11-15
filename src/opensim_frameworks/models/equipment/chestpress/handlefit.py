@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import warnings
 from typing import Literal
 
 import numpy as np
@@ -100,7 +101,7 @@ def fit_handle(
     palm_contact_weight: float = 1e6,
     palm_facing_weight: float = 1000.0,
     knuckle_weight: float = 10000.0,
-    plane_distance_weight: float = 10000.0,
+    plane_distance_weight: float = 1e6,
     handle_end_weight: float = 1e6,
     pro_sup_weight: float = 100.0,
     wrist_dev_weight: float = 1000.0,
@@ -117,7 +118,9 @@ def fit_handle(
     unchanged. The handle meshes are approximated by an enclosing cylinder.
     Retraction, low shoulder elevation, arm-plane alignment, knuckle-line
     alignment and palmar orientation are weighted objectives. The palm marker
-    must remain outside the cylinder.
+    must remain outside the cylinder. Scapular proximity is optimized against
+    the rib mesh. Scapula intersections with ribs or spine and remaining
+    separation violations are reported as warnings.
 
     Parameters
     ----------
@@ -145,7 +148,7 @@ def fit_handle(
     knuckle_weight : float, default=10000.0
         Weight for aligning the least-squares line through the four MCP
         joint centers with the handle axis.
-    plane_distance_weight : float, default=10000.0
+    plane_distance_weight : float, default=1e6
         Weight for the elbow's distance from the plane through the shoulder
         and palm that is parallel to the handle axis.
     handle_end_weight : float, default=1e6
@@ -198,13 +201,13 @@ def fit_handle(
     if not arm_names:
         raise ValueError(f"No {side} arm coordinates found in user model")
 
-    shoulder_names = sorted(
+    shoulder_names = [
         name + "_" + suffix
         for name in SHOULDER_GIRDLE_COORDINATES
         if name + "_" + suffix in names
-    )
-    if not shoulder_names:
-        raise ValueError(f"No shoulder-girdle coordinates found for side {side}")
+    ]
+    if len(shoulder_names) != len(SHOULDER_GIRDLE_COORDINATES):
+        raise ValueError(f"Incomplete shoulder-girdle coordinates for side {side}")
 
     # Verifico il marker centrale e ricavo asse, raggio ed estremita' dalle
     # mesh, nel sistema locale del corpo che ruota con la leva.
@@ -237,7 +240,6 @@ def fit_handle(
     axis_origin, axis_direction = cylinder_axis[:3], cylinder_axis[3:]
     min_axial = np.dot(end_min - axis_origin, axis_direction)
     max_axial = np.dot(end_max - axis_origin, axis_direction)
-    protraction_min = coordinates.get(f"sc_protraction_{suffix}").getRangeMin()
     target = None
     if palm_position_handle is not None:
         target = np.asarray(palm_position_handle, dtype=float)
@@ -256,11 +258,13 @@ def fit_handle(
 
     if user_marker is None:
         raise ValueError(f"Marker {marker_name} not found in user model")
-
     def _apply_coordinates(coord_values: npt.ArrayLike) -> None:
-        for coord_name, value in zip(arm_names + shoulder_names, coord_values):
+        values = np.asarray(coord_values, dtype=float)
+        for coord_name, value in zip(arm_names, values):
             coordinates.get(coord_name).setValue(user.state, float(value), False)
-        user.realizePosition(user.state)
+        user.set_scapular_girdle_values(
+            suffix, values[len(arm_names):], check_contact=False
+        )
 
     def _surface_gap() -> float:
         palm = marker_position_array(user_marker, user.state)
@@ -313,13 +317,10 @@ def fit_handle(
         arm_rot = coordinates.get(f"arm_rot_{suffix}").getValue(user.state)
         residuals.append(math.sqrt(arm_weight) * (arm_rot - math.pi / 2))
 
-        # Favorisco una scapola retratta e penalizzo l'elevazione positiva.
-        protraction = coordinates.get(f"sc_protraction_{suffix}").getValue(user.state)
-        elevation = coordinates.get(f"sc_elevation_{suffix}").getValue(user.state)
-        residuals.append(
-            math.sqrt(protraction_weight) * (protraction - protraction_min)
-        )
-        residuals.append(math.sqrt(scapular_elevation_weight) * max(elevation, 0.0))
+        # L'utente valuta retrazione, elevazione e contatto scapolo-toracico.
+        residuals.extend(user.scapular_fit_residuals(
+            suffix, protraction_weight, scapular_elevation_weight
+        ))
 
         # Ricavo la retta ai minimi quadrati delle nocche e la confronto con
         # l'asse dell'impugnatura, senza distinguere i due versi della retta.
@@ -384,11 +385,13 @@ def fit_handle(
         x0,
         bounds=bounds,
         max_nfev=1000,
+        diff_step=1e-3,
     )
 
     if result.success:
         _apply_coordinates(result.x)
         if _surface_gap() < 0:
+
             def constraint(values: npt.ArrayLike) -> float:
                 _apply_coordinates(values)
                 return _surface_gap()
@@ -409,6 +412,28 @@ def fit_handle(
             _apply_coordinates(result.x)
 
     if result.success and _surface_gap() >= -1e-9:
+        # L'utente gestisce la correzione e la segnalazione del contatto
+        # scapolare; se la cintura cambia, riadatto soltanto braccio e polso.
+        if user.resolve_scapula_intersection(suffix, x0[len(arm_names):]):
+            shoulder_values = np.array(
+                [coordinates.get(name).getValue(user.state) for name in shoulder_names]
+            )
+            arm_result = least_squares(
+                lambda values: _objective(np.concatenate((values, shoulder_values))),
+                result.x[:len(arm_names)],
+                bounds=(bounds[0][:len(arm_names)], bounds[1][:len(arm_names)]),
+                max_nfev=1000,
+                diff_step=1e-3,
+            )
+            if arm_result.success:
+                _apply_coordinates(np.concatenate((arm_result.x, shoulder_values)))
+            else:
+                _apply_coordinates(np.concatenate((result.x[:len(arm_names)], shoulder_values)))
+                warnings.warn("Arm refit after scapula correction did not converge", RuntimeWarning)
+        if _surface_gap() < -1e-9:
+            _apply_coordinates(x0)
+            warnings.warn("Arm refit placed the palm inside the handle", RuntimeWarning)
+            return None, None
         # Restituisco il gomito e la posizione del palmo rispetto al marker
         # centrale, mantenendo gli assi locali dell'impugnatura.
 

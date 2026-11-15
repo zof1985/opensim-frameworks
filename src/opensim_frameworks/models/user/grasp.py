@@ -110,10 +110,10 @@ class _GraspMixin:
         handle_body : opensim.Body
             Body of a separately initialized model (for example a piece of
             equipment). Its pose is read from its model's own working state.
-        handle_mesh : opensim.Mesh
-            Mesh attached to `handle_body` that the fingers touch. A relative
-            mesh file is searched in the user's geometry directories and in
-            the bundled primitive meshes.
+        handle_mesh : opensim.Mesh or sequence of opensim.Mesh
+            One or more meshes attached to `handle_body` that the fingers
+            touch. Relative mesh files are searched in the user's geometry
+            directories and in the bundled primitive meshes.
         palm_margin_m : float, default=2e-3
             Distance, in metres, below which a finger vertex is considered to
             touch the palm.
@@ -152,11 +152,21 @@ class _GraspMixin:
             raise ValueError("hand must be 'left' or 'right'")
         if not isinstance(handle_body, self.opensim.Body):
             raise TypeError("handle_body must be an opensim.Body")
-        if not isinstance(handle_mesh, self.opensim.Mesh):
-            raise TypeError("handle_mesh must be an opensim.Mesh")
+        if isinstance(handle_mesh, self.opensim.Mesh):
+            handle_meshes = [handle_mesh]
+        elif isinstance(handle_mesh, (list, tuple)) and handle_mesh:
+            handle_meshes = list(handle_mesh)
+            if not all(isinstance(mesh, self.opensim.Mesh) for mesh in handle_meshes):
+                raise TypeError("handle_mesh must contain only opensim.Mesh objects")
+        else:
+            raise TypeError("handle_mesh must be an opensim.Mesh or a nonempty sequence of meshes")
         if not handle_body.hasModel():
             raise ValueError("handle_body is not connected to an initialized model")
-        if handle_mesh.getFrame().findBaseFrame().getName() != handle_body.getName():
+        if any(
+            mesh.getFrame().findBaseFrame().getAbsolutePathString()
+            != handle_body.getAbsolutePathString()
+            for mesh in handle_meshes
+        ):
             raise ValueError("handle_mesh is not attached to handle_body")
 
         side = hand
@@ -199,7 +209,7 @@ class _GraspMixin:
 
         def matrix(mesh: Any) -> Any:
             # la mesh dell'impugnatura appartiene al suo modello, le altre all'utente
-            state = handle_state if mesh is handle_mesh else self.state
+            state = handle_state if any(mesh is handle for handle in handle_meshes) else self.state
             return mesh_matrix(mesh, state)
 
         def detector_for(first: Any, second: Any) -> tuple[Any, Any, Any]:
@@ -230,7 +240,11 @@ class _GraspMixin:
 
         # mesh reale dell'impugnatura contro ogni segmento di ogni dito
         handle_pairs = {
-            (finger, segment): both(finger_mesh(finger, segment), handle_mesh)
+            (finger, segment): [
+                pair
+                for mesh in handle_meshes
+                for pair in both(finger_mesh(finger, segment), mesh)
+            ]
             for finger in _GRASP_ORDER
             for segment in _SEGMENTS
         }
