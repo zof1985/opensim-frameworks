@@ -118,7 +118,8 @@ def fit_handle(
     unchanged. The handle meshes are approximated by an enclosing cylinder.
     Retraction, low shoulder elevation, arm-plane alignment, knuckle-line
     alignment and palmar orientation are weighted objectives. The palm marker
-    must remain outside the cylinder. Scapular proximity is optimized against
+    must remain outside the cylinder, and each MCP joint center must project
+    strictly between its end disks. Scapular proximity is optimized against
     the rib mesh. Scapula intersections with ribs or spine and remaining
     separation violations are reported as warnings.
 
@@ -274,6 +275,20 @@ def fit_handle(
         radial = delta - np.dot(delta, axis_direction) * axis_direction
         return float(np.linalg.norm(radial) - cylinder_radius)
 
+    def _knuckle_end_gaps() -> np.ndarray:
+        # Proietto ogni nocca sull'asse del cilindro nel riferimento locale.
+        frame = body_transform_array(handle, equipment.state)
+        knuckles_ground = np.asarray([
+            user.joint_center(f"{finger}_mcp_{suffix}")
+            for finger in ("index", "middle", "ring", "little")
+        ])
+        knuckles_local = (knuckles_ground - frame[:3, 3]) @ frame[:3, :3]
+        axial = (knuckles_local - axis_origin) @ axis_direction
+        return np.concatenate((axial - min_axial, max_axial - axial))
+
+    def _constraints_satisfied() -> bool:
+        return _surface_gap() >= -1e-9 and bool(np.all(_knuckle_end_gaps() > 0.0))
+
     def _objective(coord_values: npt.ArrayLike) -> np.ndarray:
         """Evaluate weighted residuals for the arm fit."""
         # Aggiorno la postura e calcolo la distanza radiale dal cilindro.
@@ -378,8 +393,39 @@ def fit_handle(
         [coordinates.get(name).getRangeMax() for name in arm_names + shoulder_names],
     )
 
-    # Risolvo i residui pesati e, se necessario, ripeto con il vincolo
-    # esplicito che il marker rimanga esterno al cilindro.
+    def _constrained_fit(
+        initial: np.ndarray,
+        lower: npt.ArrayLike,
+        upper: npt.ArrayLike,
+        fixed_shoulder: np.ndarray | None = None,
+    ):
+        def full_values(values: npt.ArrayLike) -> np.ndarray:
+            values = np.asarray(values, dtype=float)
+            if fixed_shoulder is not None:
+                return np.concatenate((values, fixed_shoulder))
+            return values
+
+        def constraints(values: npt.ArrayLike) -> np.ndarray:
+            _apply_coordinates(full_values(values))
+            # Un piccolo margine numerico mantiene le nocche strettamente
+            # all'interno degli estremi anche con la tolleranza del solver.
+            return np.concatenate(([_surface_gap()], _knuckle_end_gaps() - 1e-8))
+
+        def squared_residuals(values: npt.ArrayLike) -> float:
+            residuals = _objective(full_values(values))
+            return float(residuals @ residuals)
+
+        return minimize(
+            squared_residuals,
+            initial,
+            method="SLSQP",
+            bounds=list(zip(lower, upper)),
+            constraints=[{"type": "ineq", "fun": constraints}],
+            options={"maxiter": 1000, "ftol": 1e-9},
+        )
+
+    # Risolvo i residui pesati e, se necessario, ripeto con i vincoli
+    # rigidi sul palmo e sulle proiezioni delle quattro nocche.
     result = least_squares(
         _objective,
         x0,
@@ -390,28 +436,18 @@ def fit_handle(
 
     if result.success:
         _apply_coordinates(result.x)
-        if _surface_gap() < 0:
-
-            def constraint(values: npt.ArrayLike) -> float:
-                _apply_coordinates(values)
-                return _surface_gap()
-
-            def squared_residuals(values: npt.ArrayLike) -> float:
-                residuals = _objective(values)
-                return float(residuals @ residuals)
-
-            constrained = minimize(
-                squared_residuals,
-                result.x,
-                method="SLSQP",
-                bounds=list(zip(*bounds)),
-                constraints=[{"type": "ineq", "fun": constraint}],
-                options={"maxiter": 1000, "ftol": 1e-9},
-            )
-            result = constrained
+        if not _constraints_satisfied():
+            result = _constrained_fit(result.x, *bounds)
             _apply_coordinates(result.x)
+            if not result.success or not _constraints_satisfied():
+                _apply_coordinates(x0)
+                warnings.warn(
+                    "No valid arm fit satisfying the palm and knuckle handle constraints",
+                    RuntimeWarning,
+                )
+                return None, None
 
-    if result.success and _surface_gap() >= -1e-9:
+    if result.success and _constraints_satisfied():
         # L'utente gestisce la correzione e la segnalazione del contatto
         # scapolare; se la cintura cambia, riadatto soltanto braccio e polso.
         if user.resolve_scapula_intersection(suffix, x0[len(arm_names):]):
@@ -430,9 +466,28 @@ def fit_handle(
             else:
                 _apply_coordinates(np.concatenate((result.x[:len(arm_names)], shoulder_values)))
                 warnings.warn("Arm refit after scapula correction did not converge", RuntimeWarning)
-        if _surface_gap() < -1e-9:
+            if not _constraints_satisfied():
+                arm_start = np.array([
+                    coordinates.get(name).getValue(user.state) for name in arm_names
+                ])
+                arm_result = _constrained_fit(
+                    arm_start, bounds[0][:len(arm_names)], bounds[1][:len(arm_names)],
+                    shoulder_values,
+                )
+                _apply_coordinates(np.concatenate((arm_result.x, shoulder_values)))
+                if not arm_result.success:
+                    _apply_coordinates(x0)
+                    warnings.warn(
+                        "Constrained arm refit after scapula correction did not converge",
+                        RuntimeWarning,
+                    )
+                    return None, None
+        if not _constraints_satisfied():
             _apply_coordinates(x0)
-            warnings.warn("Arm refit placed the palm inside the handle", RuntimeWarning)
+            warnings.warn(
+                "Arm fit violates the palm or knuckle handle constraints",
+                RuntimeWarning,
+            )
             return None, None
         # Restituisco il gomito e la posizione del palmo rispetto al marker
         # centrale, mantenendo gli assi locali dell'impugnatura.

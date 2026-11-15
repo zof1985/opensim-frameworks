@@ -189,6 +189,10 @@ def test_palm_relative_to_marker_and_cylindrical_surface(fit_setup, monkeypatch,
     equipment.updCoordinateSet().get(0).setValue(equipment.state, angle)
     equipment.realizePosition(equipment.state)
     transform = body_transform_array(equipment.getBodySet().get("right_handle"), equipment.state)
+    original_joint_center = user.joint_center
+    user.joint_center = lambda name: (
+        transform[:3, :3] @ original_joint_center(name) + transform[:3, 3]
+    )
     palm_local = np.array([0.325, 0.48, 0.5])
     palm_ground[:] = transform[:3, :3] @ palm_local + transform[:3, 3]
 
@@ -205,6 +209,142 @@ def test_palm_relative_to_marker_and_cylindrical_surface(fit_setup, monkeypatch,
         monkeypatch, user, equipment, probes=[{}], handle_end_weight=1.0
     )
     assert costs[0] == pytest.approx(0.03**2, abs=1e-8)
+
+
+@pytest.mark.parametrize("angle", [0.0, 0.7])
+@pytest.mark.parametrize("positions", [[0.26, 0.31, 0.35, 0.40], [0.40, 0.45, 0.49, 0.54]])
+def test_knuckles_are_constrained_between_handle_ends(
+    fit_setup, monkeypatch, angle, positions
+):
+    user, equipment, coordinates, palm_ground = fit_setup
+    equipment.updCoordinateSet().get(0).setValue(equipment.state, angle)
+    equipment.realizePosition(equipment.state)
+    transform = body_transform_array(equipment.getBodySet().get("right_handle"), equipment.state)
+    palm_ground[:] = transform[:3, :3] @ [0.325, 0.4, 0.5] + transform[:3, 3]
+    original_joint_center = user.joint_center
+    fingers = ("index", "middle", "ring", "little")
+
+    def joint_center(name):
+        for index, finger in enumerate(fingers):
+            if name == f"{finger}_mcp_r":
+                shift = coordinates.get("wrist_dev_r").value
+                local = np.array([0.3, positions[index] + shift, 0.55])
+                return transform[:3, :3] @ local + transform[:3, 3]
+        return transform[:3, :3] @ original_joint_center(name) + transform[:3, 3]
+
+    user.joint_center = joint_center
+    (elbow, _), _ = run_fit(
+        monkeypatch, user, equipment, probes=[{}], wrist_dev_weight=1.0,
+    )
+    assert elbow is not None
+    fitted_positions = np.array(positions) + coordinates.get("wrist_dev_r").value
+    assert np.all(fitted_positions > 0.28)
+    assert np.all(fitted_positions < 0.52)
+
+
+@pytest.mark.parametrize("shift", [-0.01, 0.06])
+def test_knuckle_constraint_does_not_prefer_one_interior_position(fit_setup, monkeypatch, shift):
+    user, equipment, _, palm_ground = fit_setup
+    palm_ground[:] = [0.325, 0.4, 0.5]
+    original_joint_center = user.joint_center
+    user.joint_center = lambda name: (
+        original_joint_center(name) + np.array([0.0, shift, 0.0])
+        if name.endswith("_mcp_r") else original_joint_center(name)
+    )
+    monkeypatch.setattr(
+        handlefit, "minimize",
+        lambda *args, **kwargs: pytest.fail("interior knuckles must not trigger constrained fit"),
+    )
+    (elbow, _), _ = run_fit(monkeypatch, user, equipment, probes=[{}])
+    assert elbow is not None
+
+
+def test_knuckle_exactly_at_handle_end_is_not_accepted(fit_setup, monkeypatch):
+    user, equipment, _, palm_ground = fit_setup
+    palm_ground[:] = [0.325, 0.375, 0.5]
+    original_joint_center = user.joint_center
+    user.joint_center = lambda name: (
+        np.array([0.3, 0.25, 0.55])
+        if name == "index_mcp_r" else original_joint_center(name)
+    )
+    monkeypatch.setattr(
+        handlefit, "enclosing_cylinder",
+        lambda vertices: (
+            np.array([0.3, 0.375, 0.5, 0.0, 1.0, 0.0]), 0.02,
+            np.array([0.3, 0.25, 0.5]), np.array([0.3, 0.5, 0.5]),
+        ),
+    )
+    called = []
+
+    def unchanged_solver(objective, x0, **kwargs):
+        called.append(True)
+        return SimpleNamespace(success=True, x=x0)
+
+    monkeypatch.setattr(handlefit, "minimize", unchanged_solver)
+    with pytest.warns(RuntimeWarning, match="No valid arm fit"):
+        (elbow, palm), _ = run_fit(monkeypatch, user, equipment)
+    assert called
+    assert (elbow, palm) == (None, None)
+
+
+def test_knuckle_constraint_is_rechecked_after_scapula_correction(fit_setup, monkeypatch):
+    user, equipment, coordinates, palm_ground = fit_setup
+    palm_ground[:] = [0.325, 0.4, 0.5]
+    original_joint_center = user.joint_center
+
+    def joint_center(name):
+        point = original_joint_center(name).copy()
+        if name.endswith("_mcp_r"):
+            point[1] += coordinates.get("sc_elevation_r").value
+            point[1] += coordinates.get("wrist_dev_r").value
+        return point
+
+    def correct_scapula(side, reference):
+        coordinates.get("sc_elevation_r").value = 0.2
+        return True
+
+    user.joint_center = joint_center
+    user.resolve_scapula_intersection = correct_scapula
+    (elbow, _), _ = run_fit(monkeypatch, user, equipment, wrist_dev_weight=1.0)
+    assert elbow is not None
+    for finger in ("index", "middle", "ring", "little"):
+        assert 0.28 < user.joint_center(f"{finger}_mcp_r")[1] < 0.52
+    assert coordinates.get("sc_elevation_r").value == pytest.approx(0.2)
+
+
+def test_infeasible_knuckles_reject_fit_and_restore_coordinates(fit_setup, monkeypatch):
+    user, equipment, coordinates, palm_ground = fit_setup
+    palm_ground[:] = [0.325, 0.4, 0.5]
+    original_joint_center = user.joint_center
+    user.joint_center = lambda name: (
+        original_joint_center(name) + np.array([0.0, 0.5, 0.0])
+        if name.endswith("_mcp_r") else original_joint_center(name)
+    )
+    coordinates.get("arm_rot_r").value = 0.2
+    with pytest.warns(RuntimeWarning, match="No valid arm fit"):
+        (elbow, palm), _ = run_fit(monkeypatch, user, equipment)
+    assert (elbow, palm) == (None, None)
+    assert coordinates.get("arm_rot_r").value == pytest.approx(0.2)
+
+
+def test_infeasible_knuckles_after_scapula_correction_restore_pose(fit_setup, monkeypatch):
+    user, equipment, coordinates, palm_ground = fit_setup
+    palm_ground[:] = [0.325, 0.4, 0.5]
+    original_joint_center = user.joint_center
+    user.joint_center = lambda name: (
+        original_joint_center(name) + np.array([0.0, coordinates.get("sc_elevation_r").value, 0.0])
+        if name.endswith("_mcp_r") else original_joint_center(name)
+    )
+
+    def correct_scapula(side, reference):
+        coordinates.get("sc_elevation_r").value = 0.5
+        return True
+
+    user.resolve_scapula_intersection = correct_scapula
+    with pytest.warns(RuntimeWarning, match="Constrained arm refit"):
+        (elbow, palm), _ = run_fit(monkeypatch, user, equipment)
+    assert (elbow, palm) == (None, None)
+    assert coordinates.get("sc_elevation_r").value == pytest.approx(0.0)
 
 
 def test_shoulder_weights_penalize_protraction_and_positive_elevation(fit_setup, monkeypatch):
