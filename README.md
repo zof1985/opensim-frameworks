@@ -60,11 +60,17 @@ provides playback controls.
 Chest-press `fit_user` includes `handle_fit_log` in its `grip` report.
 `simulate_kinematics` returns `(framework, handle_fit_log)`. Each log entry
 identifies the fitting phase and lever angle and contains the Python warnings
-and enabled logging records produced by that fit, with their source location.
+and enabled logging records produced by that fit and subsequent arm mirroring,
+with their source location.
 Warnings captured by a fit are returned rather than displayed. Native OpenSim
 output is not included. Direct `fit_handle` calls return
 `(elbow_flexion, palm_position, messages)`; exceptions raised by `fit_handle`
 expose messages collected so far as `handle_fit_log`.
+The right hand is fitted to its handle and all upper-limb coordinates are
+mirrored to the left, including the scapular and finger coordinates. The left
+hand is not independently fitted or checked for handle contact, and its
+`grip["fingers"]["left"]` report is `None`. The mirrored scapula is checked for
+thoracic intersections but is not independently fitted to the left shoulder map.
 The palm-contact objective targets a palm-to-axis distance equal to the radius
 of the handle's cylindrical approximation, with a default weight of `1e7`; the
 fit does not penalize movement

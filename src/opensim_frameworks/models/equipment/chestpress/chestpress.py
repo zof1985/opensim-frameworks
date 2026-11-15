@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import abc
 import math
+import sys
 import warnings
 from typing import Any
 
@@ -12,11 +13,25 @@ import opensim as osim
 
 from opensim_frameworks import Equipment
 from opensim_frameworks.framework.framework import Framework
+from opensim_frameworks.models.user.hand import FINGERS
 from opensim_frameworks.models.user.user import User
-from .handlefit import fit_handle, mirror_arm
+from .handlefit import _capture_messages, fit_handle, mirror_arm
 from .userpositioning import position_user
 
 __all__ = ["ChestPress"]
+
+
+def _mirror_arm_with_log(user: User, fit_log: list[dict[str, Any]]) -> None:
+    with _capture_messages() as messages:
+        completed = False
+        try:
+            mirror_arm(user=user, to_mirror="right")
+            completed = True
+        finally:
+            fit_log[-1]["messages"].extend(messages)
+            error = sys.exc_info()[1] if not completed else None
+            if error is not None:
+                BaseException.__setattr__(error, "handle_fit_log", fit_log)
 
 
 class ChestPress(Equipment, abc.ABC):
@@ -104,7 +119,8 @@ class ChestPress(Equipment, abc.ABC):
             mesh
             for frame in frames
             for index in range(frame.getPropertyByName("attached_geometry").size())
-            if (mesh := osim.Mesh.safeDownCast(frame.get_attached_geometry(index))) is not None
+            if (mesh := osim.Mesh.safeDownCast(frame.get_attached_geometry(index)))
+            is not None
         ]
 
     def fit_user(
@@ -113,7 +129,7 @@ class ChestPress(Equipment, abc.ABC):
         *,
         step_deg: float = 1.0,
         wrist_dev_weight: float = 1000.0,
-        knuckle_weight: float = 10000.0,
+        knuckle_weight: float = 1e5,
         knuckle_end_weight: float = 1e8,
         protraction_weight: float = 5.0,
         scapular_elevation_weight: float = 1000.0,
@@ -134,8 +150,8 @@ class ChestPress(Equipment, abc.ABC):
            wrist at each angle to find the reachable sweep.
         2. Return the right lever to zero and refit the arm and wrist,
            starting from the initial zero-lever fit.
-        3. Mirror the fitted right arm to the left arm, then close the four
-           fingers of each hand on the registered meshes of its handle.
+        3. Close the right fingers on the handle, then mirror all upper-limb
+           coordinates to the left side.
 
         The weights shared with :func:`fit_handle` are passed to each
         handle fit during the lever sweep and to the subsequent arm fit.
@@ -152,7 +168,7 @@ class ChestPress(Equipment, abc.ABC):
             to 1 degree of elbow flexion.
         wrist_dev_weight : float, default=1000.0
             Weight for neutral radial/ulnar deviation.
-        knuckle_weight : float, default=10000.0
+        knuckle_weight : float, default=1e5
             Weight for alignment of the knuckle line and handle axis.
         knuckle_end_weight : float, default=1e8
             Weight penalizing knuckle projections outside the handle ends.
@@ -178,7 +194,10 @@ class ChestPress(Equipment, abc.ABC):
             Framework containing ``user`` and ``equipment``, and a report with
             the keys ``back``, ``seat``, ``hips``, ``feet`` and ``grip``.
             ``grip["handle_fit_log"]`` contains one entry per handle fit,
-            with its phase, lever angle in degrees and messages.
+            with its phase, lever angle in degrees and messages. The final
+            entry also includes messages from mirroring the left arm.
+            ``grip["fingers"]["left"]`` is None: the mirrored left grasp is
+            not independently fitted or checked against the handle.
 
         Raises
         ------
@@ -243,16 +262,22 @@ class ChestPress(Equipment, abc.ABC):
                 wrist_flexion_weight=wrist_flexion_weight,
                 arm_weight=arm_weight,
             )
-            fit_log.append({
-                "phase": "sweep", "lever_angle_deg": math.degrees(angle),
-                "messages": messages,
-            })
+            fit_log.append(
+                {
+                    "phase": "sweep",
+                    "lever_angle_deg": math.degrees(angle),
+                    "messages": messages,
+                }
+            )
             if elbow_flexion is None:
                 break
             if initial_pose is None:
                 coordinates = user.getCoordinateSet()
                 initial_pose = [
-                    (coordinates.get(index), coordinates.get(index).getValue(user.state))
+                    (
+                        coordinates.get(index),
+                        coordinates.get(index).getValue(user.state),
+                    )
                     for index in range(coordinates.getSize())
                 ]
             if elbow_flexion < 1.0:
@@ -292,25 +317,32 @@ class ChestPress(Equipment, abc.ABC):
             wrist_flexion_weight=wrist_flexion_weight,
             arm_weight=arm_weight,
         )
-        fit_log.append({
-            "phase": "final", "lever_angle_deg": math.degrees(zero_angle),
-            "messages": messages,
-        })
+        fit_log.append(
+            {
+                "phase": "final",
+                "lever_angle_deg": math.degrees(zero_angle),
+                "messages": messages,
+            }
+        )
 
         if elbow_flexion is None or fitted_palm_position is None:
             error = RuntimeError("The final right arm fit did not converge")
             setattr(error, "handle_fit_log", fit_log)
             raise error
 
-        mirror_arm(user=user, to_mirror="right")
         grasp = {
-            side: user.grasp_handle(
-                side,
-                equipment.getBodySet().get(f"{side}_handle"),
-                equipment.handle_meshes(side),
-            )
-            for side in ("right", "left")
+            "right": user.grasp_handle(
+                "right",
+                equipment.getBodySet().get("right_handle"),
+                equipment.handle_meshes("right"),
+            ),
+            "left": None,
         }
+        _mirror_arm_with_log(user, fit_log)
+        for finger in FINGERS:
+            for joint in ("mcp", "pip", "dip"):
+                user.set_finger_coordinate_locked("left", finger, joint, "flexion", True)
+            user.set_finger_coordinate_locked("left", finger, "mcp", "abduction", True)
 
         report["grip"] = {
             "sweep_angle_deg": math.degrees(angle),
@@ -329,7 +361,7 @@ class ChestPress(Equipment, abc.ABC):
         duration_s: float = 5.0,
         *,
         wrist_dev_weight: float = 1000.0,
-        knuckle_weight: float = 10000.0,
+        knuckle_weight: float = 1e5,
         knuckle_end_weight: float = 1e8,
         protraction_weight: float = 5.0,
         scapular_elevation_weight: float = 1000.0,
@@ -355,7 +387,7 @@ class ChestPress(Equipment, abc.ABC):
             Total duration assigned to the state sequence, in seconds.
         wrist_dev_weight : float, default=1000.0
             Weight for neutral radial/ulnar deviation.
-        knuckle_weight : float, default=10000.0
+        knuckle_weight : float, default=1e5
             Weight for alignment of the knuckle line and handle axis.
         knuckle_end_weight : float, default=1e8
             Weight penalizing knuckle projections outside the handle ends.
@@ -380,7 +412,8 @@ class ChestPress(Equipment, abc.ABC):
         tuple of (opensim_frameworks.Framework, list of dict)
             Framework containing synchronized trajectories and the handle-fit
             log, including the initial fit and each outward and return step.
-            Each entry contains ``phase``, ``lever_angle_deg`` and ``messages``.
+            Each entry contains ``phase``, ``lever_angle_deg`` and ``messages``;
+            successful steps include messages from mirroring the left arm.
 
         Raises
         ------
@@ -419,14 +452,20 @@ class ChestPress(Equipment, abc.ABC):
         right_lever_coord = right_lever_coord.get("right_lever-angle")
         lower = right_lever_coord.getRangeMin()
         upper = right_lever_coord.getRangeMax()
-        left_lever_coord = framework.equipment.getCoordinateSet().get("left_lever-angle")
+        left_lever_coord = framework.equipment.getCoordinateSet().get(
+            "left_lever-angle"
+        )
         fit_log = list(report["grip"]["handle_fit_log"])
         step_rad = math.radians(step_deg)
         angle = lower
         states: list[tuple[osim.State, osim.State]] = []
         while True:
 
-            if not left_lever_coord.getRangeMin() <= angle <= left_lever_coord.getRangeMax():
+            if (
+                not left_lever_coord.getRangeMin()
+                <= angle
+                <= left_lever_coord.getRangeMax()
+            ):
                 raise ValueError("simulated angle is outside the left lever range")
             right_lever_coord.setValue(framework.equipment.state, angle, False)
             left_lever_coord.setValue(framework.equipment.state, angle, False)
@@ -448,10 +487,13 @@ class ChestPress(Equipment, abc.ABC):
                 wrist_flexion_weight=wrist_flexion_weight,
                 arm_weight=arm_weight,
             )
-            fit_log.append({
-                "phase": "outward", "lever_angle_deg": math.degrees(angle),
-                "messages": messages,
-            })
+            fit_log.append(
+                {
+                    "phase": "outward",
+                    "lever_angle_deg": math.degrees(angle),
+                    "messages": messages,
+                }
+            )
 
             if elbow_flexion is None:
                 warnings.warn(
@@ -461,9 +503,12 @@ class ChestPress(Equipment, abc.ABC):
                 )
                 break
 
-            mirror_arm(framework.user, "right")
+            _mirror_arm_with_log(framework.user, fit_log)
             states.append(
-                (osim.State(framework.user.state), osim.State(framework.equipment.state))
+                (
+                    osim.State(framework.user.state),
+                    osim.State(framework.equipment.state),
+                )
             )
 
             if elbow_flexion < 1.0:
@@ -505,10 +550,13 @@ class ChestPress(Equipment, abc.ABC):
                     wrist_flexion_weight=wrist_flexion_weight,
                     arm_weight=arm_weight,
                 )
-                fit_log.append({
-                    "phase": "return", "lever_angle_deg": math.degrees(angle),
-                    "messages": messages,
-                })
+                fit_log.append(
+                    {
+                        "phase": "return",
+                        "lever_angle_deg": math.degrees(angle),
+                        "messages": messages,
+                    }
+                )
 
                 if elbow_flexion is None:
                     warnings.warn(
@@ -518,9 +566,12 @@ class ChestPress(Equipment, abc.ABC):
                     )
                     break
 
-                mirror_arm(framework.user, "right")
+                _mirror_arm_with_log(framework.user, fit_log)
                 states.append(
-                    (osim.State(framework.user.state), osim.State(framework.equipment.state))
+                    (
+                        osim.State(framework.user.state),
+                        osim.State(framework.equipment.state),
+                    )
                 )
 
         if len(states) < 2:

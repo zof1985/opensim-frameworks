@@ -384,15 +384,21 @@ def test_forearm_rotation_penalizes_only_angles_outside_75_to_115(fit_setup, mon
     )
 
 
-def test_wrist_penalizes_flexion_without_an_extension_target(fit_setup, monkeypatch):
+def test_wrist_penalizes_deviation_from_45_degrees_extension(fit_setup, monkeypatch):
     user, equipment, _, palm_ground = fit_setup
     palm_ground[:] = [0.325, 0.4, 0.5]
+    target = np.deg2rad(-45.0)
     _, costs = run_fit(
         monkeypatch, user, equipment,
-        probes=[{"wrist_flex_r": angle} for angle in (-0.5, 0.0, 0.5)],
-        wrist_flexion_weight=1.0,
+        probes=[
+            {"wrist_flex_r": angle}
+            for angle in (target - 0.2, target, target + 0.2, 0.0)
+        ],
+        wrist_flexion_weight=2.0,
     )
-    np.testing.assert_allclose(costs, [0.0, 0.0, 0.25], atol=1e-12)
+    np.testing.assert_allclose(
+        costs, [2.0 * 0.2**2, 0.0, 2.0 * 0.2**2, 2.0 * target**2], atol=1e-12
+    )
 
 
 def test_upper_arm_rotation_penalizes_external_rotation_only(fit_setup, monkeypatch):
@@ -630,18 +636,68 @@ def test_handle_bodies_must_have_registered_meshes(fit_setup):
     ChestPress._verify_required_bodies(equipment)
 
 
-def test_mirror_arm_includes_shoulder_girdle(fit_setup):
+@pytest.mark.parametrize(("side", "source", "target"), [
+    ("right", "r", "l"), ("left", "l", "r"),
+])
+def test_mirror_arm_copies_all_upper_limb_coordinates(fit_setup, side, source, target):
+    user, _, coordinates, _ = fit_setup
+    bases = [
+        *handlefit.SHOULDER_GIRDLE_COORDINATES,
+        "arm_flex", "arm_add", "arm_rot", "elbow_flex", "pro_sup",
+        "wrist_flex", "wrist_dev",
+        *(
+            f"{finger}_{joint}_{motion}"
+            for finger in ("index", "middle", "ring", "little")
+            for joint, motion in (
+                ("mcp", "flexion"), ("mcp", "abduction"),
+                ("pip", "flexion"), ("dip", "flexion"),
+            )
+        ),
+        "thumb_cmc_opposition", "thumb_cmc_flexion",
+        "thumb_mcp_flexion", "thumb_ip_flexion",
+    ]
+    names = {coordinate.name for coordinate in coordinates.coordinates}
+    for base in bases:
+        for suffix in ("r", "l"):
+            name = f"{base}_{suffix}"
+            if name not in names:
+                coordinates.coordinates.append(Coordinate(name))
+                names.add(name)
+    coordinates.coordinates.extend([
+        Coordinate("hip_flexion_r", 0.1), Coordinate("hip_flexion_l", -0.4)
+    ])
+    target_locks = {}
+    for index, base in enumerate(bases):
+        coordinates.get(f"{base}_{source}").value = 0.01 * (index + 1)
+        destination = coordinates.get(f"{base}_{target}")
+        destination.value = -0.5
+        destination.locked = index % 2 == 0
+        target_locks[base] = destination.locked
+    reports = []
+    user.scapula_contact_report = reports.append
+    user.set_shoulder_girdle = lambda *args, **kwargs: pytest.fail("shoulder map must not refit")
+
+    handlefit.mirror_arm(user, side)
+
+    for base in bases:
+        destination = coordinates.get(f"{base}_{target}")
+        assert destination.value == pytest.approx(coordinates.get(f"{base}_{source}").value)
+        assert destination.locked == target_locks[base]
+    assert coordinates.get("hip_flexion_r").value == 0.1
+    assert coordinates.get("hip_flexion_l").value == -0.4
+    assert reports == [target]
+
+
+def test_mirror_arm_rejects_missing_target_before_modifying_pose(fit_setup):
     user, _, coordinates, _ = fit_setup
     names = [coordinate.name for coordinate in coordinates.coordinates]
-    coordinates.coordinates.extend(Coordinate(name[:-2] + "_l") for name in names)
-    coordinates.get("sc_protraction_r").value = -0.3
-    coordinates.get("sc_elevation_r").value = 0.2
-    coordinates.get("ac_protraction_r").value = 0.7
-    handlefit.mirror_arm(user, "right")
-    assert coordinates.get("sc_protraction_l").value == pytest.approx(-0.3)
-    assert coordinates.get("sc_elevation_l").value == pytest.approx(0.2)
-    assert coordinates.get("ac_protraction_l").value == pytest.approx(-0.03)
-    assert coordinates.get("sc_protraction_l").locked
+    coordinates.coordinates.extend(
+        Coordinate(name[:-2] + "_l", value=-0.5)
+        for name in names if name != "wrist_flex_r"
+    )
+    with pytest.raises(RuntimeError, match="wrist_flex_l"):
+        handlefit.mirror_arm(user, "right")
+    assert coordinates.get("arm_rot_l").value == -0.5
 
 
 def test_simulation_passes_fitting_weights_to_initial_fit():
@@ -666,6 +722,20 @@ def test_simulation_passes_fitting_weights_to_initial_fit():
     assert captured["wrist_flexion_weight"] == 3456.0
 
 
+def test_fit_and_simulation_share_default_weights():
+    fit = inspect.signature(ChestPress.fit_user)
+    simulation = inspect.signature(ChestPress.simulate_kinematics)
+    fit_weights = {
+        name: parameter.default for name, parameter in fit.parameters.items()
+        if name.endswith("_weight")
+    }
+    simulation_weights = {
+        name: parameter.default for name, parameter in simulation.parameters.items()
+        if name.endswith("_weight")
+    }
+    assert fit_weights == simulation_weights
+
+
 def test_kinematic_simulation_uses_only_new_public_name():
     assert callable(ChestPress.simulate_kinematics)
     assert not hasattr(ChestPress, "simulate_on_user")
@@ -675,7 +745,12 @@ def test_fit_user_returns_messages_for_each_fit(monkeypatch):
     class FakeUser:
         def __init__(self):
             self.state = object()
-            self.coordinates = CoordinateSet([Coordinate("arm_rot_r")])
+            self.coordinates = CoordinateSet([
+                Coordinate("arm_rot_r"), Coordinate("index_mcp_flexion_r"),
+                Coordinate("index_mcp_flexion_l"),
+            ])
+            self.grasp_calls = []
+            self.finger_locks = []
 
         def getCoordinateSet(self):
             return self.coordinates
@@ -684,7 +759,12 @@ def test_fit_user_returns_messages_for_each_fit(monkeypatch):
             pass
 
         def grasp_handle(self, side, body, meshes):
-            return side
+            self.grasp_calls.append(side)
+            self.coordinates.get("index_mcp_flexion_r").value = 0.7
+            return {"fitted": side}
+
+        def set_finger_coordinate_locked(self, side, finger, joint, motion, locked):
+            self.finger_locks.append((side, finger, joint, motion, locked))
 
     coordinates = CoordinateSet([
         Coordinate("right_lever-angle", minimum=0.0, maximum=np.deg2rad(2)),
@@ -703,7 +783,21 @@ def test_fit_user_returns_messages_for_each_fit(monkeypatch):
     framework = SimpleNamespace(user=user, equipment=equipment)
     monkeypatch.setattr(chestpress, "Framework", lambda **kwargs: framework)
     monkeypatch.setattr(chestpress, "position_user", lambda *args, **kwargs: {})
-    monkeypatch.setattr(chestpress, "mirror_arm", lambda **kwargs: None)
+    logger = logging.getLogger("test.chestpress.mirror")
+    monkeypatch.setattr(logger, "propagate", False)
+    monkeypatch.setattr(logger, "level", logging.INFO)
+    monkeypatch.setattr(logger, "handlers", [logging.NullHandler()])
+
+    def mirror_arm(user, to_mirror):
+        assert user.grasp_calls == ["right"]
+        user.coordinates.get("index_mcp_flexion_l").value = (
+            user.coordinates.get("index_mcp_flexion_r").value
+        )
+        warnings.warn("l shoulder map: optimization did not converge", RuntimeWarning)
+        warnings.warn("l scapula: intersection with ribs or spine: True", RuntimeWarning)
+        logger.info("left arm mirrored")
+
+    monkeypatch.setattr(chestpress, "mirror_arm", mirror_arm)
     calls = []
 
     def fit_handle(**kwargs):
@@ -718,16 +812,34 @@ def test_fit_user_returns_messages_for_each_fit(monkeypatch):
         return (90.0 if len(calls) == 1 else 0.0), np.zeros(3), [{"message": str(len(calls))}]
 
     monkeypatch.setattr(chestpress, "fit_handle", fit_handle)
-    result, report = ChestPress.fit_user(
-        equipment, user, step_deg=1.0, palm_contact_weight=2345.0
-    )
+    with warnings.catch_warnings(record=True) as visible:
+        result, report = ChestPress.fit_user(
+            equipment, user, step_deg=1.0, palm_contact_weight=2345.0
+        )
+    assert not visible
     assert result is framework
+    assert user.grasp_calls == ["right"]
+    assert user.coordinates.get("index_mcp_flexion_l").value == pytest.approx(0.7)
+    assert len(user.finger_locks) == 16
+    assert all(side == "left" and locked for side, _, _, _, locked in user.finger_locks)
+    assert report["grip"]["fingers"] == {"right": {"fitted": "right"}, "left": None}
     assert all(call["palm_contact_weight"] == 2345.0 for call in calls)
     assert all("palm_position_handle" not in call and "palm_position_weight" not in call for call in calls)
     entries = report["grip"]["handle_fit_log"]
     assert [entry["phase"] for entry in entries] == ["sweep", "sweep", "final"]
     assert [entry["lever_angle_deg"] for entry in entries] == pytest.approx([0, 1, 0])
     assert [entry["messages"][0]["message"] for entry in entries] == ["1", "2", "3"]
+    mirrored = entries[-1]["messages"][1:]
+    assert [message["message"] for message in mirrored] == [
+        "l shoulder map: optimization did not converge",
+        "l scapula: intersection with ribs or spine: True",
+        "left arm mirrored",
+    ]
+    assert [message["kind"] for message in mirrored] == ["warning", "warning", "log"]
+    assert all(message["function"] == "mirror_arm" for message in mirrored)
+    assert all(message["filename"] == __file__ for message in mirrored)
+    assert all(isinstance(message["line"], int) for message in mirrored)
+    assert all(message["source"] for message in mirrored)
     monkeypatch.setattr(
         chestpress, "fit_handle", lambda **kwargs: (None, None, [{"message": "failed"}])
     )
@@ -736,6 +848,28 @@ def test_fit_user_returns_messages_for_each_fit(monkeypatch):
     assert raised.value.handle_fit_log == [
         {"phase": "sweep", "lever_angle_deg": 0.0, "messages": [{"message": "failed"}]}
     ]
+
+
+def test_failed_mirror_preserves_accumulated_log_and_restores_hooks(monkeypatch):
+    log = [{"phase": "final", "lever_angle_deg": 0.0, "messages": [{"message": "fit"}]}]
+    original_factory = logging.getLogRecordFactory()
+    original_showwarning = warnings.showwarning
+
+    def failed_mirror(user, to_mirror):
+        warnings.warn("left scapula warning", RuntimeWarning)
+        raise ValueError("mirror failed")
+
+    monkeypatch.setattr(chestpress, "mirror_arm", failed_mirror)
+    with warnings.catch_warnings(record=True) as visible:
+        with pytest.raises(ValueError, match="mirror failed") as raised:
+            chestpress._mirror_arm_with_log(object(), log)
+    assert not visible
+    assert raised.value.handle_fit_log is log
+    assert [message["message"] for message in log[-1]["messages"]] == [
+        "fit", "left scapula warning"
+    ]
+    assert logging.getLogRecordFactory() is original_factory
+    assert warnings.showwarning is original_showwarning
 
 
 def _simulation_model(names):
@@ -778,21 +912,24 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
         user.getCoordinateSet().get("arm_r").setValue(user.state, angle * 0.5, False)
         return (0.5 if angle == pytest.approx(np.deg2rad(2.0)) else 90.0), None, []
 
-    def mirror_arm(user, side):
+    def mirror_arm(user, to_mirror):
+        warnings.warn("l scapula: intersection", RuntimeWarning)
         coords = user.getCoordinateSet()
         coords.get("arm_l").setValue(user.state, coords.get("arm_r").getValue(user.state), False)
 
     monkeypatch.setattr(chestpress, "fit_handle", fit_handle)
     monkeypatch.setattr(chestpress, "mirror_arm", mirror_arm)
-    if fail_at_end:
-        with pytest.warns(RuntimeWarning, match="Outward handle fit failed"):
+    with warnings.catch_warnings(record=True) as visible:
+        if fail_at_end:
+            with pytest.warns(RuntimeWarning, match="Outward handle fit failed"):
+                result, fit_log = ChestPress.simulate_kinematics(
+                    wrapper, user, step_deg=1.0, duration_s=4.0, palm_contact_weight=4321.0
+                )
+        else:
             result, fit_log = ChestPress.simulate_kinematics(
                 wrapper, user, step_deg=1.0, duration_s=4.0, palm_contact_weight=4321.0
             )
-    else:
-        result, fit_log = ChestPress.simulate_kinematics(
-            wrapper, user, step_deg=1.0, duration_s=4.0, palm_contact_weight=4321.0
-        )
+    assert not visible
 
     expected_degrees = [0, 1, 0] if fail_at_end else [0, 1, 2, 1, 0]
     assert fitting_weights and all(weight == 4321.0 for weight in fitting_weights)
@@ -805,6 +942,13 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
     )
     if fail_at_end:
         assert fit_log[3]["messages"] == [{"message": "failed"}]
+    for entry in fit_log[1:]:
+        if entry["messages"] == [{"message": "failed"}]:
+            continue
+        assert [message["message"] for message in entry["messages"]] == [
+            "l scapula: intersection"
+        ]
+        assert entry["messages"][0]["function"] == "mirror_arm"
     assert result is framework
     assert result.state_times == pytest.approx(np.linspace(0, 4, len(expected_degrees)))
     assert result.states_trajectory.getSize() == len(expected_degrees)

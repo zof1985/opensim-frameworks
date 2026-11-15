@@ -10,7 +10,8 @@ import math
 import sys
 import threading
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Generator
+from contextlib import contextmanager
 from typing import Literal, ParamSpec
 
 import numpy as np
@@ -46,23 +47,19 @@ _FIT_LOG_LOCK = threading.RLock()
 _FitMessage = dict[str, str | int | None]
 
 
-def _capture_fit_messages(
-    function: Callable[_P, tuple[float | None, np.ndarray | None]],
-) -> Callable[_P, tuple[float | None, np.ndarray | None, list[_FitMessage]]]:
-    @functools.wraps(function)
-    def wrapped(
-        *args: _P.args, **kwargs: _P.kwargs
-    ) -> tuple[float | None, np.ndarray | None, list[_FitMessage]]:
-        messages: list[_FitMessage] = []
-        thread_id = threading.get_ident()
-        with _FIT_LOG_LOCK:
-            previous_factory = logging.getLogRecordFactory()
-            previous_showwarning = warnings.showwarning
+@contextmanager
+def _capture_messages() -> Generator[list[_FitMessage]]:
+    messages: list[_FitMessage] = []
+    thread_id = threading.get_ident()
+    with _FIT_LOG_LOCK:
+        previous_factory = logging.getLogRecordFactory()
+        previous_showwarning = warnings.showwarning
 
-            def record_factory(*factory_args, **factory_kwargs):
-                record = previous_factory(*factory_args, **factory_kwargs)
-                if threading.get_ident() == thread_id:
-                    messages.append({
+        def record_factory(*factory_args, **factory_kwargs):
+            record = previous_factory(*factory_args, **factory_kwargs)
+            if threading.get_ident() == thread_id:
+                messages.append(
+                    {
                         "kind": "log",
                         "level": record.levelname,
                         "category": None,
@@ -70,23 +67,27 @@ def _capture_fit_messages(
                         "filename": record.pathname,
                         "line": record.lineno,
                         "function": record.funcName,
-                        "source": linecache.getline(record.pathname, record.lineno).strip(),
+                        "source": linecache.getline(
+                            record.pathname, record.lineno
+                        ).strip(),
                         "logger": record.name,
-                    })
-                return record
+                    }
+                )
+            return record
 
-            def showwarning(message, category, filename, lineno, file=None, line=None):
-                if threading.get_ident() != thread_id:
-                    previous_showwarning(message, category, filename, lineno, file, line)
-                    return
-                frame = inspect.currentframe()
-                try:
-                    frame = frame.f_back if frame is not None else None
-                    while frame is not None and frame.f_globals.get("__name__") == "warnings":
-                        frame = frame.f_back
-                    source_file = frame.f_code.co_filename if frame is not None else filename
-                    source_line = frame.f_lineno if frame is not None else lineno
-                    messages.append({
+        def showwarning(message, category, filename, lineno, file=None, line=None):
+            if threading.get_ident() != thread_id:
+                previous_showwarning(message, category, filename, lineno, file, line)
+                return
+            frame = inspect.currentframe()
+            try:
+                frame = frame.f_back if frame is not None else None
+                while frame is not None and frame.f_globals.get("__name__") == "warnings":
+                    frame = frame.f_back
+                source_file = frame.f_code.co_filename if frame is not None else filename
+                source_line = frame.f_lineno if frame is not None else lineno
+                messages.append(
+                    {
                         "kind": "warning",
                         "level": "WARNING",
                         "category": category.__name__,
@@ -96,35 +97,51 @@ def _capture_fit_messages(
                         "function": frame.f_code.co_name if frame is not None else None,
                         "source": linecache.getline(source_file, source_line).strip(),
                         "logger": None,
-                    })
-                finally:
-                    del frame
+                    }
+                )
+            finally:
+                del frame
 
-            with warnings.catch_warnings():
-                warnings.simplefilter("always")
-                warnings.showwarning = showwarning
-                logging.setLogRecordFactory(record_factory)
-                completed = False
-                try:
-                    elbow, palm = function(*args, **kwargs)
-                    completed = True
-                finally:
-                    try:
-                        error = sys.exc_info()[1] if not completed else None
-                        if error is not None:
-                            BaseException.__setattr__(error, "handle_fit_log", messages)
-                    finally:
-                        logging.setLogRecordFactory(previous_factory)
+        with warnings.catch_warnings():
+            warnings.simplefilter("always")
+            warnings.showwarning = showwarning
+            logging.setLogRecordFactory(record_factory)
+            try:
+                yield messages
+            finally:
+                logging.setLogRecordFactory(previous_factory)
+
+
+def _capture_fit_messages(
+    function: Callable[_P, tuple[float | None, np.ndarray | None]],
+) -> Callable[_P, tuple[float | None, np.ndarray | None, list[_FitMessage]]]:
+    @functools.wraps(function)
+    def wrapped(
+        *args: _P.args, **kwargs: _P.kwargs
+    ) -> tuple[float | None, np.ndarray | None, list[_FitMessage]]:
+        with _capture_messages() as messages:
+            completed = False
+            try:
+                elbow, palm = function(*args, **kwargs)
+                completed = True
+            finally:
+                error = sys.exc_info()[1] if not completed else None
+                if error is not None:
+                    BaseException.__setattr__(error, "handle_fit_log", messages)
         return elbow, palm, messages
 
     result_type = tuple[float | None, np.ndarray | None, list[_FitMessage]]
     wrapped.__annotations__ = {**wrapped.__annotations__, "return": result_type}
-    setattr(wrapped, "__signature__", inspect.signature(function).replace(return_annotation=result_type))
+    setattr(
+        wrapped,
+        "__signature__",
+        inspect.signature(function).replace(return_annotation=result_type),
+    )
     return wrapped
 
 
 def mirror_arm(user, to_mirror: Literal["left", "right"]) -> None:
-    """Copy an arm and its shoulder angles, deriving the opposite scapula.
+    """Mirror the upper-limb and shoulder-girdle coordinates.
 
     Parameters
     ----------
@@ -139,6 +156,12 @@ def mirror_arm(user, to_mirror: Literal["left", "right"]) -> None:
         If ``to_mirror`` is not ``"left"`` or ``"right"``.
     RuntimeError
         If source or target arm coordinates are missing.
+
+    Notes
+    -----
+    The model's corresponding right and left coordinates use the same sign.
+    The mirrored scapular pose is checked for contact but is not refitted to
+    the opposite side's shoulder map.
     """
     if to_mirror not in ("left", "right"):
         raise ValueError("to_mirror must be 'left' or 'right'")
@@ -153,16 +176,21 @@ def mirror_arm(user, to_mirror: Literal["left", "right"]) -> None:
         if name.endswith(source_suffix)
         and (
             name.startswith(_ARM_COORDINATE_PREFIXES)
-            or name[: -len(source_suffix)] in ("sc_protraction", "sc_elevation")
+            or name[: -len(source_suffix)] in SHOULDER_GIRDLE_COORDINATES
         )
     )
     if not source_names:
         raise RuntimeError(f"No {to_mirror} arm coordinates were found")
 
-    for source_name in source_names:
-        target_name = source_name[: -len(source_suffix)] + target_suffix
+    target_names = [
+        source_name[: -len(source_suffix)] + target_suffix
+        for source_name in source_names
+    ]
+    for target_name in target_names:
         if target_name not in names:
             raise RuntimeError(f"Missing mirrored arm coordinate {target_name}")
+
+    for source_name, target_name in zip(source_names, target_names):
         source = coordinates.get(source_name)
         target = coordinates.get(target_name)
         default_locked = target.get_locked()
@@ -174,11 +202,7 @@ def mirror_arm(user, to_mirror: Literal["left", "right"]) -> None:
         finally:
             target.set_locked(default_locked)
             target.setLocked(user.state, state_locked)
-    user.set_shoulder_girdle(
-        target_suffix[1:],
-        coordinates.get(f"sc_protraction{target_suffix}").getValue(user.state),
-        coordinates.get(f"sc_elevation{target_suffix}").getValue(user.state),
-    )
+    user.scapula_contact_report(target_suffix[1:])
 
 
 @_capture_fit_messages
@@ -351,13 +375,12 @@ def fit_handle(
 
     if user_marker is None:
         raise ValueError(f"Marker {marker_name} not found in user model")
+
     def _apply_coordinates(coord_values: npt.ArrayLike) -> None:
         values = np.asarray(coord_values, dtype=float)
         for coord_name, value in zip(arm_names, values):
             coordinates.get(coord_name).setValue(user.state, float(value), False)
-        user.set_shoulder_girdle(
-            suffix, *values[len(arm_names):], check_contact=False
-        )
+        user.set_shoulder_girdle(suffix, *values[len(arm_names) :], check_contact=False)
 
     def _surface_gap() -> float:
         palm = marker_position_array(user_marker, user.state)
@@ -397,14 +420,14 @@ def fit_handle(
         axial_position = np.dot(palm_in_body - axis_origin, axis_direction)
         radial = palm_in_body - axis_origin - axial_position * axis_direction
         surface_gap = np.linalg.norm(radial) - cylinder_radius
-        residuals = [
-            math.sqrt(palm_contact_weight) * surface_gap
-        ]
+        residuals = [math.sqrt(palm_contact_weight) * surface_gap]
 
         # Regolarizzo polso, avambraccio e rotazione dell'omero. Nel modello
         # la flessione del polso e' positiva e l'estensione e' negativa.
         wrist_flex = coordinates.get(f"wrist_flex_{suffix}").getValue(user.state)
-        residuals.append(math.sqrt(wrist_flexion_weight) * max(wrist_flex, 0.0))
+        residuals.append(
+            math.sqrt(wrist_flexion_weight) * abs(wrist_flex - math.radians(-45.0))
+        )
 
         wrist_dev = coordinates.get(f"wrist_dev_{suffix}").getValue(user.state)
         residuals.append(math.sqrt(wrist_dev_weight) * wrist_dev)
@@ -419,9 +442,11 @@ def fit_handle(
         residuals.append(math.sqrt(arm_weight) * min(arm_rot, 0.0))
 
         # L'utente valuta retrazione, elevazione e contatto scapolo-toracico.
-        residuals.extend(user.scapular_fit_residuals(
-            suffix, protraction_weight, scapular_elevation_weight
-        ))
+        residuals.extend(
+            user.scapular_fit_residuals(
+                suffix, protraction_weight, scapular_elevation_weight
+            )
+        )
 
         # Ricavo la retta ai minimi quadrati delle nocche e la confronto con
         # l'asse dell'impugnatura, senza distinguere i due versi della retta.
@@ -439,7 +464,9 @@ def fit_handle(
 
         # Penalizzo soltanto le proiezioni delle nocche oltre gli estremi.
         knuckle_end_gaps = _knuckle_end_gaps(np.asarray(knuckles), handle_frame)
-        residuals.extend(math.sqrt(knuckle_end_weight) * np.minimum(knuckle_end_gaps, 0.0))
+        residuals.extend(
+            math.sqrt(knuckle_end_weight) * np.minimum(knuckle_end_gaps, 0.0)
+        )
 
         # Il piano contiene spalla e palmo ed e' parallelo all'asse; la
         # distanza del gomito da quel piano misura il criterio richiesto.
@@ -455,10 +482,12 @@ def fit_handle(
 
         return np.asarray(residuals)
 
-    initial_girdle = np.array([
-        coordinates.get(f"{name}_{suffix}").getValue(user.state)
-        for name in SHOULDER_GIRDLE_COORDINATES
-    ])
+    initial_girdle = np.array(
+        [
+            coordinates.get(f"{name}_{suffix}").getValue(user.state)
+            for name in SHOULDER_GIRDLE_COORDINATES
+        ]
+    )
     x0 = np.array(
         [
             coordinates.get(name).getValue(user.state)
@@ -491,24 +520,27 @@ def fit_handle(
         surface_gap = _surface_gap()
         if surface_gap < -1e-9:
             violations.append(f"palm inside cylinder by {-surface_gap * 1000:.3f} mm")
-        elif (
-            palm_contact_weight > 0
-            and surface_gap > _PALM_GAP_TOLERANCE_M
-        ):
+        elif palm_contact_weight > 0 and surface_gap > _PALM_GAP_TOLERANCE_M:
             violations.append(
                 f"palm gap {surface_gap * 1000:.3f} mm differs from target 0.000 mm"
             )
-        pro_sup_deg = math.degrees(coordinates.get(f"pro_sup_{suffix}").getValue(user.state))
+        pro_sup_deg = math.degrees(
+            coordinates.get(f"pro_sup_{suffix}").getValue(user.state)
+        )
         if pro_sup_weight > 0 and not 75.0 - 1e-6 <= pro_sup_deg <= 115.0 + 1e-6:
-            violations.append(f"forearm rotation {pro_sup_deg:.2f} deg outside 75-115 deg")
-        arm_rot_deg = math.degrees(coordinates.get(f"arm_rot_{suffix}").getValue(user.state))
+            violations.append(
+                f"forearm rotation {pro_sup_deg:.2f} deg outside 75-115 deg"
+            )
+        arm_rot_deg = math.degrees(
+            coordinates.get(f"arm_rot_{suffix}").getValue(user.state)
+        )
         if arm_weight > 0 and arm_rot_deg < -1e-6:
             violations.append(f"external upper-arm rotation {-arm_rot_deg:.2f} deg")
         frame = body_transform_array(handle, equipment.state)
         fingers = ("index", "middle", "ring", "little")
-        knuckles = np.asarray([
-            user.joint_center(f"{finger}_mcp_{suffix}") for finger in fingers
-        ])
+        knuckles = np.asarray(
+            [user.joint_center(f"{finger}_mcp_{suffix}") for finger in fingers]
+        )
         wrist = np.asarray(user.joint_center(f"radius_hand_{suffix}"))
         palmar = _palmar_direction(knuckles, wrist)
         if palmar[1] >= 0.0:
@@ -520,14 +552,16 @@ def fit_handle(
         if (frame[:3, :3] @ radial)[1] <= 0.0:
             violations.append("palm is not above handle axis")
         gaps = _knuckle_end_gaps(knuckles, frame)
-        nearest_ends = np.minimum(gaps[:len(fingers)], gaps[len(fingers):])
+        nearest_ends = np.minimum(gaps[: len(fingers)], gaps[len(fingers) :])
         outside = [
             f"{finger} ({max(0.0, -gap) * 1000:.3f} mm)"
             for finger, gap in zip(fingers, nearest_ends)
             if gap <= 0.0
         ]
         if outside:
-            violations.append(f"knuckles at or beyond handle ends: {', '.join(outside)}")
+            violations.append(
+                f"knuckles at or beyond handle ends: {', '.join(outside)}"
+            )
         if violations:
             warnings.warn(
                 f"{side} handle fit: {'; '.join(violations)}",
@@ -549,7 +583,7 @@ def fit_handle(
 
         return elbow_flex_deg, palm_in_handle
 
-    for coord_name, value in zip(arm_names, x0[:len(arm_names)]):
+    for coord_name, value in zip(arm_names, x0[: len(arm_names)]):
         coordinates.get(coord_name).setValue(user.state, float(value), False)
     user.set_scapular_girdle_values(suffix, initial_girdle, check_contact=False)
     user.realizePosition(user.state)
