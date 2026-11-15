@@ -109,9 +109,10 @@ class MotionData:
         every OpenSim motion/``.mot`` file already uses.
     table : opensim.TimeSeriesTable
         Already-loaded motion data: one column per OpenSim coordinate name
-        (e.g. ``"hip_flexion_r"``; columns that don't match a coordinate of
-        ``model`` are kept but simply never applied), one row per time
-        sample.
+        (e.g. ``"hip_flexion_r"`` or
+        ``"/jointset/hip/hip_flexion_r/value"``; columns that don't match a
+        coordinate of ``model`` are kept but simply never applied), one row
+        per time sample.
 
     Raises
     ------
@@ -185,10 +186,14 @@ class MotionData:
             values = np.asarray(
                 table.getDependentColumn(name).to_numpy(), dtype=float
             )
+            coordinate_name = (
+                name.rsplit("/", 2)[-2] if name.endswith("/value") else name
+            )
             if (
                 in_degrees
-                and name in coordinate_names
-                and coordinate_set.get(name).getMotionType() == _ROTATIONAL_MOTION_TYPE
+                and coordinate_name in coordinate_names
+                and coordinate_set.get(coordinate_name).getMotionType()
+                == _ROTATIONAL_MOTION_TYPE
             ):
                 values = np.radians(values)
             columns[name] = values

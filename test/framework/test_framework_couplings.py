@@ -8,6 +8,7 @@ import pytest
 opensim = pytest.importorskip("opensim")
 
 from opensim_frameworks import Framework, Model
+from opensim_frameworks.viewer import FrameworkViewer
 
 
 def make_pendulum(prefix: str, parent_offset=(0.0, 0.0, 0.0)) -> opensim.Model:
@@ -236,6 +237,53 @@ def test_add_force_constraint_and_controller_validate_member_references():
         framework.add_controller(spring, {"actuators": ("a", "/bodyset/a_body")})
     with pytest.raises(KeyError):
         framework.add_force(spring, {"body1": ("zzz", "/bodyset/a_body")}, name="x")
+
+
+def test_osf_round_trip_restores_component_couplings(tmp_path):
+    framework = make_pair()
+    spring = opensim.PointToPointSpring(
+        framework.a.getBodySet().get("a_body"),
+        opensim.Vec3(0),
+        framework.b.getBodySet().get("b_body"),
+        opensim.Vec3(0),
+        10.0,
+        0.5,
+    )
+    spring.setName("link")
+    framework.add_force(
+        spring,
+        {"body1": ("a", "/bodyset/a_body"), "body2": ("b", "/bodyset/b_body")},
+    )
+    destination = tmp_path / "coupled.osf"
+    FrameworkViewer(framework).save_framework(destination)
+
+    loaded = Framework.from_osf(destination)
+
+    coupling = loaded.couplings["link"]
+    assert coupling.kind == "force"
+    assert coupling.references == (
+        ("a", "/bodyset/a_body"),
+        ("b", "/bodyset/b_body"),
+    )
+    assert loaded.merge_to_model().getForceSet().get("link") is not None
+
+
+def test_osf_round_trip_restores_coordinate_coupling_function(tmp_path):
+    framework = make_pair()
+    framework.couple_coordinate(
+        ("a", "/jointset/a_joint/a_q"),
+        ("b", "/jointset/b_joint/b_q"),
+        function=opensim.LinearFunction(2.0, 0.0),
+        name="drive_b",
+    )
+    destination = tmp_path / "coordinate-coupling.osf"
+    FrameworkViewer(framework).save_framework(destination)
+
+    loaded = Framework.from_osf(destination)
+
+    function = loaded.couplings["drive_b"].option("function")
+    assert function.getConcreteClassName() == "LinearFunction"
+    assert constraint_names(loaded.merge_to_model()) == ["drive_b"]
 
 
 def test_couplings_are_recreated_on_rebuild_and_copied_with_the_framework():

@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import keyword
+import hashlib
+import json
+import os
+import shutil
+import tempfile
+import zipfile
 from collections.abc import Iterable, Mapping, Sequence
 from math import isclose, isfinite
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Protocol, Self, TypeGuard, runtime_checkable
 
@@ -13,7 +19,11 @@ import numpy as np
 from scipy.interpolate import CubicSpline
 
 from ..bodies.shapes import MESHES_DIR
-from ..utils.opensim import import_opensim
+from ..utils.opensim import (
+    get_referenced_meshes,
+    import_opensim,
+    resolve_geometry_file,
+)
 from .couplings import ComponentRef, Coupling, normalize_reference
 from ..models.model import Model, _registered_model_class
 
@@ -40,6 +50,52 @@ _COMPONENT_SETS = {
     "constraint": ("constraintset", "addConstraint"),
     "controller": ("controllerset", "addController"),
 }
+
+
+def _osf_path(root: Path, relative_path: str) -> Path:
+    if (
+        not isinstance(relative_path, str)
+        or not relative_path
+        or "\\" in relative_path
+        or ":" in relative_path
+    ):
+        raise ValueError(f"invalid OSF archive path {relative_path!r}")
+    path = PurePosixPath(relative_path)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        raise ValueError(f"invalid OSF archive path {relative_path!r}")
+    destination = (root / Path(*path.parts)).resolve()
+    if not destination.is_relative_to(root.resolve()):
+        raise ValueError(f"invalid OSF archive path {relative_path!r}")
+    return destination
+
+
+def _extract_osf_archive(archive: zipfile.ZipFile, root: Path) -> None:
+    extracted_names: set[str] = set()
+    for member in archive.infolist():
+        if member.filename in extracted_names:
+            raise ValueError(f"duplicate OSF archive path {member.filename!r}")
+        extracted_names.add(member.filename)
+        destination = _osf_path(root, member.filename.rstrip("/"))
+        if member.is_dir():
+            destination.mkdir(parents=True, exist_ok=True)
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with archive.open(member) as source, destination.open("xb") as target:
+            shutil.copyfileobj(source, target)
+
+
+def _json_value(value: Any) -> Any:
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return value
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, Mapping):
+        return {str(key): _json_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_value(item) for item in value]
+    if hasattr(value, "tolist"):
+        return _json_value(value.tolist())
+    raise TypeError(f"Value of type {type(value).__name__} is not JSON serializable")
 
 
 @runtime_checkable
@@ -223,6 +279,541 @@ class Framework(dict[str, Model]):
         )
         object.__setattr__(self, "_state_times", [])
         self.update(models, **named_models)
+
+    def to_osf(self, file: str | Path, *, overwrite: bool = True) -> Path:
+        """Save this framework, its couplings, and trajectories to an OSF archive.
+
+        Parameters
+        ----------
+        file : str or pathlib.Path
+            Destination ``.osf`` archive.
+        overwrite : bool, default=True
+            Whether an existing archive at the destination may be replaced.
+
+        Returns
+        -------
+        pathlib.Path
+            Path to the saved archive.
+        """
+        if not isinstance(file, (str, Path)):
+            raise TypeError("file must be a str or pathlib.Path")
+        destination = Path(file).expanduser()
+        if destination.suffix.lower() != ".osf":
+            raise ValueError("file must have an .osf extension")
+        if not isinstance(overwrite, bool):
+            raise TypeError("overwrite must be a bool")
+        if destination.exists() and not overwrite:
+            raise FileExistsError(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+
+        with tempfile.TemporaryDirectory(prefix="opensim-framework-") as temp_dir:
+            root = Path(temp_dir)
+            members: list[dict[str, Any]] = []
+            used_names: dict[str, Path] = {}
+            for name, model in self.items():
+                model_path = self._package_model(
+                    model,
+                    root / "models" / name,
+                    model,
+                    used_names,
+                    root,
+                )
+                member: dict[str, Any] = {
+                    "name": name,
+                    "class": f"{type(model).__module__}:{type(model).__qualname__}",
+                    "model": model_path,
+                    "config": _json_value(model.get_config()),
+                }
+                trajectory = self.states_trajectories[name]
+                if trajectory.getSize():
+                    trajectory_path = root / "trajectories" / f"{name}.ostates"
+                    trajectory_path.parent.mkdir(parents=True, exist_ok=True)
+                    trajectory.exportToStatesDocument(model).serialize(
+                        str(trajectory_path)
+                    )
+                    member["trajectory"] = (
+                        trajectory_path.relative_to(root).as_posix()
+                    )
+                members.append(member)
+
+            composite = self.merge_to_model()
+            geometry_directories = tuple(
+                directory
+                for model in self.values()
+                for directory in getattr(model, "geometry_directories", ())
+            )
+            composite_path = self._package_model(
+                composite,
+                root / "composite",
+                composite,
+                used_names,
+                root,
+                geometry_directories,
+            )
+            composite_trajectory = self.states_trajectory
+            composite_trajectory_path = None
+            if composite_trajectory.getSize():
+                trajectory_path = root / "trajectories" / "composite.ostates"
+                trajectory_path.parent.mkdir(parents=True, exist_ok=True)
+                composite_trajectory.exportToStatesDocument(composite).serialize(
+                    str(trajectory_path)
+                )
+                composite_trajectory_path = (
+                    trajectory_path.relative_to(root).as_posix()
+                )
+
+            manifest = {
+                "format": "opensim-framework",
+                "version": 2,
+                "members": members,
+                "couplings": self._coupling_manifest(root),
+                "composite_model": composite_path,
+                "composite_trajectory": composite_trajectory_path,
+                "state_times": list(self.state_times),
+            }
+            (root / "manifest.json").write_text(
+                json.dumps(manifest, indent=2, allow_nan=False),
+                encoding="utf-8",
+            )
+            temporary_archive = destination.with_name(
+                f".{destination.name}.{os.getpid()}.tmp"
+            )
+            try:
+                with zipfile.ZipFile(
+                    temporary_archive, "w", compression=zipfile.ZIP_DEFLATED
+                ) as archive:
+                    for source in root.rglob("*"):
+                        if source.is_file():
+                            archive.write(source, source.relative_to(root).as_posix())
+                if destination.exists() and not overwrite:
+                    raise FileExistsError(destination)
+                os.replace(temporary_archive, destination)
+            finally:
+                if temporary_archive.exists():
+                    temporary_archive.unlink()
+        return destination
+
+    def _package_model(
+        self,
+        model: Any,
+        directory: Path,
+        resolver_model: Any,
+        used_names: dict[str, Path],
+        archive_root: Path,
+        geometry_directories: Sequence[str | Path] = (),
+    ) -> str:
+        directory.mkdir(parents=True, exist_ok=True)
+        clone = opensim.Model(model)
+        clone.finalizeFromProperties()
+        clone.finalizeConnections()
+        geometry_dir = directory / "Geometry"
+        geometry_dir.mkdir()
+        search_directories = (
+            *getattr(model, "geometry_directories", ()),
+            *geometry_directories,
+        )
+        for mesh, filename in get_referenced_meshes(clone):
+            source = resolve_geometry_file(
+                opensim,
+                resolver_model,
+                filename,
+                search_directories,
+            )
+            if source is None or not source.is_file():
+                raise FileNotFoundError(f"Unable to resolve mesh file {filename!r}")
+            target_name = Path(filename).name
+            previous = used_names.get(target_name)
+            if previous is not None and previous != source:
+                digest = hashlib.sha256(source.read_bytes()).hexdigest()[:10]
+                target_name = (
+                    f"{Path(target_name).stem}_{digest}{Path(target_name).suffix}"
+                )
+            used_names[target_name] = source
+            shutil.copy2(source, geometry_dir / target_name)
+            mesh.set_mesh_file(target_name)
+        model_path = directory / "model.osim"
+        clone.printToXML(str(model_path))
+        return model_path.relative_to(archive_root).as_posix()
+
+    def _coupling_manifest(self, root: Path) -> list[dict[str, Any]]:
+        couplings = []
+        for index, coupling in enumerate(self.couplings.values()):
+            options: dict[str, Any] = {}
+            for name, value in coupling.options:
+                if name == "component":
+                    relative_path = (
+                        Path("couplings") / f"coupling_{index:04d}_component.xml"
+                    )
+                    component_path = root / relative_path
+                    component_path.parent.mkdir(parents=True, exist_ok=True)
+                    value.printToXML(str(component_path))
+                    options[name] = {
+                        "class": value.getConcreteClassName(),
+                        "name": value.getName(),
+                        "file": relative_path.as_posix(),
+                    }
+                elif name == "function":
+                    if value is None:
+                        options[name] = None
+                    else:
+                        relative_path = (
+                            Path("couplings") / f"coupling_{index:04d}_function.xml"
+                        )
+                        function_path = root / relative_path
+                        function_path.parent.mkdir(parents=True, exist_ok=True)
+                        value.printToXML(str(function_path))
+                        options[name] = {
+                            "class": value.getConcreteClassName(),
+                            "name": value.getName(),
+                            "file": relative_path.as_posix(),
+                        }
+                elif name == "sockets":
+                    options[name] = {
+                        socket_name: [
+                            list(coupling.references[reference_index])
+                            for reference_index in indices
+                        ]
+                        for socket_name, indices in value
+                    }
+                else:
+                    options[name] = _json_value(value)
+            couplings.append(
+                {
+                    "name": coupling.name,
+                    "kind": coupling.kind,
+                    "references": [list(reference) for reference in coupling.references],
+                    "options": options,
+                }
+            )
+        return couplings
+
+    @classmethod
+    def from_osf(cls, file: str | Path) -> Self:
+        """Load a framework archive written by :meth:`Framework.to_osf`.
+
+        Parameters
+        ----------
+        file : str or pathlib.Path
+            Path to an ``.osf`` archive. Subclasses of :class:`Model` stored
+            in the archive must have been imported before calling this method.
+
+        Returns
+        -------
+        Framework
+            Framework with its member models, couplings, and trajectories
+            restored.
+
+        Raises
+        ------
+        FileNotFoundError
+            If the archive does not exist.
+        TypeError
+            If ``file`` is not a path.
+        ValueError
+            If the archive is invalid, unsupported, or references a model
+            class that has not been registered.
+
+        Notes
+        -----
+        Extracted model and geometry assets are kept available for as long
+        as the returned framework or one of its member models is alive.
+        """
+        if not isinstance(file, (str, Path)):
+            raise TypeError("file must be a str or pathlib.Path")
+        archive_path = Path(file).expanduser()
+        if archive_path.suffix.lower() != ".osf":
+            raise ValueError("file must have an .osf extension")
+        if not archive_path.is_file():
+            raise FileNotFoundError(archive_path)
+
+        extracted = tempfile.TemporaryDirectory(prefix="opensim-framework-osf-")
+        root = Path(extracted.name)
+        succeeded = False
+        try:
+            with zipfile.ZipFile(archive_path) as archive:
+                _extract_osf_archive(archive, root)
+            manifest_path = root / "manifest.json"
+            if not manifest_path.is_file():
+                raise ValueError("OSF archive is missing manifest.json")
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if not isinstance(manifest, dict):
+                raise ValueError("OSF manifest must contain a JSON object")
+            if manifest.get("format") != "opensim-framework":
+                raise ValueError("unsupported OSF archive format")
+            version = manifest.get("version")
+            if (
+                isinstance(version, bool)
+                or not isinstance(version, int)
+                or version not in {1, 2}
+            ):
+                raise ValueError(f"unsupported OSF archive version {version!r}")
+
+            member_data = manifest.get("members")
+            if not isinstance(member_data, list) or not member_data:
+                raise ValueError("OSF manifest must contain at least one member")
+            models: dict[str, Model] = {}
+            for item in member_data:
+                if not isinstance(item, dict):
+                    raise ValueError("each OSF member must be a JSON object")
+                name = item.get("name")
+                if not isinstance(name, str) or not name:
+                    raise ValueError("OSF member names must be non-empty strings")
+                if name in models:
+                    raise ValueError(f"duplicate OSF member name {name!r}")
+                class_identifier = item.get("class")
+                model_class = (
+                    _registered_model_class(class_identifier)
+                    if isinstance(class_identifier, str)
+                    else None
+                )
+                if model_class is None:
+                    raise ValueError(
+                        f"OSF model class {class_identifier!r} is not registered; "
+                        "import its Model subclass before loading the archive"
+                    )
+                model_file = _osf_path(root, item.get("model"))
+                if not model_file.is_file():
+                    raise ValueError(f"OSF model file is missing: {item.get('model')!r}")
+                config = item.get("config", {})
+                if not isinstance(config, Mapping):
+                    raise ValueError(f"configuration for model {name!r} must be an object")
+                model = model_class.from_osf_model(model_file, config)
+                model.initSystem()
+                object.__setattr__(model, "_osf_extraction", extracted)
+                models[name] = model
+
+            framework = cls(models)
+            framework._restore_osf_couplings(manifest, root, version)
+            framework.initSystem()
+            state_times = framework._osf_state_times(manifest.get("state_times"))
+            member_trajectories: dict[str, opensim.StatesTrajectory] = {}
+            for item in member_data:
+                name = item["name"]
+                trajectory_path = item.get("trajectory")
+                if trajectory_path is None:
+                    trajectory = opensim.StatesTrajectory()
+                else:
+                    path = _osf_path(root, trajectory_path)
+                    if not path.is_file():
+                        raise ValueError(
+                            f"OSF trajectory file is missing: {trajectory_path!r}"
+                        )
+                    trajectory = opensim.StatesTrajectory.createFromStatesDocument(
+                        framework[name], str(path)
+                    )
+                framework._validate_osf_trajectory(
+                    trajectory, state_times, f"member {name!r}"
+                )
+                member_trajectories[name] = trajectory
+
+            composite_path = manifest.get("composite_trajectory")
+            if composite_path is None:
+                composite_trajectory = opensim.StatesTrajectory()
+            else:
+                path = _osf_path(root, composite_path)
+                if not path.is_file():
+                    raise ValueError(
+                        f"OSF composite trajectory is missing: {composite_path!r}"
+                    )
+                composite_trajectory = opensim.StatesTrajectory.createFromStatesDocument(
+                    framework.composite, str(path)
+                )
+            framework._validate_osf_trajectory(
+                composite_trajectory, state_times, "composite"
+            )
+
+            object.__setattr__(framework, "_states_trajectories", member_trajectories)
+            object.__setattr__(
+                framework, "_composite_states_trajectory", composite_trajectory
+            )
+            object.__setattr__(framework, "_state_times", state_times)
+            if state_times:
+                for name, trajectory in member_trajectories.items():
+                    framework[name].state = opensim.State(
+                        trajectory.get(trajectory.getSize() - 1)
+                    )
+                object.__setattr__(
+                    framework,
+                    "_active_state",
+                    _FrameworkState(
+                        composite_trajectory.get(composite_trajectory.getSize() - 1),
+                        framework.composite,
+                    ),
+                )
+            object.__setattr__(framework, "_osf_extraction", extracted)
+            succeeded = True
+            return framework
+        finally:
+            if not succeeded:
+                extracted.cleanup()
+
+    @staticmethod
+    def _osf_state_times(raw_times: Any) -> list[float]:
+        if not isinstance(raw_times, list):
+            raise ValueError("OSF state_times must be a list")
+        times: list[float] = []
+        for value in raw_times:
+            if isinstance(value, bool):
+                raise ValueError("OSF state times must be finite numbers")
+            try:
+                time = float(value)
+            except (TypeError, ValueError, OverflowError) as error:
+                raise ValueError("OSF state times must be finite numbers") from error
+            if not isfinite(time):
+                raise ValueError("OSF state times must be finite numbers")
+            times.append(time)
+        if any(current < previous for previous, current in zip(times, times[1:])):
+            raise ValueError("OSF state times must be non-decreasing")
+        return times
+
+    @staticmethod
+    def _validate_osf_trajectory(
+        trajectory: Any,
+        state_times: list[float],
+        label: str,
+    ) -> None:
+        if trajectory.getSize() != len(state_times):
+            raise ValueError(
+                f"OSF {label} trajectory has {trajectory.getSize()} states; "
+                f"expected {len(state_times)}"
+            )
+        for index, expected_time in enumerate(state_times):
+            actual_time = float(trajectory.get(index).getTime())
+            if not isclose(actual_time, expected_time, rel_tol=0.0, abs_tol=1e-10):
+                raise ValueError(
+                    f"OSF {label} trajectory time {actual_time} at index {index} "
+                    f"does not match manifest time {expected_time}"
+                )
+
+    def _restore_osf_couplings(
+        self,
+        manifest: Mapping[str, Any],
+        root: Path,
+        version: int,
+    ) -> None:
+        couplings = manifest.get("couplings", [])
+        if not isinstance(couplings, list):
+            raise ValueError("OSF couplings must be a list")
+        for item in couplings:
+            if not isinstance(item, dict):
+                raise ValueError("each OSF coupling must be a JSON object")
+            name = item.get("name")
+            kind = item.get("kind")
+            references = item.get("references")
+            options = item.get("options", {})
+            if not isinstance(name, str) or not name:
+                raise ValueError("OSF coupling names must be non-empty strings")
+            if not isinstance(kind, str):
+                raise ValueError(f"OSF coupling {name!r} has an invalid kind")
+            if not isinstance(options, Mapping):
+                raise ValueError(f"options for coupling {name!r} must be an object")
+            if not isinstance(references, list):
+                raise ValueError(f"references for coupling {name!r} must be a list")
+            if any(
+                not isinstance(reference, (list, tuple))
+                or len(reference) != 2
+                or not all(isinstance(part, str) and part for part in reference)
+                for reference in references
+            ):
+                raise ValueError(
+                    f"references for coupling {name!r} must be member/path pairs"
+                )
+            refs = [tuple(reference) for reference in references]
+            required_reference_count = {
+                "weld": 2,
+                "point": 2,
+                "coordinate": 2,
+                "joint": 2,
+            }.get(kind)
+            if (
+                required_reference_count is not None
+                and len(refs) < required_reference_count
+            ) or (kind in _COMPONENT_SETS and not refs):
+                raise ValueError(f"coupling {name!r} has too few references")
+            if kind == "weld":
+                if len(refs) != 2:
+                    raise ValueError(f"weld coupling {name!r} needs two references")
+                self.couple_weld(refs[0], refs[1], name=name)
+            elif kind == "point":
+                if len(refs) != 2:
+                    raise ValueError(f"point coupling {name!r} needs two references")
+                self.couple_point(
+                    refs[0],
+                    refs[1],
+                    first_location=options.get("first_location", (0.0, 0.0, 0.0)),
+                    second_location=options.get("second_location", (0.0, 0.0, 0.0)),
+                    name=name,
+                )
+            elif kind == "coordinate":
+                function_info = options.get("function")
+                function = None
+                if function_info is not None:
+                    if not isinstance(function_info, Mapping) or "file" not in function_info:
+                        raise ValueError(
+                            f"OSF coupling {name!r} lacks its serialized function; "
+                            "resave it with the current framework version"
+                        )
+                    function_path = _osf_path(root, function_info["file"])
+                    function_object = opensim.OpenSimObject.makeObjectFromFile(
+                        str(function_path)
+                    )
+                    function = opensim.Function.safeDownCast(function_object)
+                    if function is None:
+                        raise ValueError(
+                            f"serialized function for coupling {name!r} is not "
+                            "an OpenSim Function"
+                        )
+                self.couple_coordinate(refs[:-1], refs[-1], function=function, name=name)
+            elif kind == "joint":
+                if len(refs) != 2:
+                    raise ValueError(f"joint coupling {name!r} needs two references")
+                self.couple_joint(refs[0], refs[1], name=name)
+            elif kind in _COMPONENT_SETS:
+                component_info = options.get("component")
+                sockets_info = options.get("sockets")
+                if (
+                    not isinstance(component_info, Mapping)
+                    or "file" not in component_info
+                    or not isinstance(sockets_info, Mapping)
+                ):
+                    raise ValueError(
+                        f"OSF coupling {name!r} lacks serialized component or socket "
+                        "data; resave it with the current framework version"
+                    )
+                component_path = _osf_path(root, component_info["file"])
+                component = opensim.OpenSimObject.makeObjectFromFile(
+                    str(component_path)
+                )
+                expected_type = {
+                    "force": opensim.Force,
+                    "constraint": opensim.Constraint,
+                    "controller": opensim.Controller,
+                }[kind]
+                component = expected_type.safeDownCast(component)
+                if component is None:
+                    raise ValueError(
+                        f"serialized component for coupling {name!r} has the wrong type"
+                    )
+                sockets: dict[str, list[tuple[str, str]]] = {}
+                for socket_name, socket_references in sockets_info.items():
+                    if not isinstance(socket_references, list):
+                        raise ValueError(
+                            f"socket {socket_name!r} for coupling {name!r} "
+                            "must contain a list of references"
+                        )
+                    sockets[socket_name] = [
+                        tuple(reference) for reference in socket_references
+                    ]
+                add_component = {
+                    "force": self.add_force,
+                    "constraint": self.add_constraint,
+                    "controller": self.add_controller,
+                }[kind]
+                add_component(component, sockets, name=name)
+            else:
+                raise ValueError(
+                    f"unsupported OSF coupling kind {kind!r} in version {version}"
+                )
 
     @property
     def models(self) -> Mapping[str, Model]:

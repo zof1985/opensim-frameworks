@@ -56,10 +56,18 @@ def _set_pose(model: Any, data: Any, time: float) -> None:
         state = native_model.getWorkingState()
     coordinate_set = native_model.getCoordinateSet()
     for name, value in data.values_at(time).items():
-        if not coordinate_set.contains(name):
+        coordinate_name = (
+            name.rsplit("/", 2)[-2] if name.endswith("/value") else name
+        )
+        if not coordinate_set.contains(coordinate_name):
             continue
-        coordinate = coordinate_set.get(name)
-        if coordinate.get_locked():
-            continue
-        coordinate.setValue(state, value, False)
+        coordinate = coordinate_set.get(coordinate_name)
+        was_locked = coordinate.getLocked(state)
+        if was_locked:
+            coordinate.setLocked(state, False)
+        try:
+            coordinate.setValue(state, value, False)
+        finally:
+            if was_locked:
+                coordinate.setLocked(state, True)
     native_model.realizePosition(state)

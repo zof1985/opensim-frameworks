@@ -18,6 +18,7 @@ from opensim_frameworks.viewer import standalone as standalone_module
 from opensim_frameworks.viewer.standalone import _make_frames
 from opensim_frameworks.viewer import standalone_player as standalone_player_module
 from opensim_frameworks.viewer.standalone_player import Player, _prepare_assets
+from opensim_frameworks.utils.opensim import resolve_geometry_file
 
 
 def make_model():
@@ -42,19 +43,31 @@ def make_model():
     return model
 
 
-def make_motion():
+def make_motion(column_name="angle"):
     table = opensim.TimeSeriesTable()
-    table.setColumnLabels(["angle"])
+    table.setColumnLabels([column_name])
     table.addTableMetaDataString("inDegrees", "yes")
     table.appendRow(0.0, opensim.RowVector([0.0]))
     table.appendRow(1.0, opensim.RowVector([90.0]))
     return table
 
 
-def test_precomputes_geometry_and_per_frame_motion_without_runtime_opensim(tmp_path):
+def test_resolves_absolute_geometry_path_without_search_directories(tmp_path):
+    mesh = tmp_path / "mesh.vtp"
+    mesh.write_text("mesh", encoding="utf-8")
+
+    assert resolve_geometry_file(opensim, make_model(), str(mesh), ()) == mesh
+
+
+@pytest.mark.parametrize("locked", [False, True])
+@pytest.mark.parametrize("column_name", ["angle", "/jointset/hinge/angle/value"])
+def test_precomputes_geometry_and_per_frame_motion_without_runtime_opensim(
+    tmp_path, locked, column_name
+):
     model = make_model()
     adapter = _ViewerModel(model, opensim.State(model.getWorkingState()))
-    data = MotionData(adapter, make_motion())
+    model.getCoordinateSet().get("angle").setLocked(adapter.state, locked)
+    data = MotionData(adapter, make_motion(column_name))
 
     manifest = _make_frames(
         adapter,

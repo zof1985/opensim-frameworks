@@ -803,6 +803,20 @@ sampling frequency is configurable through the viewer's
 self-contained Windows player and retains the `clean` option for rebuilding
 its cached runtime. `save_framework(path=...)` writes an `.osf` archive with
 member models, configurations, couplings, trajectories, and geometry assets.
+For framework-level serialization, use `framework.to_osf(path)` and
+`Framework.from_osf(path)`. Import modules that define custom `Model`
+subclasses before loading an archive so their classes are registered. For
+example:
+
+```python
+from opensim_frameworks import Framework
+
+# `framework` is the Framework instance to save.
+framework.to_osf("framework.osf")
+restored = Framework.from_osf("framework.osf")
+```
+
+`FrameworkViewer.save_framework(path)` delegates to `framework.to_osf(path)`.
 All save methods accept `overwrite=True` by default. `User.show()` and
 `Framework.show()` also provide a shortcut to open the viewer.
 

@@ -2,21 +2,15 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import math
-import os
-import shutil
-import tempfile
-import zipfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 from ..framework import Framework
 from ..models.model import Model
 from ..utils.constants import DEFAULT_SIZE
-from ..utils.opensim import get_referenced_meshes, import_opensim, resolve_geometry_file
+from ..utils.opensim import import_opensim
 from .animation import _ViewerModel, save_animation as _render_animation
 from .export import save_image as _save_image
 from .player import PlayerWindow, start_player
@@ -43,20 +37,6 @@ def _camera_vector(
     if len(vector) != 3 or not all(math.isfinite(component) for component in vector):
         raise ValueError(f"{name} must contain three finite numbers")
     return vector
-
-
-def _json_value(value: Any) -> Any:
-    if value is None or isinstance(value, (str, bool, int, float)):
-        return value
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, Mapping):
-        return {str(key): _json_value(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_value(item) for item in value]
-    if hasattr(value, "tolist"):
-        return _json_value(value.tolist())
-    raise TypeError(f"Value of type {type(value).__name__} is not JSON serializable")
 
 
 class FrameworkViewer:
@@ -488,174 +468,9 @@ class FrameworkViewer:
             show_vision_cone=show_vision_cone,
         )
 
-    def _package_model(
-        self,
-        model: Any,
-        directory: Path,
-        resolver_model: Any,
-        used_names: dict[str, Path],
-        archive_root: Path,
-        geometry_directories: Sequence[str | Path] = (),
-    ) -> str:
-        directory.mkdir(parents=True, exist_ok=True)
-        clone = self._opensim.Model(model)
-        clone.finalizeFromProperties()
-        clone.finalizeConnections()
-        geometry_dir = directory / "Geometry"
-        geometry_dir.mkdir()
-        search_directories = (
-            *getattr(model, "geometry_directories", ()),
-            *geometry_directories,
-        )
-        for mesh, filename in get_referenced_meshes(clone):
-            source = resolve_geometry_file(
-                self._opensim,
-                resolver_model,
-                filename,
-                (*search_directories,),
-            )
-            if source is None or not source.is_file():
-                raise FileNotFoundError(f"Unable to resolve mesh file {filename!r}")
-            target_name = Path(filename).name
-            previous = used_names.get(target_name)
-            if previous is not None and previous != source:
-                digest = hashlib.sha256(source.read_bytes()).hexdigest()[:10]
-                target_name = f"{Path(target_name).stem}_{digest}{Path(target_name).suffix}"
-            used_names[target_name] = source
-            shutil.copy2(source, geometry_dir / target_name)
-            mesh.set_mesh_file(target_name)
-        model_path = directory / "model.osim"
-        clone.printToXML(str(model_path))
-        return model_path.relative_to(archive_root).as_posix()
-
-    def _coupling_manifest(self) -> list[dict[str, Any]]:
-        couplings = []
-        for coupling in self.framework.couplings.values():
-            options: dict[str, Any] = {}
-            for name, value in coupling.options:
-                if name == "component":
-                    options[name] = {
-                        "class": value.getConcreteClassName(),
-                        "name": value.getName(),
-                    }
-                elif name == "function":
-                    options[name] = (
-                        None
-                        if value is None
-                        else {
-                            "class": value.getConcreteClassName(),
-                            "name": value.getName(),
-                        }
-                    )
-                else:
-                    options[name] = _json_value(value)
-            couplings.append(
-                {
-                    "name": coupling.name,
-                    "kind": coupling.kind,
-                    "references": [list(reference) for reference in coupling.references],
-                    "options": options,
-                }
-            )
-        return couplings
-
     def save_framework(self, path: str | Path, *, overwrite: bool = True) -> Path:
-        """Save models, configuration, couplings, trajectories, and geometry to .osf."""
-        destination = Path(path)
-        if destination.suffix.lower() != ".osf":
-            raise ValueError("path must have an .osf extension")
-        if not isinstance(overwrite, bool):
-            raise TypeError("overwrite must be a bool")
-        if destination.exists() and not overwrite:
-            raise FileExistsError(destination)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-
-        with tempfile.TemporaryDirectory(prefix="opensim-framework-") as temp_dir:
-            root = Path(temp_dir)
-            members: list[dict[str, Any]] = []
-            used_names: dict[str, Path] = {}
-            for name, model in self.framework.items():
-                model_path = self._package_model(
-                    model,
-                    root / "models" / name,
-                    model,
-                    used_names,
-                    root,
-                )
-                member: dict[str, Any] = {
-                    "name": name,
-                    "class": f"{type(model).__module__}:{type(model).__qualname__}",
-                    "model": model_path,
-                    "config": _json_value(model.get_config()),
-                }
-                trajectory = self.framework.states_trajectories[name]
-                if trajectory.getSize():
-                    trajectory_path = root / "trajectories" / f"{name}.ostates"
-                    trajectory_path.parent.mkdir(parents=True, exist_ok=True)
-                    trajectory.exportToStatesDocument(model).serialize(
-                        str(trajectory_path)
-                    )
-                    member["trajectory"] = str(
-                        trajectory_path.relative_to(root)
-                    ).replace("\\", "/")
-                members.append(member)
-
-            composite = self.framework.merge_to_model()
-            geometry_directories = tuple(
-                directory
-                for model in self.framework.values()
-                for directory in getattr(model, "geometry_directories", ())
-            )
-            composite_path = self._package_model(
-                composite,
-                root / "composite",
-                composite,
-                used_names,
-                root,
-                geometry_directories,
-            )
-            composite_trajectory = self.framework.states_trajectory
-            composite_trajectory_path = None
-            if composite_trajectory.getSize():
-                trajectory_path = root / "trajectories" / "composite.ostates"
-                trajectory_path.parent.mkdir(parents=True, exist_ok=True)
-                composite_trajectory.exportToStatesDocument(composite).serialize(
-                    str(trajectory_path)
-                )
-                composite_trajectory_path = str(
-                    trajectory_path.relative_to(root)
-                ).replace("\\", "/")
-
-            manifest = {
-                "format": "opensim-framework",
-                "version": 1,
-                "members": members,
-                "couplings": self._coupling_manifest(),
-                "composite_model": composite_path,
-                "composite_trajectory": composite_trajectory_path,
-                "state_times": list(self.framework.state_times),
-            }
-            (root / "manifest.json").write_text(
-                json.dumps(manifest, indent=2, allow_nan=False),
-                encoding="utf-8",
-            )
-            temporary_archive = destination.with_name(
-                f".{destination.name}.{os.getpid()}.tmp"
-            )
-            try:
-                with zipfile.ZipFile(
-                    temporary_archive, "w", compression=zipfile.ZIP_DEFLATED
-                ) as archive:
-                    for file in root.rglob("*"):
-                        if file.is_file():
-                            archive.write(file, file.relative_to(root).as_posix())
-                if destination.exists() and not overwrite:
-                    raise FileExistsError(destination)
-                os.replace(temporary_archive, destination)
-            finally:
-                if temporary_archive.exists():
-                    temporary_archive.unlink()
-        return destination
+        """Save this viewer's framework to an .osf archive."""
+        return self.framework.to_osf(path, overwrite=overwrite)
 
     def prepare_player_export(self) -> None:
         """Prebuild the reusable runtime for future :meth:`save_player` calls."""

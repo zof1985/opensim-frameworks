@@ -163,6 +163,63 @@ def test_save_framework_writes_osf_manifest_models_and_honors_overwrite(
         viewer.save_framework(destination, overwrite=False)
 
 
+def test_save_framework_delegates_to_framework_to_osf(monkeypatch, tmp_path):
+    framework = Framework(model=make_model())
+    viewer = FrameworkViewer(framework)
+    destination = tmp_path / "delegated.osf"
+    captured = {}
+
+    def fake_to_osf(self, file, *, overwrite=True):
+        captured.update(framework=self, file=file, overwrite=overwrite)
+        return file
+
+    monkeypatch.setattr(Framework, "to_osf", fake_to_osf)
+
+    assert viewer.save_framework(destination, overwrite=False) == destination
+    assert captured == {
+        "framework": framework,
+        "file": destination,
+        "overwrite": False,
+    }
+
+
+def test_from_osf_restores_models_and_synchronized_trajectories(tmp_path):
+    model = make_model()
+    framework = Framework(model=model)
+    coordinate = model.getCoordinateSet().get("rotation")
+    for time, value in ((0.0, 0.0), (1.0, 1.0), (2.0, 0.0)):
+        state = opensim.State(model.state)
+        coordinate.setValue(state, value, False)
+        model.state = state
+        framework.record_state(time)
+
+    destination = tmp_path / "animated.osf"
+    assert framework.to_osf(destination) == destination
+    with pytest.raises(FileExistsError):
+        framework.to_osf(destination, overwrite=False)
+    loaded = Framework.from_osf(destination)
+
+    assert loaded.state_times == (0.0, 1.0, 2.0)
+    assert loaded.states_trajectories["model"].getSize() == 3
+    assert loaded.states_trajectory.getSize() == 3
+    restored_coordinate = loaded["model"].getCoordinateSet().get("rotation")
+    restored_values = [
+        restored_coordinate.getValue(loaded.states_trajectories["model"].get(index))
+        for index in range(3)
+    ]
+    assert restored_values == pytest.approx([0.0, 1.0, 0.0])
+
+
+def test_from_osf_rejects_archive_path_traversal(tmp_path):
+    destination = tmp_path / "unsafe.osf"
+    with zipfile.ZipFile(destination, "w") as archive:
+        archive.writestr("../outside.txt", "not extracted")
+
+    with pytest.raises(ValueError, match="invalid OSF archive path"):
+        Framework.from_osf(destination)
+    assert not (tmp_path.parent / "outside.txt").exists()
+
+
 def test_overlay_controls_report_unavailable_layers_for_plain_models():
     visualizer = VTKVisualizer(_ViewerModel(make_model()), offscreen=True)
     try:

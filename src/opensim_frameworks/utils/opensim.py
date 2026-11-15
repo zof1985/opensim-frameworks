@@ -83,6 +83,9 @@ def resolve_geometry_file(
         First matching local path, or the native resolved path. Returns
         ``None`` if the file cannot be resolved.
     """
+    direct_path = Path(filename).expanduser()
+    if direct_path.is_file():
+        return direct_path
     for directory in directories:
         candidate = Path(directory) / filename
         if candidate.is_file():
