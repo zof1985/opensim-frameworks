@@ -123,6 +123,162 @@ def test_scapulothoracic_api_rejects_invalid_arguments(user):
         user.scapulothoracic_residuals_for("r", {"arm_flex": 10.0})
 
 
+@pytest.mark.parametrize("side", ["r", "l"])
+def test_costal_point_distances_follow_the_scapula_and_match_rib_mesh(user, side):
+    import vtk
+
+    from opensim_frameworks.utils.collision import mesh_matrix, mesh_polydata
+
+    contact = user._scapula_mesh_contact(side)
+    user.realizePosition(user.state)
+    rib_transform = vtk.vtkTransform()
+    rib_transform.SetMatrix(mesh_matrix(contact.ribs, user.state))
+    ribs_ground = vtk.vtkTransformFilter()
+    ribs_ground.SetTransform(rib_transform)
+    ribs_ground.SetInputData(mesh_polydata(contact.ribs, user.geometry_directories))
+    ribs_ground.Update()
+    locator = vtk.vtkStaticCellLocator()
+    locator.SetDataSet(ribs_ground.GetOutput())
+    locator.BuildLocator()
+    scapula_matrix = mesh_matrix(contact.scapula, user.state)
+    points = np.array([
+        scapula_matrix.MultiplyPoint(vertex.tolist())[:3]
+        for vertex in contact.costal_vertices
+    ])
+    assert np.linalg.norm(np.cross(points[1] - points[0], points[2] - points[0])) > 1e-3
+    expected = []
+    for point in points:
+        closest = [0.0, 0.0, 0.0]
+        cell, sub, distance = vtk.reference(0), vtk.reference(0), vtk.reference(0.0)
+        locator.FindClosestPoint(point, closest, cell, sub, distance)
+        expected.append(np.sqrt(float(distance)))
+
+    np.testing.assert_allclose(user.scapula_costal_distances(side), expected, atol=1e-7)
+    gaps = user.scapula_costal_distances(side)
+    coordinate = user.getCoordinateSet().get(f"sc_protraction_{side}")
+    original = coordinate.getValue(user.state)
+    try:
+        coordinate.setValue(user.state, original + np.radians(10.0), False)
+        moved = user.scapula_costal_distances(side)
+        assert np.all(np.abs(moved - gaps) > 1e-5)
+        assert contact is user._scapula_mesh_contact(side)
+    finally:
+        coordinate.setValue(user.state, original, False)
+        user.realizePosition(user.state)
+
+
+def test_scapular_fit_uses_all_three_costal_distances(user, monkeypatch):
+    from types import SimpleNamespace
+
+    gaps = np.array([0.001, 0.003, 0.006])
+    monkeypatch.setattr(user, "scapula_costal_distances", lambda side: gaps)
+    monkeypatch.setattr(
+        user, "_shoulder_map",
+        lambda side: SimpleNamespace(collision_risk=lambda angles: 0.4),
+    )
+
+    residuals = user.scapular_fit_residuals("r", 5.0, 1000.0)
+
+    assert residuals.shape == (6,)
+    np.testing.assert_allclose(residuals[2:5], 1000.0 / np.sqrt(3) * (gaps - 0.005))
+    assert residuals[5] == pytest.approx(10.0)
+
+
+def test_contact_report_warns_when_one_costal_point_is_far(user, monkeypatch):
+    class Contact:
+        def distance(self):
+            return 0.001
+
+        def costal_distances(self):
+            return np.array([0.005, 0.005, 0.008])
+
+        def intersects(self):
+            return False
+
+    monkeypatch.setattr(user, "_scapula_mesh_contact", lambda side: Contact())
+    with pytest.warns(RuntimeWarning, match="costal point gaps.*8.0"):
+        report = user.scapula_contact_report("r")
+    assert report["gap_m"] == pytest.approx(0.001)
+    assert report["max_costal_gap_m"] == pytest.approx(0.008)
+    assert not report["intersects"]
+
+
+def test_shoulder_map_uses_scaled_user_geometry_and_preserves_state(monkeypatch):
+    import warnings
+
+    from opensim_frameworks.models.user import scapulothoracic as contact
+
+    monkeypatch.setattr(contact, "_SHOULDER_MAP_STEP_RAD", np.radians(20.0))
+    maps = []
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="height=205 cm is outside ANSUR range")
+        for height in (150, 205):
+            sized = User("M", height_cm=height)
+            coordinates = [
+                sized.getCoordinateSet().get(f"{name}_r")
+                for name in SHOULDER_GIRDLE_COORDINATES
+            ]
+            coordinates[2].setValue(sized.state, 0.1, False)
+            before = np.array([coordinate.getValue(sized.state) for coordinate in coordinates])
+            built = sized._shoulder_map("r")
+            after = np.array([coordinate.getValue(sized.state) for coordinate in coordinates])
+            np.testing.assert_allclose(after, before)
+            assert sized._shoulder_map("r") is built
+            maps.append(built.interpolator.values.copy())
+
+            shoulder = np.radians([5.0, -5.0])
+            sized.set_shoulder_girdle("r", *shoulder, check_contact=False)
+            actual = np.array([coordinate.getValue(sized.state) for coordinate in coordinates])
+            np.testing.assert_allclose(actual[:2], shoulder)
+            np.testing.assert_allclose(actual[2:], built.interpolator(tuple(shoulder)))
+            for index in ((0, 0), (1, 1), (-1, -1)):
+                point = tuple(axis[i] for axis, i in zip(built.interpolator.grid, index))
+                sized.set_shoulder_girdle("r", *point, check_contact=False)
+                risk = float(built.collision_risk(point))
+                assert (risk > 0) == sized._scapula_mesh_contact("r").intersects()
+
+    assert not np.allclose(maps[0], maps[1], atol=1e-5)
+
+
+def test_shoulder_map_rejects_invalid_inputs_before_building(user, monkeypatch):
+    def unexpected_map(side):
+        raise AssertionError("map must not be built for invalid input")
+
+    monkeypatch.setattr(user, "_shoulder_map", unexpected_map)
+    with pytest.raises(ValueError):
+        user.set_shoulder_girdle("x", 0.0, 0.0)
+    with pytest.raises(ValueError):
+        user.set_shoulder_girdle("r", np.nan, 0.0)
+    with pytest.raises(ValueError):
+        user.set_shoulder_girdle("r", np.pi, 0.0)
+
+
+def test_shoulder_map_warns_but_remains_usable_when_all_candidates_fail(user, monkeypatch):
+    from types import SimpleNamespace
+
+    from opensim_frameworks.models.user import scapulothoracic as contact
+
+    class IntersectingContact:
+        def costal_distances(self):
+            return np.array([0.005, 0.005, 0.005])
+
+        def intersects(self):
+            return True
+
+    monkeypatch.setattr(contact, "_SHOULDER_MAP_STEP_RAD", np.radians(100.0))
+    monkeypatch.setattr(user, "_scapula_mesh_contact", lambda side: IntersectingContact())
+    monkeypatch.setattr(
+        contact, "least_squares",
+        lambda fun, start, **kwargs: SimpleNamespace(x=start.copy(), success=False),
+    )
+    with pytest.warns(RuntimeWarning) as warnings:
+        user.set_shoulder_girdle("r", 0.0, 0.0, check_contact=False)
+    messages = [str(warning.message) for warning in warnings]
+    assert any("optimization did not converge" in message for message in messages)
+    assert any("no collision-free sampled poses" in message for message in messages)
+    assert user.getCoordinateSet().get("sc_protraction_r").getValue(user.state) == 0.0
+
+
 def test_reference_poses_are_within_ranges_and_contact_pose_touches(user):
     raw = user.shoulder_girdle_reference_pose(contact=False)
     contact = user.shoulder_girdle_reference_pose()

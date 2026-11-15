@@ -57,6 +57,22 @@ modify the source models. `FrameworkViewer` is the public facade for models and
 frameworks; `VTKVisualizer` manages the VTK scene, and the interactive player
 provides playback controls.
 
+Chest-press `fit_user` includes `handle_fit_log` in its `grip` report.
+`simulate_kinematics` returns `(framework, handle_fit_log)`. Each log entry
+identifies the fitting phase and lever angle and contains the Python warnings
+and enabled logging records produced by that fit, with their source location.
+Warnings captured by a fit are returned rather than displayed. Native OpenSim
+output is not included. Direct `fit_handle` calls return
+`(elbow_flexion, palm_position, messages)`; exceptions raised by `fit_handle`
+expose messages collected so far as `handle_fit_log`.
+The palm-contact objective targets a palm-to-axis distance equal to the radius
+of the handle's cylindrical approximation, with a default weight of `1e7`; the
+fit does not penalize movement
+relative to a fixed palm position or penalize palm orientation. Unexpected palm
+orientation is still reported. Wrist flexion is penalized without a wrist-extension
+target, and the knuckle projections, rather than the palm marker, are
+penalized when they exceed the handle ends.
+
 ## Requirements and installation
 
 The project requires **Python 3.10 or later**. Using the models also requires
