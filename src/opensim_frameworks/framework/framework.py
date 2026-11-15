@@ -7,18 +7,22 @@ from collections.abc import Iterable, Mapping, Sequence
 from math import isclose, isfinite
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Self, TypeGuard
+from typing import TYPE_CHECKING, Any, Protocol, Self, TypeGuard, runtime_checkable
+
+import numpy as np
+from scipy.interpolate import CubicSpline
 
 from ..bodies.shapes import MESHES_DIR
 from ..utils.opensim import import_opensim
 from .couplings import ComponentRef, Coupling, normalize_reference
+from ..models.model import FrameworkModel, _registered_model_class
 
 if TYPE_CHECKING:
     import opensim
 else:
     opensim = import_opensim()
 
-__all__ = ["Framework"]
+__all__ = ["Framework", "state_to_row", "row_to_state"]
 
 _MODEL_SETS = (
     ("bodyset", "updBodySet"),
@@ -36,6 +40,15 @@ _COMPONENT_SETS = {
     "constraint": ("constraintset", "addConstraint"),
     "controller": ("controllerset", "addController"),
 }
+
+
+@runtime_checkable
+class _RowVectorLike(Protocol):
+    """Minimal interface required to read an OpenSim table row."""
+
+    def size(self) -> int: ...
+
+    def __getitem__(self, index: int) -> float: ...
 
 
 def _set_items(component_set: Any) -> list[Any]:
@@ -131,21 +144,48 @@ def _remap_component_path(path: str, renamed_paths: Mapping[str, str]) -> str:
     return path
 
 
-class Framework(dict[str, opensim.Model]):
+class _FrameworkState(opensim.State):
+    """OpenSim state that keeps its originating composite model alive.
+
+    Parameters
+    ----------
+    state : opensim.State
+        State to copy.
+    model : opensim.Model
+        Model whose system owns ``state``.
+    """
+
+    def __init__(self, state: opensim.State, model: opensim.Model) -> None:
+        super().__init__(state)
+        self._model_owner = model
+
+    @property
+    def model(self) -> opensim.Model:
+        """Return the model that owns this state.
+
+        Returns
+        -------
+        opensim.Model
+            Originating composite model.
+        """
+        return self._model_owner
+
+
+class Framework(dict[str, FrameworkModel]):
     """Store named OpenSim models while keeping each model independent.
 
     Parameters
     ----------
-    models : Mapping[str, opensim.Model] or Iterable[tuple[str, opensim.Model]], optional
+    models : Mapping[str, FrameworkModel] or Iterable[tuple[str, FrameworkModel]], optional
         Initial models. Keys must be valid, non-reserved Python identifiers;
         values must be distinct ``opensim.Model`` instances.
-    **named_models : opensim.Model
+    **named_models : FrameworkModel
         Additional models keyed by their keyword names.
 
     Raises
     ------
     TypeError
-        If a key is not a string or a value is not an ``opensim.Model``.
+        If a key is not a string or a value is not a ``FrameworkModel``.
     ValueError
         If a name is invalid, reserved, or the same model instance is stored
         under more than one name.
@@ -158,23 +198,64 @@ class Framework(dict[str, opensim.Model]):
     """
 
     _active_composite: opensim.Model | None
-    _active_state: Any | None
+    _active_state: opensim.State | None
     _active_path_map: dict[tuple[str, str], str]
     _couplings: dict[str, Coupling]
+    _states_trajectories: dict[str, opensim.StatesTrajectory]
+    _composite_states_trajectory: opensim.StatesTrajectory
+    _state_times: list[float]
 
     def __init__(
         self,
-        models: Mapping[str, opensim.Model]
-        | Iterable[tuple[str, opensim.Model]] = (),
+        models: Mapping[str, FrameworkModel]
+        | Iterable[tuple[str, FrameworkModel]] = (),
         /,
-        **named_models: opensim.Model,
+        **named_models: FrameworkModel,
     ) -> None:
         dict.__init__(self)
         object.__setattr__(self, "_active_composite", None)
         object.__setattr__(self, "_active_state", None)
         object.__setattr__(self, "_active_path_map", {})
         object.__setattr__(self, "_couplings", {})
+        object.__setattr__(self, "_states_trajectories", {})
+        object.__setattr__(
+            self, "_composite_states_trajectory", opensim.StatesTrajectory()
+        )
+        object.__setattr__(self, "_state_times", [])
         self.update(models, **named_models)
+
+    @property
+    def models(self) -> Mapping[str, FrameworkModel]:
+        """Return a read-only mapping of framework member models."""
+        return MappingProxyType(dict(self))
+
+    @models.setter
+    def models(
+        self,
+        value: Mapping[str, FrameworkModel]
+        | Iterable[tuple[str, FrameworkModel]],
+    ) -> None:
+        self.set_models(value)
+
+    def set_models(
+        self,
+        value: Mapping[str, FrameworkModel]
+        | Iterable[tuple[str, FrameworkModel]],
+    ) -> None:
+        """Replace all framework member models and clear dependent couplings."""
+        pairs = list(value.items()) if isinstance(value, Mapping) else list(value)
+        staged: dict[str, FrameworkModel] = {}
+        for pair in pairs:
+            try:
+                key, model = pair
+            except (TypeError, ValueError) as error:
+                raise TypeError("models must contain (name, model) pairs") from error
+            name, validated_model = self._validate_pair(staged, key, model)
+            staged[name] = validated_model
+        dict.clear(self)
+        dict.update(self, staged)
+        self._couplings.clear()
+        self._invalidate_snapshot()
 
     @staticmethod
     def _reserved_names() -> set[str]:
@@ -193,14 +274,14 @@ class Framework(dict[str, opensim.Model]):
         return key
 
     @staticmethod
-    def _is_opensim_model(model: object) -> TypeGuard[opensim.Model]:
-        return isinstance(model, import_opensim().Model)
+    def _is_framework_model(model: object) -> TypeGuard[FrameworkModel]:
+        return isinstance(model, FrameworkModel)
 
     @staticmethod
-    def _validate_model(model: object) -> opensim.Model:
-        if not Framework._is_opensim_model(model):
+    def _validate_model(model: object) -> FrameworkModel:
+        if not Framework._is_framework_model(model):
             raise TypeError(
-                "Framework values must be opensim.Model instances; "
+                "Framework values must derive from opensim_frameworks.FrameworkModel; "
                 f"got {type(model).__name__}"
             )
         return model
@@ -208,10 +289,10 @@ class Framework(dict[str, opensim.Model]):
     @classmethod
     def _validate_pair(
         cls,
-        target: dict[str, opensim.Model],
+        target: dict[str, FrameworkModel],
         key: object,
         value: object,
-    ) -> tuple[str, opensim.Model]:
+    ) -> tuple[str, FrameworkModel]:
         name = cls._validate_key(key)
         model = cls._validate_model(value)
         if any(other_name != name and other is model for other_name, other in target.items()):
@@ -222,8 +303,17 @@ class Framework(dict[str, opensim.Model]):
         object.__setattr__(self, "_active_composite", None)
         object.__setattr__(self, "_active_state", None)
         object.__setattr__(self, "_active_path_map", {})
+        object.__setattr__(
+            self,
+            "_states_trajectories",
+            {name: opensim.StatesTrajectory() for name in dict.keys(self)},
+        )
+        object.__setattr__(
+            self, "_composite_states_trajectory", opensim.StatesTrajectory()
+        )
+        object.__setattr__(self, "_state_times", [])
 
-    def __setitem__(self, key: str, value: opensim.Model) -> None:
+    def __setitem__(self, key: str, value: FrameworkModel) -> None:
         name, model = self._validate_pair(dict(self), key, value)
         dict.__setitem__(self, name, model)
         self._invalidate_snapshot()
@@ -232,7 +322,7 @@ class Framework(dict[str, opensim.Model]):
         self,
         models: Any = (),
         /,
-        **named_models: opensim.Model,
+        **named_models: FrameworkModel,
     ) -> None:
         """Validate and insert models from a mapping or iterable of pairs.
 
@@ -272,19 +362,21 @@ class Framework(dict[str, opensim.Model]):
         dict.update(self, staged)
         self._invalidate_snapshot()
 
-    def setdefault(self, key: str, default: opensim.Model | None = None) -> opensim.Model:
+    def setdefault(
+        self, key: str, default: FrameworkModel | None = None
+    ) -> FrameworkModel:
         """Return a model by name, inserting ``default`` when absent.
 
         Parameters
         ----------
         key : str
             Model name.
-        default : opensim.Model
+        default : FrameworkModel
             Model to insert if ``key`` is absent.
 
         Returns
         -------
-        opensim.Model
+        FrameworkModel
             Existing or newly inserted model.
 
         Raises
@@ -320,7 +412,7 @@ class Framework(dict[str, opensim.Model]):
         ----------
         keys : iterable of str
             Framework names to initialize.
-        value : opensim.Model
+        value : FrameworkModel
             Model assigned to each name. Since a model cannot be stored under
             multiple names, ``keys`` may contain at most one distinct item.
 
@@ -445,16 +537,32 @@ class Framework(dict[str, opensim.Model]):
         """
         result = type(self)(self)
         object.__setattr__(result, "_couplings", dict(self._couplings))
+        copied_trajectories = {
+            name: opensim.StatesTrajectory() for name in dict.keys(self)
+        }
+        for name, trajectory in self._states_trajectories.items():
+            for index in range(trajectory.getSize()):
+                copied_trajectories[name].append(
+                    opensim.State(trajectory.get(index))
+                )
+        object.__setattr__(result, "_states_trajectories", copied_trajectories)
+        composite_trajectory = opensim.StatesTrajectory()
+        for index in range(self._composite_states_trajectory.getSize()):
+            composite_trajectory.append(
+                opensim.State(self._composite_states_trajectory.get(index))
+            )
+        object.__setattr__(result, "_composite_states_trajectory", composite_trajectory)
+        object.__setattr__(result, "_state_times", list(self._state_times))
         return result
 
     def __copy__(self) -> Self:
         return self.copy()
 
     def __deepcopy__(self, memo: dict[int, Any]) -> Self:
-        """Clone every native model into an independent framework.
+        """Clone every model into an independent framework.
 
-        OpenSim's model copy constructor returns a native ``opensim.Model``;
-        specialized Python subclasses are therefore copied as native models.
+        Native model data and each subclass's ``get_config``/``set_config``
+        pair are both copied.
 
         Parameters
         ----------
@@ -464,16 +572,15 @@ class Framework(dict[str, opensim.Model]):
         Returns
         -------
         Framework
-            Independent framework containing copies of the native models.
+            Independent framework containing copies of the model instances.
         """
         existing = memo.get(id(self))
         if existing is not None:
             return existing
         result = type(self)()
         memo[id(self)] = result
-        opensim = import_opensim()
         for name, model in dict.items(self):
-            result[name] = opensim.Model(model)
+            result[name] = FrameworkModel.from_model(model)
         object.__setattr__(result, "_couplings", dict(self._couplings))
         return result
 
@@ -532,8 +639,13 @@ class Framework(dict[str, opensim.Model]):
         )
 
     @property
-    def state(self) -> Any:
+    def state(self) -> opensim.State:
         """Return the state associated with the active composite snapshot.
+
+        The returned OpenSim-compatible state retains its originating
+        composite model through its ``model`` property, including if this
+        framework later invalidates the active snapshot. After recording a
+        synchronized sample, it reflects the last shared trajectory time.
 
         Returns
         -------
@@ -542,8 +654,298 @@ class Framework(dict[str, opensim.Model]):
             it has not yet been created.
         """
         if self._active_state is None:
-            return self.initSystem()
+            state = self.initSystem()
+            if self._state_times:
+                self._sync_composite_state_from_members(self._state_times[-1])
+            return state
         return self._active_state
+
+    @property
+    def states_trajectories(self) -> Mapping[str, opensim.StatesTrajectory]:
+        """Return each member model's complete state trajectory.
+
+        Returns
+        -------
+        collections.abc.Mapping
+            Read-only mapping from framework member names to trajectories.
+            Each trajectory uses the same time values.
+        """
+        return MappingProxyType(self._states_trajectories.copy())
+
+    @property
+    def states_trajectory(self) -> opensim.StatesTrajectory:
+        """Return the composite model's complete state trajectory.
+
+        Returns
+        -------
+        opensim.StatesTrajectory
+            Trajectory containing synchronized states for the whole framework.
+        """
+        return self._composite_states_trajectory
+
+    def _motion_source_table(self) -> opensim.TimeSeriesTable:
+        if self.states_trajectory.getSize() == 0:
+            return opensim.TimeSeriesTable()
+        source_table = self.states_trajectory.exportToTable(self.composite)
+        if source_table.getNumRows() < 2:
+            raise ValueError("at least two recorded states are required to interpolate")
+        if source_table.getNumColumns() == 0:
+            raise ValueError("the trajectory has no continuous states to interpolate")
+        times = np.asarray(
+            [
+                source_table.getIndependentColumn()[index]
+                for index in range(source_table.getNumRows())
+            ],
+            dtype=float,
+        )
+        if not np.all(np.isfinite(times)) or np.any(np.diff(times) <= 0.0):
+            raise ValueError("recorded state times must be finite and strictly increasing")
+        return source_table
+
+    def _interpolate_motion_table(
+        self,
+        source_table: opensim.TimeSeriesTable,
+        sample_times: Sequence[float],
+    ) -> opensim.TimeSeriesTable:
+        """Interpolate a validated source trajectory at explicit times."""
+        row_count = source_table.getNumRows()
+        times = np.asarray(
+            [source_table.getIndependentColumn()[index] for index in range(row_count)],
+            dtype=float,
+        )
+        requested_times = np.asarray(sample_times, dtype=float)
+        if (
+            requested_times.ndim != 1
+            or requested_times.size == 0
+            or not np.all(np.isfinite(requested_times))
+            or np.any(requested_times < times[0])
+            or np.any(requested_times > times[-1])
+        ):
+            raise ValueError("sample times must be finite and within the trajectory")
+        source_values = np.asarray(
+            [
+                [
+                    source_table.getRowAtIndex(row)[column]
+                    for column in range(source_table.getNumColumns())
+                ]
+                for row in range(row_count)
+            ],
+            dtype=float,
+        )
+        interpolated_values = CubicSpline(times, source_values, axis=0)(
+            requested_times
+        )
+        result = opensim.TimeSeriesTable()
+        result.setColumnLabels(list(source_table.getColumnLabels()))
+        for time, values in zip(requested_times, interpolated_values, strict=True):
+            result.appendRow(
+                float(time),
+                opensim.RowVector([float(value) for value in values]),
+            )
+        return result
+
+    def get_motion_table(
+        self,
+        sampling_frequency_hz: float,
+    ) -> opensim.TimeSeriesTable:
+        """Interpolate the composite trajectory at a fixed sampling frequency.
+
+        Continuous state values are interpolated independently with a cubic
+        spline. The output starts at the first recorded time and includes only
+        samples at the requested frequency that do not exceed the final time.
+
+        Parameters
+        ----------
+        sampling_frequency_hz : float
+            Positive finite sampling frequency in hertz.
+
+        Returns
+        -------
+        opensim.TimeSeriesTable
+            Time-indexed table suitable for motion playback. Discrete and
+            modeling-option states remain available in :attr:`states_trajectory`.
+
+        Raises
+        ------
+        ValueError
+            If the sampling frequency is invalid, recorded times are not
+            strictly increasing, or fewer than two samples are available for
+            interpolation.
+        """
+        if isinstance(sampling_frequency_hz, bool):
+            raise ValueError("sampling_frequency_hz must be finite and positive")
+        try:
+            sampling_frequency_hz = float(sampling_frequency_hz)
+        except (TypeError, ValueError, OverflowError) as error:
+            raise ValueError(
+                "sampling_frequency_hz must be finite and positive"
+            ) from error
+        if not isfinite(sampling_frequency_hz) or sampling_frequency_hz <= 0.0:
+            raise ValueError("sampling_frequency_hz must be finite and positive")
+
+        if self.states_trajectory.getSize() == 0:
+            return opensim.TimeSeriesTable()
+        source_table = self._motion_source_table()
+        times_column = source_table.getIndependentColumn()
+        times = np.asarray(
+            [times_column[index] for index in range(source_table.getNumRows())],
+            dtype=float,
+        )
+
+        scaled_duration = float((times[-1] - times[0]) * sampling_frequency_hz)
+        nearest_interval_count = round(scaled_duration)
+        interval_count = (
+            int(nearest_interval_count)
+            if isclose(
+                scaled_duration,
+                nearest_interval_count,
+                rel_tol=1e-12,
+                abs_tol=1e-12,
+            )
+            else int(scaled_duration)
+        )
+        sample_times = times[0] + np.arange(interval_count + 1) / sampling_frequency_hz
+        return self._interpolate_motion_table(source_table, sample_times)
+
+    @property
+    def state_times(self) -> tuple[float, ...]:
+        """Return the shared time axis for all member trajectories.
+
+        Returns
+        -------
+        tuple[float, ...]
+            Recorded time values in seconds, in trajectory order.
+        """
+        return tuple(self._state_times)
+
+    def record_state(
+        self,
+        time: float | None = None,
+        *,
+        source: str = "members",
+    ) -> opensim.State:
+        """Record one synchronized state snapshot for every member model.
+
+        Parameters
+        ----------
+        time : float or None, default=None
+            Shared time in seconds. When omitted, the current composite state's
+            time is used.
+        source : {"members", "composite"}, default="members"
+            State source. ``"members"`` records each member's current state;
+            ``"composite"`` first synchronizes coordinates and speeds from
+            :attr:`state` to the member models.
+
+        Returns
+        -------
+        opensim.State
+            Composite state at the newly recorded time.
+
+        Raises
+        ------
+        ValueError
+            If the time is invalid or earlier than the previous sample, or if
+            ``source`` is unsupported.
+        RuntimeError
+            If the member trajectories are not synchronized.
+        """
+        if source not in {"members", "composite"}:
+            raise ValueError("source must be 'members' or 'composite'")
+        if not self:
+            raise ValueError("cannot record a state for an empty Framework")
+        composite = self.composite
+        if source == "composite":
+            self.update_state()
+        if time is None:
+            time_value = float(self.state.getTime())
+        else:
+            if isinstance(time, bool):
+                raise ValueError("time must be finite")
+            try:
+                time_value = float(time)
+            except (TypeError, ValueError, OverflowError) as error:
+                raise ValueError("time must be finite") from error
+        if not isfinite(time_value):
+            raise ValueError("time must be finite")
+        if self._state_times and time_value < self._state_times[-1]:
+            raise ValueError("time must not precede the previous state")
+
+        trajectories = self._states_trajectories
+        if set(trajectories) != set(dict.keys(self)):
+            raise RuntimeError("member trajectories do not match Framework models")
+        if any(
+            trajectory.getSize() != len(self._state_times)
+            for trajectory in trajectories.values()
+        ) or self._composite_states_trajectory.getSize() != len(self._state_times):
+            raise RuntimeError("member trajectories do not share the same time axis")
+
+        snapshots: dict[str, opensim.State] = {}
+        for name, model in dict.items(self):
+            snapshot = opensim.State(model.state)
+            snapshot.setTime(time_value)
+            snapshots[name] = snapshot
+
+        for name, snapshot in snapshots.items():
+            trajectories[name].append(snapshot)
+            dict.__getitem__(self, name).state = opensim.State(snapshot)
+        self._state_times.append(time_value)
+        self._sync_composite_state_from_members(time_value)
+        composite_snapshot = opensim.State(self._active_state)
+        composite_snapshot.setTime(time_value)
+        self._composite_states_trajectory.append(composite_snapshot)
+        object.__setattr__(
+            self,
+            "_active_state",
+            _FrameworkState(composite_snapshot, composite),
+        )
+        return self.state
+
+    def _sync_composite_state_from_members(self, time: float) -> None:
+        """Copy member continuous state variables into the active composite."""
+        composite = self._active_composite
+        if composite is None:
+            self.initSystem()
+            composite = self._active_composite
+        if composite is None or self._active_state is None:
+            raise RuntimeError("failed to initialize the composite state")
+
+        state = self._active_state
+        state.setTime(time)
+        composite_names = composite.getStateVariableNames()
+        composite_name_set = {
+            composite_names.get(index) for index in range(composite_names.getSize())
+        }
+        for member_name, model in dict.items(self):
+            member_state = model.state
+            names = model.getStateVariableNames()
+            values = model.getStateVariableValues(member_state)
+            member_paths = {
+                source_path: composite_path
+                for (path_member, source_path), composite_path
+                in self._active_path_map.items()
+                if path_member == member_name
+            }
+            for index in range(names.getSize()):
+                source_name = names.get(index)
+                source_path = max(
+                    (
+                        path
+                        for path in member_paths
+                        if source_name.startswith(path + "/")
+                    ),
+                    key=len,
+                    default=None,
+                )
+                if source_path is None:
+                    continue
+                target_name = (
+                    member_paths[source_path] + source_name[len(source_path) :]
+                )
+                if target_name in composite_name_set:
+                    composite.setStateVariableValue(
+                        state, target_name, values.get(index)
+                    )
+        composite.realizePosition(state)
 
     @property
     def gravity(self) -> tuple[float, float, float]:
@@ -599,7 +1001,7 @@ class Framework(dict[str, opensim.Model]):
             model.setGravity(vector)
         self._invalidate_snapshot()
 
-    def initSystem(self) -> Any:
+    def initSystem(self) -> opensim.State:
         """Build and initialize a composite snapshot from the current members.
 
         Returns
@@ -610,14 +1012,14 @@ class Framework(dict[str, opensim.Model]):
         composite, path_map = self._build_merge(
             None, list(dict.keys(self)), list(self._couplings.values())
         )
-        state = composite.initSystem()
+        state = _FrameworkState(composite.initSystem(), composite)
         self._push_member_speeds(composite, state, path_map)
         object.__setattr__(self, "_active_composite", composite)
         object.__setattr__(self, "_active_state", state)
         object.__setattr__(self, "_active_path_map", path_map)
         return state
 
-    def update_state(self) -> Any:
+    def update_state(self) -> opensim.State:
         """Copy the active composite's coordinates and speeds back to members.
 
         This performs the reverse synchronization after changing or simulating
@@ -706,7 +1108,7 @@ class Framework(dict[str, opensim.Model]):
             if source is not None and target is not None:
                 target.setSpeedValue(state, source.getSpeedValue(member_state))
 
-    def realize(self, stage: Any = None) -> Any:
+    def realize(self, stage: Any = None) -> opensim.State:
         """Realize the active composite through ``stage`` (Position by default).
 
         Parameters
@@ -746,7 +1148,7 @@ class Framework(dict[str, opensim.Model]):
         getattr(composite, methods[stage])(self.state)
         return self.state
 
-    def forward(self, final_time: float) -> Any:
+    def forward(self, final_time: float) -> opensim.State:
         """Integrate the composite to ``final_time`` and synchronize members.
 
         Parameters
@@ -779,12 +1181,12 @@ class Framework(dict[str, opensim.Model]):
         self._check_integrable_joints(composite)
         manager = opensim.Manager(composite)
         manager.initialize(state)
-        state = opensim.State(manager.integrate(float(final_time)))
+        state = _FrameworkState(manager.integrate(float(final_time)), composite)
         object.__setattr__(self, "_active_state", state)
         self.update_state()
         return state
 
-    def simulate(self, final_time: float) -> Any:
+    def simulate(self, final_time: float) -> opensim.State:
         """Advance the composite model to an absolute simulation time.
 
         Parameters
@@ -817,7 +1219,7 @@ class Framework(dict[str, opensim.Model]):
         *,
         accuracy: float = 1e-4,
         max_step_size_s: float = 0.01,
-    ) -> Any:
+    ) -> opensim.State:
         """Integrate the active composite forward for ``duration_s`` seconds.
 
         The integration includes gravity and every force present in the
@@ -872,8 +1274,9 @@ class Framework(dict[str, opensim.Model]):
         manager.setIntegratorAccuracy(float(accuracy))
         manager.setIntegratorMaximumStepSize(float(max_step_size_s))
         manager.initialize(state)
-        state = opensim.State(
-            manager.integrate(state.getTime() + float(duration_s))
+        state = _FrameworkState(
+            manager.integrate(state.getTime() + float(duration_s)),
+            composite,
         )
         object.__setattr__(self, "_active_state", state)
         self.update_state()
@@ -1639,59 +2042,174 @@ class Framework(dict[str, opensim.Model]):
             del self._couplings[name]
         self._invalidate_snapshot()
 
-    def show(
-        self,
-        motion: Any = None,
-        *,
-        loop: bool = False,
-        fps: float = 30.0,
-    ) -> Any:
+    def show(self, sampling_frequency_hz: float = 30.0) -> Any:
         """Open the viewer for a merged snapshot of this framework.
 
         Parameters
         ----------
-        motion : str, pathlib.Path, opensim.TimeSeriesTable, or None, default=None
-            Optional motion table or path to a ``.mot``/``.sto`` file.
-        loop : bool, default=False
-            Whether playback repeats after the final sample.
-        fps : float, default=30.0
-            Playback refresh and animation-export frame rate.
+        sampling_frequency_hz : float, default=30.0
+            Frequency used to interpolate the framework's recorded trajectory.
 
         Returns
         -------
         PlayerWindow
             Handle used to inspect playback state or close the viewer.
         """
-        from ..viewer import VTKViewer
+        from ..viewer import FrameworkViewer
 
-        return VTKViewer().show(self, motion, loop=loop, fps=fps)
+        return FrameworkViewer(
+            self, sampling_frequency_hz=sampling_frequency_hz
+        ).show()
 
-    def save_tables(
-        self,
-        directory: Any,
-        motion: Any = None,
-        *,
-        overwrite: bool = False,
-    ) -> list[Any]:
-        """Export marker and joint tables of this framework to ``.xlsx`` files.
 
-        Shortcut for :meth:`opensim_frameworks.viewer.VTKViewer.save_tables`,
-        mirroring :meth:`show`: one file per member model.
+def state_to_row(
+    framework: Framework,
+    state: opensim.State | None = None,
+) -> tuple[float, tuple[str, ...], opensim.RowVector]:
+    """Convert a framework state to its time, column labels, and table row.
 
-        Parameters
-        ----------
-        directory : str or pathlib.Path
-            Destination directory, created when missing.
-        motion : str, pathlib.Path, opensim.TimeSeriesTable, or None, default=None
-            Optional motion; ``None`` exports the current pose.
-        overwrite : bool, default=False
-            Replace existing files instead of raising ``FileExistsError``.
+    The dependent values include every continuous state variable in the
+    composite model, such as coordinate values, speeds, and auxiliary states.
+    The state time is returned separately as the independent table value.
 
-        Returns
-        -------
-        list[pathlib.Path]
-            The files written.
-        """
-        from ..viewer import VTKViewer
+    Parameters
+    ----------
+    framework : Framework
+        Framework retaining the model associated with the state.
+    state : opensim.State or None, default=None
+        State to convert. Defaults to ``framework.state``. A state returned
+        by a framework retains its originating model even if the framework
+        later rebuilds its composite snapshot.
 
-        return VTKViewer().save_tables(self, directory, motion, overwrite=overwrite)
+    Returns
+    -------
+    tuple
+        ``(time, column_labels, row)`` where ``row`` is an OpenSim
+        ``RowVector`` in the order of ``column_labels``.
+
+    Raises
+    ------
+    TypeError
+        If ``framework`` is not a ``Framework`` or ``state`` is not an
+        ``opensim.State``.
+    ValueError
+        If the state time or any continuous state value is non-finite.
+    """
+    if not isinstance(framework, Framework):
+        raise TypeError("framework must be an opensim_frameworks.Framework")
+    if state is None:
+        state = framework.state
+        model = framework.composite
+    else:
+        if not isinstance(state, opensim.State):
+            raise TypeError("state must be an opensim.State")
+        model = getattr(state, "model", None)
+        if not isinstance(model, opensim.Model):
+            model = framework.composite
+
+    time = float(state.getTime())
+    if not isfinite(time):
+        raise ValueError("state time must be finite")
+
+    state_names = model.getStateVariableNames()
+    labels = tuple(state_names.get(index) for index in range(state_names.getSize()))
+    values = model.getStateVariableValues(state)
+    row_values = [float(values.get(index)) for index in range(values.size())]
+    if len(labels) != len(row_values):
+        raise RuntimeError("model state-variable names and values have different sizes")
+    if any(not isfinite(value) for value in row_values):
+        raise ValueError("state values must all be finite")
+    return time, labels, opensim.RowVector(row_values)
+
+
+def row_to_state(
+    framework: Framework,
+    row: Iterable[float] | _RowVectorLike,
+    column_labels: Sequence[str],
+    time: float,
+) -> opensim.State:
+    """Restore a table row into the active state of a framework.
+
+    Column labels may be in a different order than the composite model's
+    state-variable names; values are matched by name. The row must contain
+    exactly one value for every continuous state variable. It does not encode
+    discrete or modeling-option states.
+
+    Parameters
+    ----------
+    framework : Framework
+        Framework whose active composite state is restored in place.
+    row : iterable of float or row-vector-like
+        Dependent values from a table row.
+    column_labels : sequence of str
+        Labels corresponding to the values in ``row``.
+    time : float
+        Independent value to restore as the OpenSim state time, in seconds.
+
+    Returns
+    -------
+    opensim.State
+        The restored state, identical to ``framework.state`` and retaining its
+        originating composite model.
+
+    Raises
+    ------
+    TypeError
+        If ``framework`` or ``row`` has an unsupported type.
+    ValueError
+        If labels do not match the model state variables, the row contains
+        invalid values, or ``time`` is not finite.
+    """
+    if not isinstance(framework, Framework):
+        raise TypeError("framework must be an opensim_frameworks.Framework")
+    if isinstance(time, bool):
+        raise ValueError("time must be a finite number")
+    try:
+        time_value = float(time)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError("time must be a finite number") from error
+    if not isfinite(time_value):
+        raise ValueError("time must be a finite number")
+    if isinstance(column_labels, (str, bytes)):
+        raise TypeError("column_labels must be a sequence of state-variable names")
+    labels = tuple(column_labels)
+    if any(not isinstance(label, str) for label in labels):
+        raise TypeError("column_labels must contain only strings")
+    if len(set(labels)) != len(labels):
+        raise ValueError("column_labels must be unique")
+
+    if isinstance(row, _RowVectorLike):
+        row_values = [float(row[index]) for index in range(row.size())]
+    else:
+        if isinstance(row, (str, bytes)):
+            raise TypeError("row must contain numeric values")
+        try:
+            row_values = [float(value) for value in row]
+        except (TypeError, ValueError, OverflowError) as error:
+            raise ValueError("row must contain numeric values") from error
+    if len(row_values) != len(labels):
+        raise ValueError("row length must match the number of column labels")
+    if any(not isfinite(value) for value in row_values):
+        raise ValueError("row values must all be finite")
+
+    model = framework.composite
+    state = framework.state
+    state_names = model.getStateVariableNames()
+    expected_labels = tuple(
+        state_names.get(index) for index in range(state_names.getSize())
+    )
+    if len(labels) != len(expected_labels) or set(labels) != set(expected_labels):
+        raise ValueError(
+            "column_labels must match the composite model's continuous "
+            "state-variable names"
+        )
+
+    values_by_name = dict(zip(labels, row_values))
+    values = opensim.Vector(len(expected_labels), 0.0)
+    for index, label in enumerate(expected_labels):
+        values.set(index, values_by_name[label])
+    model.setStateVariableValues(state, values)
+    state.setTime(time_value)
+    model.realizePosition(state)
+    model.realizeVelocity(state)
+    return state

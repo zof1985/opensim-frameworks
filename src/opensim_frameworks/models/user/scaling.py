@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import math
 from dataclasses import replace
+from pathlib import Path
 
+from .data import resolve_reference
 from .mapping import segment_scale_factors
 
 __all__ = []
@@ -96,12 +98,14 @@ class _AnthropometricScalingMixin:
             raise ValueError(f"{name} must be a positive finite value")
         return float(value)
 
-    def _apply_reference_scale(self, reference) -> None:
+    def _apply_reference_scale(self, reference, baseline=None) -> None:
         current_factors = self._expand_bilateral_bodies(
             segment_scale_factors(self._reference, self._baseline)
         )
         target_factors = self._expand_bilateral_bodies(
-            segment_scale_factors(reference, self._baseline)
+            segment_scale_factors(
+                reference, self._baseline if baseline is None else baseline
+            )
         )
         incremental_factors: dict[str, tuple[float, float, float]] = {}
         for body_name, target in target_factors.items():
@@ -148,6 +152,43 @@ class _AnthropometricScalingMixin:
         updated_reference = replace(self._reference, values=updated_values)
         self._apply_reference_scale(updated_reference)
         self._reference = updated_reference
+
+    def _set_reference_inputs(
+        self,
+        *,
+        gender=None,
+        height_cm=None,
+        percentile=None,
+        dataset=None,
+        update_gender: bool = False,
+        update_height: bool = False,
+        update_percentile: bool = False,
+        update_dataset: bool = False,
+    ) -> None:
+        target_gender = self.gender if not update_gender else gender
+        target_height = (
+            self._requested_height_cm if not update_height else height_cm
+        )
+        target_percentile = (
+            self._requested_percentile if not update_percentile else percentile
+        )
+        target_dataset = self.dataset if not update_dataset else Path(dataset)
+        reference = resolve_reference(
+            target_gender,
+            target_height,
+            target_percentile,
+            target_dataset,
+        )
+        baseline = resolve_reference(
+            target_gender, percentile=50.0, dataset=target_dataset
+        )
+        self._apply_reference_scale(reference, baseline)
+        self._reference = reference
+        self._baseline = baseline
+        self._requested_gender = reference.gender
+        self._requested_height_cm = target_height
+        self._requested_percentile = target_percentile
+        self._dataset = Path(target_dataset).expanduser().resolve()
 
     def _set_side_measurement(
         self,
@@ -236,6 +277,14 @@ class _AnthropometricScalingMixin:
         """
         return self._reference.gender
 
+    @gender.setter
+    def gender(self, value) -> None:
+        self.set_gender(value)
+
+    def set_gender(self, value) -> None:
+        """Resolve and apply anthropometry for a different ANSUR gender."""
+        self._set_reference_inputs(gender=value, update_gender=True)
+
     @property
     def height_cm(self):
         """Return this user's resolved stature, in centimetres.
@@ -251,6 +300,14 @@ class _AnthropometricScalingMixin:
             Stature, in centimetres.
         """
         return self._reference.height_cm
+
+    @height_cm.setter
+    def height_cm(self, value) -> None:
+        self.set_height_cm(value)
+
+    def set_height_cm(self, value) -> None:
+        """Set stature in centimetres and rescale the model to that reference."""
+        self._set_reference_inputs(height_cm=value, update_height=True)
 
     @property
     def percentile(self):
@@ -272,6 +329,14 @@ class _AnthropometricScalingMixin:
         """
         return self._reference.percentile
 
+    @percentile.setter
+    def percentile(self, value) -> None:
+        self.set_percentile(value)
+
+    def set_percentile(self, value) -> None:
+        """Set the ANSUR percentile and rescale the model when applicable."""
+        self._set_reference_inputs(percentile=value, update_percentile=True)
+
     @property
     def mass_kg(self):
         """Return this user's resolved and calibrated total body mass, in kilograms.
@@ -291,6 +356,10 @@ class _AnthropometricScalingMixin:
             Total body mass, in kilograms.
         """
         return self._mass_kg
+
+    @mass_kg.setter
+    def mass_kg(self, value: float) -> None:
+        self.set_mass_kg(value)
 
     def set_mass_kg(self, mass_kg: float) -> None:
         """Recalibrate this user's total body mass to ``mass_kg``, in kilograms.
@@ -318,6 +387,19 @@ class _AnthropometricScalingMixin:
         _validate_mass_kg(mass_kg)
         self._rescale_total_mass(mass_kg)
         self._mass_kg = mass_kg
+
+    @property
+    def dataset(self) -> Path:
+        """Return the ANSUR dataset path used by this user."""
+        return self._dataset
+
+    @dataset.setter
+    def dataset(self, value: str | Path) -> None:
+        self.set_dataset(value)
+
+    def set_dataset(self, value: str | Path) -> None:
+        """Apply a different ANSUR dataset and recompute model scaling."""
+        self._set_reference_inputs(dataset=value, update_dataset=True)
 
     @property
     def anthropometry(self):

@@ -6,7 +6,7 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-from .....bodies import (
+from ....bodies import (
     Box,
     Cylinder,
     Ellipsoid,
@@ -14,9 +14,10 @@ from .....bodies import (
     add_welded_body,
     cylinder_between,
 )
-from ...equipment import Equipment, Screen
-from .....utils.constants import IRON_DENSITY_KG_M3, MM_TO_M
-from .....utils.opensim import import_opensim
+from ..equipment import Equipment
+from ..screen import Screen
+from ....utils.constants import IRON_DENSITY_KG_M3, MM_TO_M
+from ....utils.opensim import import_opensim
 
 __all__ = ["Bike", "IRON_DENSITY_KG_M3"]
 
@@ -822,24 +823,145 @@ class Bike(Equipment):
 
     @property
     def screen(self) -> Screen:
-        """Return the screen dimensions, mounting offsets, and current pose.
+        """Return the screen body attached to the bike.
 
         Returns
         -------
         Screen
-            Screen descriptor. Its anchor is the selected handlebar centre,
-            and its world-frame lower-centre position is computed from the
-            configured offsets.
+            Screen body containing its generated mesh.
         """
-        return Screen(
-            width_mm=self._screen_width_mm,
-            height_mm=self._screen_height_mm,
-            inclination_deg=self._screen_inclination_deg,
-            position_anchor_m=tuple(map(float, self._handlebar_position_m)),
-            horizontal_offset_mm=self._screen_horizontal_offset_mm,
-            vertical_offset_mm=self._screen_vertical_offset_mm,
-            horizontal_offset_min_mm=self._screen_horizontal_offset_min_mm,
-            vertical_offset_min_mm=self._screen_vertical_offset_min_mm,
+        return self._screen
+
+    @property
+    def screen_horizontal_offset_mm(self) -> float:
+        """Return the screen's horizontal offset from the handlebar centre."""
+        return self._screen_horizontal_offset_mm
+
+    @property
+    def screen_vertical_offset_mm(self) -> float:
+        """Return the screen's vertical offset from the handlebar centre."""
+        return self._screen_vertical_offset_mm
+
+    @property
+    def screen_inclination_deg(self) -> float:
+        """Return the screen's upward inclination from the forward axis."""
+        return self._screen_inclination_deg
+
+    @property
+    def screen_position(self) -> tuple[float, float, float]:
+        """Return the current screen offsets and inclination."""
+        return (
+            self._screen_horizontal_offset_mm,
+            self._screen_vertical_offset_mm,
+            self._screen_inclination_deg,
+        )
+
+    def screen_panel_corners(
+        self,
+        position: tuple[float, float, float] | None = None,
+    ) -> np.ndarray:
+        """Return screen panel corners in Ground for the current or candidate pose.
+
+        Parameters
+        ----------
+        position : tuple of float or None, optional
+            Candidate ``(horizontal_offset_mm, vertical_offset_mm,
+            inclination_deg)``. ``None`` uses the bike's current settings.
+
+        Returns
+        -------
+        numpy.ndarray, shape (4, 3)
+            Screen panel corners in Ground coordinates, in metres.
+        """
+        horizontal, vertical, inclination = (
+            (
+                self._screen_horizontal_offset_mm,
+                self._screen_vertical_offset_mm,
+                self._screen_inclination_deg,
+            )
+            if position is None
+            else tuple(
+                _finite(name, value)
+                for name, value in zip(
+                    (
+                        "screen_horizontal_offset_mm",
+                        "screen_vertical_offset_mm",
+                        "screen_inclination_deg",
+                    ),
+                    position,
+                    strict=True,
+                )
+            )
+        )
+        angle = math.radians(inclination)
+        up = np.array([math.cos(angle), math.sin(angle), 0.0])
+        lateral = np.array([0.0, 0.0, 1.0])
+        base = self._handlebar_position_m + MM_TO_M * np.array(
+            [horizontal, vertical, 0.0]
+        )
+        return np.asarray(
+            [
+                base
+                + rise * self.screen.height * up
+                + side * self.screen.width / 2 * lateral
+                for rise in (0.0, 1.0)
+                for side in (-1.0, 1.0)
+            ]
+        )
+
+    def screen_panel_samples(
+        self,
+        grid_size: int,
+        position: tuple[float, float, float] | None = None,
+    ) -> np.ndarray:
+        """Sample the current or candidate bike screen panel in Ground.
+
+        Parameters
+        ----------
+        grid_size : int
+            Number of evenly spaced cell centres along each panel dimension.
+        position : tuple of float or None, optional
+            Candidate ``(horizontal_offset_mm, vertical_offset_mm,
+            inclination_deg)``. ``None`` uses the bike's current settings.
+
+        Returns
+        -------
+        numpy.ndarray, shape (grid_size**2, 3)
+            Screen panel sample points in Ground coordinates.
+        """
+        if (
+            not isinstance(grid_size, int)
+            or isinstance(grid_size, bool)
+            or grid_size < 1
+        ):
+            raise ValueError("grid_size must be a positive integer")
+        corners = self.screen_panel_corners(position)
+        lower = (corners[0] + corners[1]) / 2
+        upper = (corners[2] + corners[3]) / 2
+        width_vector = corners[1] - corners[0]
+        values = (np.arange(grid_size) + 0.5) / grid_size
+        return np.asarray(
+            [
+                lower * (1.0 - rise)
+                + upper * rise
+                + width_vector * (2.0 * across - 1.0) / 2.0
+                for rise in values
+                for across in values
+            ]
+        )
+
+    @property
+    def screen_offset_minima(self) -> tuple[float, float]:
+        """Return the bike's lower bounds for screen mounting offsets.
+
+        Returns
+        -------
+        tuple of float
+            Minimum horizontal and vertical offsets in millimetres.
+        """
+        return (
+            self._screen_horizontal_offset_min_mm,
+            self._screen_vertical_offset_min_mm,
         )
 
     def set_screen_position(
@@ -915,7 +1037,7 @@ class Bike(Equipment):
             handlebar centre, in metres. Non-negative values satisfy the
             placement constraints.
         """
-        corners = self.screen.corners(position)
+        corners = self.screen_panel_corners(position)
         handlebar = self._handlebar_position_m
         return np.concatenate(
             (corners[:, 0] - handlebar[0], corners[:, 1] - handlebar[1])
@@ -1192,7 +1314,7 @@ class Bike(Equipment):
         self.finalizeFromProperties()
 
     def _build(self) -> None:
-        if hasattr(self, "state"):
+        if hasattr(self, "_component_masses"):
             self._clear_model()
         else:
             opensim.Model.__init__(self)
@@ -1365,24 +1487,36 @@ class Bike(Equipment):
             parent=self.getBodySet().get("handlebar"),
         )
         screen_mount = self.getBodySet().get("screen_mount")
-        self._add_static(
-            "handlebar",
-            "screen",
-            [
-                Box(
-                    center=(0.0, self._screen_height_mm * MM_TO_M / 2, 0.0),
-                    size=(
-                        _SCREEN_THICKNESS_MM * MM_TO_M,
-                        self._screen_height_mm * MM_TO_M,
-                        self._screen_width_mm * MM_TO_M,
-                    ),
-                    color=_SCREEN_COLOR,
-                )
-            ],
-            location=self._screen_base_m - self._handlebar_position_m,
-            orientation=(0.0, 0.0, panel_rotation),
-            parent=screen_mount,
+        # TODO: Screen-to-bike fitting is incorrect and must be revisited.
+        screen = Screen(
+            self._screen_width_mm * MM_TO_M,
+            self._screen_height_mm * MM_TO_M,
+            _SCREEN_THICKNESS_MM * MM_TO_M,
+            (
+                self._screen_width_mm
+                * self._screen_height_mm
+                * _SCREEN_THICKNESS_MM
+                * MM_TO_M**3
+                * self._densities["handlebar"]
+            ),
+            name="screen",
+            color=_SCREEN_COLOR,
         )
+        object.__setattr__(self, "_screen", screen)
+        self.addBody(screen)
+        screen_location = self._screen_center_m - self._handlebar_position_m
+        self.addJoint(
+            opensim.WeldJoint(
+                "screen_weld",
+                screen_mount,
+                opensim.Vec3(*map(float, screen_location)),
+                opensim.Vec3(0.0, 0.0, panel_rotation),
+                screen,
+                opensim.Vec3(0.0, 0.0, 0.0),
+                opensim.Vec3(0.0, 0.0, 0.0),
+            )
+        )
+        self._component_masses["handlebar"] += screen.getMass()
 
         self._build_drivetrain(axis)
         self._add_brake()
@@ -1392,6 +1526,8 @@ class Bike(Equipment):
     def reset_state(self) -> None:
         """Re-initialize the system and restore the stored crank and pedal angles."""
         self.state = self.initSystem()
+        if hasattr(self, "_screen"):
+            self._screen._set_ground_state(self.state)
         for name, value in self._angles_deg.items():
             self.getCoordinateSet().get(name).setValue(self.state, math.radians(value))
         self.realizePosition(self.state)
@@ -1412,7 +1548,7 @@ class Bike(Equipment):
         returned framework contains ``user`` and ``bike`` with both feet welded
         to their pedals. If ``user`` is omitted, the 170 cm, 70 kg male
         reference user is fitted. See
-        :func:`opensim_frameworks.models.equipment.bikes.bike.fitting.fit_user` for the full
+        :func:`opensim_frameworks.models.equipment.bike.fitting.fit_user` for the full
         procedure.
 
         Parameters

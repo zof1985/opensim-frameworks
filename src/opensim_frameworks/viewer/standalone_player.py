@@ -6,7 +6,6 @@ import bisect
 import json
 import math
 import struct
-import shutil
 import sys
 import time
 import tkinter as tk
@@ -42,6 +41,8 @@ if __package__:
 else:
     from svg import write_svg
     import win32_embed as _win32_embed
+
+__all__ = ["Player"]
 
 _VIEW_DIRECTIONS = {
     "front": ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0)),
@@ -316,7 +317,6 @@ class Player:
         export_buttons = [
             (export, "📷", self._save_image, "Save the current view as PNG or SVG"),
             (export, "🎬", self._save_animation, "Export the motion as an MP4 video"),
-            (export, "📊", self._save_tables, "Export the precomputed marker and joint tables"),
         ]
         for index, (parent, text, callback, tip) in enumerate(export_buttons):
             button = ttk.Button(parent, text=text, width=3, command=callback)
@@ -755,26 +755,6 @@ class Player:
                 self._apply_frame(self._frame_at_time(original_time))
                 self.playing = was_playing
                 self.root.config(cursor="")
-
-    def _save_tables(self) -> None:
-        directory = filedialog.askdirectory(
-            parent=self.root, title="Export marker and joint tables (.xlsx)"
-        )
-        if not directory:
-            return
-        targets = [Path(directory) / name for name in self.manifest["tables"]]
-        existing = [target.name for target in targets if target.exists()]
-        if existing and not messagebox.askyesno(
-            "Overwrite files",
-            "These files already exist and will be replaced:\n" + "\n".join(existing),
-            parent=self.root,
-        ):
-            return
-        try:
-            for name, target in zip(self.manifest["tables"], targets, strict=True):
-                shutil.copy2(_asset_path(f"tables/{name}"), target)
-        except Exception as error:
-            messagebox.showerror("Export failed", str(error), parent=self.root)
 
     def close(self) -> None:
         self.window.Finalize()

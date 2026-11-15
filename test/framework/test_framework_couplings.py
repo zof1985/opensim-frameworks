@@ -7,11 +7,11 @@ import pytest
 
 opensim = pytest.importorskip("opensim")
 
-from opensim_frameworks import Framework
+from opensim_frameworks import Framework, FrameworkModel
 
 
 def make_pendulum(prefix: str, parent_offset=(0.0, 0.0, 0.0)) -> opensim.Model:
-    model = opensim.Model()
+    model = FrameworkModel()
     model.setName(prefix)
     body = opensim.Body(f"{prefix}_body", 1.0, opensim.Vec3(0), opensim.Inertia(1))
     model.addBody(body)

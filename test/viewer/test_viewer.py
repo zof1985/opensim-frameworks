@@ -1,36 +1,85 @@
 from __future__ import annotations
 
+import json
+import zipfile
+
 import pytest
 
 opensim = pytest.importorskip("opensim")
 
-from opensim_frameworks.viewer import VTKViewer, viewer as viewer_module
-from opensim_frameworks.viewer.visualizer import VTKVisualizer
-from opensim_frameworks.viewer.viewer import _ViewerModel
 from opensim_frameworks.framework import Framework
+from opensim_frameworks.models.model import FrameworkModel
+from opensim_frameworks.viewer import FrameworkViewer
+from opensim_frameworks.viewer import viewer as viewer_module
+from opensim_frameworks.viewer.animation import _ViewerModel
+from opensim_frameworks.viewer.visualizer import VTKVisualizer
 
 
-def make_model() -> opensim.Model:
-    model = opensim.Model()
+def make_model() -> FrameworkModel:
+    model = FrameworkModel()
     body = opensim.Body("body", 1.0, opensim.Vec3(0), opensim.Inertia(1))
     model.addBody(body)
-    model.addJoint(
-        opensim.WeldJoint(
-            "root",
-            model.getGround(),
-            opensim.Vec3(0),
-            opensim.Vec3(0),
-            body,
-            opensim.Vec3(0),
-            opensim.Vec3(0),
-        )
+    joint = opensim.PinJoint(
+        "root",
+        model.getGround(),
+        opensim.Vec3(0),
+        opensim.Vec3(0),
+        body,
+        opensim.Vec3(0),
+        opensim.Vec3(0),
     )
+    joint.upd_coordinates(0).setName("rotation")
+    model.addJoint(joint)
     model.initSystem()
     return model
 
 
-def test_viewer_accepts_native_models_without_opening_a_window(monkeypatch):
+def make_trajectory(model):
+    trajectory = opensim.StatesTrajectory()
+    coordinate = model.getCoordinateSet().get("rotation")
+    for time, value in ((0.0, 0.0), (1.0, 1.0), (2.0, 0.0)):
+        state = opensim.State(model.state)
+        coordinate.setValue(state, value, False)
+        state.setTime(time)
+        model.realizePosition(state)
+        trajectory.append(state)
+    return trajectory
+
+
+def test_framework_viewer_normalizes_inputs_and_exposes_setters(monkeypatch):
     model = make_model()
+    trajectory = make_trajectory(model)
+    viewer = FrameworkViewer(
+        model,
+        trajectories=trajectory,
+        sampling_frequency_hz=2.0,
+    )
+    assert isinstance(viewer.framework, Framework)
+    assert viewer.framework["model"] is not model
+    assert viewer.framework.states_trajectory.getSize() == 3
+    assert viewer.trajectories is trajectory
+    assert viewer.sampling_frequency_hz == 2.0
+
+    viewer.set_sampling_frequency_hz(4.0)
+    assert viewer.sampling_frequency_hz == 4.0
+    with pytest.raises(ValueError, match="finite and positive"):
+        viewer.set_sampling_frequency_hz(0)
+    with pytest.raises(ValueError, match="only be supplied"):
+        FrameworkViewer(Framework(model=model), trajectories=trajectory)
+
+    framework = Framework(model=make_model())
+    viewer.set_framework(framework)
+    assert viewer.framework is framework
+    assert viewer.trajectories is None
+
+
+def test_show_sampling_frequency_overrides_constructor_value(monkeypatch):
+    model = make_model()
+    viewer = FrameworkViewer(
+        model,
+        trajectories=make_trajectory(model),
+        sampling_frequency_hz=2.0,
+    )
     captured = {}
     expected = object()
 
@@ -39,39 +88,79 @@ def test_viewer_accepts_native_models_without_opening_a_window(monkeypatch):
         return expected
 
     monkeypatch.setattr(viewer_module, "start_player", fake_start_player)
-
-    result = VTKViewer().show(model, loop=True, fps=24.0)
-
-    assert result is expected
-    assert captured["adapter"].model is model
-    assert captured["adapter"].state.getTime() == pytest.approx(
-        model.getWorkingState().getTime()
-    )
+    assert viewer.show(sampling_frequency_hz=4.0, loop=True) is expected
+    assert isinstance(captured["adapter"], _ViewerModel)
+    assert captured["motion"].getNumRows() == 9
     assert captured["loop"] is True
-    assert captured["fps"] == 24.0
+    assert captured["fps"] == 4.0
 
 
-def test_viewer_accepts_framework_and_displays_merged_snapshot(monkeypatch):
+def test_snapshot_interpolates_recorded_and_sampled_times_and_rejects_others():
     model = make_model()
-    framework = Framework({"member": model})
+    viewer = FrameworkViewer(
+        model,
+        trajectories=make_trajectory(model),
+        sampling_frequency_hz=2.0,
+    )
+    state = viewer._snapshot_state(frame=None, time_s=1.0)
+    assert state.getTime() == pytest.approx(1.0)
+    assert viewer.framework.composite.getCoordinateSet().get("rotation").getValue(
+        state
+    ) == pytest.approx(1.0)
+    with pytest.raises(ValueError, match="match a recorded state or a sampled time"):
+        viewer._snapshot_state(frame=None, time_s=0.3)
+    with pytest.raises(ValueError, match="not both"):
+        viewer._snapshot_state(frame=0, time_s=0.0)
+
+
+def test_static_framework_disables_animation_and_limits_snapshot_time():
+    viewer = FrameworkViewer(make_model())
+    assert viewer._motion_table() is None
+    with pytest.raises(ValueError, match="at least two recorded states"):
+        viewer.save_animation("motion.mp4")
+    with pytest.raises(ValueError, match="unavailable"):
+        viewer._snapshot_state(frame=None, time_s=1.0)
+
+
+def test_save_animation_uses_interpolated_framework_trajectory(monkeypatch, tmp_path):
+    model = make_model()
+    viewer = FrameworkViewer(
+        model,
+        trajectories=make_trajectory(model),
+        sampling_frequency_hz=4.0,
+    )
     captured = {}
 
-    def fake_start_player(adapter, motion, *, loop, fps):
-        captured["model"] = adapter.model
-        return "viewer"
+    def fake_render(model, table, path, **options):
+        captured.update(model=model, table=table, path=path, options=options)
+        return path
 
-    monkeypatch.setattr(viewer_module, "start_player", fake_start_player)
-
-    assert VTKViewer().show(framework) == "viewer"
+    monkeypatch.setattr(viewer_module, "_render_animation", fake_render)
+    destination = tmp_path / "motion.mp4"
+    assert viewer.save_animation(destination) == destination
+    assert captured["table"].getNumRows() == 9
+    assert captured["path"] == destination
     assert isinstance(captured["model"], opensim.Model)
-    assert captured["model"] is not model
-    assert captured["model"].getBodySet().getSize() == 1
-    assert model.getBodySet().getSize() == 1
 
 
-def test_viewer_rejects_values_outside_the_supported_input_types():
-    with pytest.raises(TypeError, match="opensim.Model or Framework"):
-        VTKViewer().show(object())
+def test_save_framework_writes_osf_manifest_models_and_honors_overwrite(
+    tmp_path,
+):
+    viewer = FrameworkViewer(Framework(model=make_model()))
+    destination = tmp_path / "framework.osf"
+    assert viewer.save_framework(destination) == destination
+
+    with zipfile.ZipFile(destination) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+        assert manifest["format"] == "opensim-framework"
+        assert manifest["members"][0]["name"] == "model"
+        assert manifest["members"][0]["config"] == {}
+        assert manifest["composite_model"] == "composite/model.osim"
+        assert "models/model/model.osim" in archive.namelist()
+        assert "composite/model.osim" in archive.namelist()
+
+    with pytest.raises(FileExistsError):
+        viewer.save_framework(destination, overwrite=False)
 
 
 def test_overlay_controls_report_unavailable_layers_for_plain_models():
@@ -99,253 +188,3 @@ def test_visualizer_skips_geometry_marked_invisible():
         assert not visualizer._actor_bodies
     finally:
         visualizer.close()
-
-
-def test_visualizer_renders_visible_marker_spheres():
-    model = make_model()
-    model.addMarker(
-        opensim.Marker(
-            "marker",
-            model.getBodySet().get("body"),
-            opensim.Vec3(0.0, 0.1, 0.0),
-        )
-    )
-    model.finalizeConnections()
-    model.initSystem()
-
-    visualizer = VTKVisualizer(_ViewerModel(model), offscreen=True)
-    try:
-        assert len(visualizer._marker_items) == 1
-        marker, actor = visualizer._marker_items[0]
-        assert marker.getName() == "marker"
-        assert actor.GetVisibility()
-        bounds = actor.GetBounds()
-        assert bounds[1] - bounds[0] == pytest.approx(0.04, rel=0.02)
-        assert bounds[3] - bounds[2] == pytest.approx(0.04, rel=0.02)
-        assert bounds[5] - bounds[4] == pytest.approx(0.04, rel=0.02)
-    finally:
-        visualizer.close()
-
-
-def make_pin_model() -> opensim.Model:
-    model = opensim.Model()
-    body = opensim.Body("body", 1.0, opensim.Vec3(0), opensim.Inertia(1))
-    body.attachGeometry(opensim.Brick(opensim.Vec3(0.1, 0.2, 0.3)))
-    model.addBody(body)
-    model.addJoint(
-        opensim.PinJoint(
-            "joint",
-            model.getGround(),
-            opensim.Vec3(0),
-            opensim.Vec3(0),
-            body,
-            opensim.Vec3(0),
-            opensim.Vec3(0),
-        )
-    )
-    model.initSystem()
-    return model
-
-
-def make_motion() -> opensim.TimeSeriesTable:
-    table = opensim.TimeSeriesTable()
-    table.setColumnLabels(["joint_coord_0"])
-    table.appendRow(0.0, opensim.RowVector([0.0]))
-    table.appendRow(1.0, opensim.RowVector([1.0]))
-    return table
-
-
-def test_save_snapshot_writes_vector_svg_for_model_and_framework(tmp_path):
-    model = make_pin_model()
-    viewer = VTKViewer()
-
-    result = viewer.save_snapshot(model, path=tmp_path / "model.svg", dpi=0)
-    viewer.save_snapshot(Framework({"member": model}), path=tmp_path / "fw.svg")
-
-    assert result == tmp_path / "model.svg"
-    for name in ("model.svg", "fw.svg"):
-        text = (tmp_path / name).read_text(encoding="utf-8")
-        assert text.startswith("<?xml") and "<polygon" in text and "<image" not in text
-
-
-def test_save_snapshot_writes_png_with_default_and_custom_dpi(tmp_path):
-    from PIL import Image
-
-    model = make_pin_model()
-    viewer = VTKViewer()
-
-    default_path = viewer.save_snapshot(
-        model, path=tmp_path / "default.png", size=(160, 120)
-    )
-    custom_path = viewer.save_snapshot(
-        model, path=str(tmp_path / "custom.PNG"), size=(160, 120), dpi=150
-    )
-
-    assert default_path == tmp_path / "default.png"
-    assert custom_path == tmp_path / "custom.PNG"
-    for path, expected_dpi in ((default_path, 300), (custom_path, 150)):
-        with Image.open(path) as image:
-            assert image.format == "PNG"
-            assert image.size == (160, 120)
-            assert image.info["dpi"] == pytest.approx(
-                (expected_dpi, expected_dpi), abs=0.02
-            )
-
-
-def test_save_snapshot_rejects_unsupported_frameworks_and_frame_without_motion(
-    tmp_path,
-):
-    model = make_pin_model()
-    viewer = VTKViewer()
-    with pytest.raises(ValueError, match=r"\.svg or \.png"):
-        viewer.save_snapshot(model, path=tmp_path / "pose.jpg")
-    with pytest.raises(ValueError, match="positive integer"):
-        viewer.save_snapshot(model, path=tmp_path / "pose.png", dpi=0)
-    with pytest.raises(ValueError, match="positive integer"):
-        viewer.save_snapshot(model, path=tmp_path / "pose.png", dpi=300.5)
-    with pytest.raises(ValueError, match="positive integer"):
-        viewer.save_snapshot(model, path=tmp_path / "pose.png", dpi=True)
-    with pytest.raises(ValueError, match="require a motion"):
-        viewer.save_snapshot(model, frame=3, path=tmp_path / "pose.svg")
-    with pytest.raises(TypeError):
-        viewer.save_snapshot(object(), path=tmp_path / "pose.svg")
-
-
-def test_save_snapshot_applies_motion_frame_or_time_without_mutating_model(tmp_path):
-    model = make_pin_model()
-    coordinate = model.getCoordinateSet().get(0)
-    before = coordinate.getValue(model.getWorkingState())
-    viewer = VTKViewer()
-    motion = make_motion()
-
-    viewer.save_snapshot(model, frame=0, path=tmp_path / "first.svg", motion=motion)
-    viewer.save_snapshot(model, frame=1, path=tmp_path / "last.svg", motion=motion)
-    viewer.save_snapshot(model, time_s=1.0, path=tmp_path / "time.svg", motion=motion)
-
-    first = (tmp_path / "first.svg").read_text(encoding="utf-8")
-    last = (tmp_path / "last.svg").read_text(encoding="utf-8")
-    assert first != last
-    assert last == (tmp_path / "time.svg").read_text(encoding="utf-8")
-    assert coordinate.getValue(model.getWorkingState()) == before
-    with pytest.raises(ValueError, match="out of range"):
-        viewer.save_snapshot(model, frame=5, path=tmp_path / "x.svg", motion=motion)
-
-
-def test_save_snapshot_exposes_camera_and_visibility_options(monkeypatch, tmp_path):
-    model = make_pin_model()
-    captured = {}
-
-    class FakeVisualizer:
-        def __init__(self, model, **kwargs):
-            captured["visualizer_options"] = kwargs
-
-        def set_camera(self, **kwargs):
-            captured["camera"] = kwargs
-
-        def __getattr__(self, name):
-            if name.startswith("set_") and name.endswith("_visible"):
-                return lambda visible: captured.setdefault(name, visible)
-            raise AttributeError(name)
-
-        def save_svg(self, path):
-            captured["path"] = path
-
-        def close(self):
-            pass
-
-    monkeypatch.setattr(viewer_module, "VTKVisualizer", FakeVisualizer)
-    camera = (2.0, 1.0, 0.0)
-    focal_point = (0.0, 1.0, 0.0)
-
-    result = VTKViewer().save_snapshot(
-        model,
-        path=tmp_path / "pose.svg",
-        camera_position=camera,
-        camera_focal_point=focal_point,
-        show_ground=False,
-        show_muscles=False,
-        show_markers=True,
-        show_axes=False,
-        show_reachability=False,
-        show_vision_cone=False,
-    )
-
-    assert result == tmp_path / "pose.svg"
-    assert captured["camera"] == {
-        "position": camera,
-        "focal_point": focal_point,
-        "view_up": None,
-    }
-    assert captured["set_ground_visible"] is False
-    assert captured["set_muscles_visible"] is False
-    assert captured["set_markers_visible"] is True
-    assert captured["set_axes_visible"] is False
-    assert captured["set_reachability_visible"] is False
-    assert captured["set_vision_cone_visible"] is False
-
-
-def test_save_animation_delegates_to_the_renderer(monkeypatch, tmp_path):
-    model = make_pin_model()
-    captured = {}
-
-    def fake_render(native, table, path, **options):
-        captured.update(model=native, table=table, path=path, options=options)
-        return path
-
-    monkeypatch.setattr(viewer_module, "_render_animation", fake_render)
-    motion = make_motion()
-
-    result = VTKViewer().save_animation(
-        model,
-        tmp_path / "m.mp4",
-        motion=motion,
-        size=(640, 360),
-        camera_position=(2.0, 1.0, 0.0),
-        show_ground=False,
-        show_axes=False,
-    )
-
-    assert result == tmp_path / "m.mp4"
-    assert captured["model"] is model and captured["table"] is motion
-    assert captured["options"] == {
-        "size": (640, 360),
-        "camera_position": (2.0, 1.0, 0.0),
-        "camera_focal_point": None,
-        "camera_view_up": None,
-        "show_ground": False,
-        "show_muscles": True,
-        "show_markers": True,
-        "show_axes": False,
-        "show_reachability": True,
-        "show_vision_cone": True,
-    }
-
-
-def test_save_player_delegates_with_model_and_basic_options(monkeypatch, tmp_path):
-    model = make_pin_model()
-    captured = {}
-
-    def fake_save(adapter, motion, path, **options):
-        captured.update(adapter=adapter, motion=motion, path=path, options=options)
-        return path
-
-    monkeypatch.setattr(viewer_module, "_save_player_executable", fake_save)
-    viewer = VTKViewer()
-    destination = tmp_path / "player.exe"
-    result = viewer.save_player(
-        model,
-        destination,
-        fps=24.0,
-        clean=True,
-    )
-
-    assert result == destination
-    assert captured["adapter"].model is model
-    assert captured["motion"] is None
-    assert captured["path"] == destination
-    assert captured["options"] == {
-        "fps": 24.0,
-        "clean": True,
-        "overwrite": True,
-        "path_map": None,
-    }

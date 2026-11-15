@@ -9,7 +9,6 @@ left to the caller, since it depends on the equipment. It is exposed on
 from __future__ import annotations
 
 import math
-from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
@@ -17,8 +16,8 @@ from scipy.spatial import cKDTree
 
 from ...utils.collision import collision_detector, mesh_matrix, mesh_polydata
 from ...utils.constants import MESHES_DIR
-from ...utils.opensim import read_vtp_vertices, rotation_to_numpy, vec3_to_numpy
-from .fingers import _resolve_body_mesh_path
+from ...utils.geometry import get_mesh_vertices_in_ground
+from ...utils.opensim import rotation_to_numpy, vec3_to_numpy
 
 __all__ = []
 
@@ -59,34 +58,13 @@ class _GraspMixin:
         FileNotFoundError
             If a mesh cannot be found in the geometry directories.
         """
-        self.realizePosition(self.state)
-        body = self.getBodySet().get(body_name)
-        arrays = []
-        for index in range(body.getPropertyByName("attached_geometry").size()):
-            mesh = self.opensim.Mesh.safeDownCast(body.get_attached_geometry(index))
-            if mesh is None:
-                continue
-            path = _resolve_body_mesh_path(
-                Path(mesh.get_mesh_file()), self.geometry_directories, "Hand"
-            )
-            scale = np.array([mesh.get_scale_factors().get(i) for i in range(3)])
-            vertices = read_vtp_vertices(path)
-            if (
-                vertices.ndim != 2
-                or vertices.shape[1] != 3
-                or not np.all(np.isfinite(vertices))
-                or not np.all(np.isfinite(scale))
-                or np.any(scale <= 0)
-            ):
-                raise ValueError(f"Invalid mesh geometry for body {body_name!r}")
-            frame = mesh.getFrame().getTransformInGround(self.state)
-            arrays.append(
-                (vertices * scale) @ rotation_to_numpy(frame.R()).T
-                + vec3_to_numpy(frame.p())
-            )
-        if not arrays:
-            raise ValueError(f"No mesh is attached to body {body_name!r}")
-        return np.vstack(arrays)
+        return get_mesh_vertices_in_ground(
+            self,
+            self.state,
+            body_name,
+            self.geometry_directories,
+            owner_label="Hand",
+        )
 
     def grasp_handle(
         self,

@@ -5,216 +5,25 @@ from __future__ import annotations
 import copy
 import math
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Self
 
 import numpy as np
 
-from ...utils.constants import MM_TO_M
 from ...utils.opensim import import_opensim
+from ..model import FrameworkModel
+from .screen import Screen
 
 opensim = import_opensim()
 
-__all__ = ["Equipment", "Screen"]
+__all__ = ["Equipment"]
 
 
-@dataclass(frozen=True)
-class Screen:
-    """Screen dimensions, mounting offsets, and world-frame pose.
-
-    The screen is modelled in the package world convention: ``x`` is forward,
-    ``y`` is up, and ``z`` is lateral. The lower-centre mounting point is
-    calculated from ``position_anchor_m`` and the two offsets.
-
-    Parameters
-    ----------
-    width_mm : float
-        Screen width across the lateral axis, in millimetres.
-    height_mm : float
-        Screen height along the panel, in millimetres.
-    inclination_deg : float
-        Directed angle of the panel's upward direction from ``+x`` toward
-        ``+y``, in degrees.
-    position_anchor_m : sequence of float
-        World-frame reference point for the screen offsets, in metres.
-    horizontal_offset_mm : float
-        Forward offset of the lower-centre mounting point from the reference,
-        in millimetres.
-    vertical_offset_mm : float
-        Upward offset of the lower-centre mounting point from the reference,
-        in millimetres.
-    horizontal_offset_min_mm, vertical_offset_min_mm : float or None
-        Inclusive lower limits on the corresponding offsets. ``None`` means
-        the screen implementation does not impose a separate lower limit.
-    """
-
-    width_mm: float
-    height_mm: float
-    inclination_deg: float
-    position_anchor_m: tuple[float, float, float]
-    horizontal_offset_mm: float
-    vertical_offset_mm: float
-    horizontal_offset_min_mm: float | None = None
-    vertical_offset_min_mm: float | None = None
-
-    def __post_init__(self) -> None:
-        for name in ("width_mm", "height_mm"):
-            value = float(getattr(self, name))
-            if not math.isfinite(value) or value <= 0:
-                raise ValueError(f"{name} must be a positive finite value")
-            object.__setattr__(self, name, value)
-        for name in (
-            "inclination_deg",
-            "horizontal_offset_mm",
-            "vertical_offset_mm",
-        ):
-            value = float(getattr(self, name))
-            if not math.isfinite(value):
-                raise ValueError(f"{name} must be finite")
-            object.__setattr__(self, name, value)
-
-        anchor = np.asarray(self.position_anchor_m, dtype=float)
-        if anchor.shape != (3,) or not np.all(np.isfinite(anchor)):
-            raise ValueError("position_anchor_m must contain three finite values")
-        object.__setattr__(self, "position_anchor_m", tuple(map(float, anchor)))
-        for name in ("horizontal_offset_min_mm", "vertical_offset_min_mm"):
-            minimum = getattr(self, name)
-            if minimum is None:
-                continue
-            minimum = float(minimum)
-            if not math.isfinite(minimum):
-                raise ValueError(f"{name} must be finite")
-            object.__setattr__(self, name, minimum)
-
-    @property
-    def base_position_m(self) -> np.ndarray:
-        """Return the lower-centre mounting point in world coordinates.
-
-        Returns
-        -------
-        numpy.ndarray, shape (3,)
-            Lower-centre screen position in metres.
-        """
-        return np.asarray(self.position_anchor_m) + MM_TO_M * np.array(
-            [self.horizontal_offset_mm, self.vertical_offset_mm, 0.0]
-        )
-
-    @property
-    def center_position_m(self) -> np.ndarray:
-        """Return the geometric centre of the panel in world coordinates.
-
-        Returns
-        -------
-        numpy.ndarray, shape (3,)
-            Screen-centre position in metres.
-        """
-        return self.base_position_m + (
-            self.height_mm * MM_TO_M / 2
-        ) * self._up_direction(self.inclination_deg)
-
-    @staticmethod
-    def _up_direction(inclination_deg: float) -> np.ndarray:
-        angle = math.radians(inclination_deg)
-        return np.array([math.cos(angle), math.sin(angle), 0.0])
-
-    def corners(self, position: tuple[float, float, float] | None = None) -> np.ndarray:
-        """Return the four panel corners for the current or candidate pose.
-
-        Parameters
-        ----------
-        position : tuple of float or None, optional
-            Candidate ``(horizontal_offset_mm, vertical_offset_mm,
-            inclination_deg)``. ``None`` uses the configured pose.
-
-        Returns
-        -------
-        numpy.ndarray, shape (4, 3)
-            Panel corners in metres in the world frame.
-        """
-        horizontal, vertical, inclination = (
-            (
-                self.horizontal_offset_mm,
-                self.vertical_offset_mm,
-                self.inclination_deg,
-            )
-            if position is None
-            else position
-        )
-        base = np.asarray(self.position_anchor_m) + MM_TO_M * np.array(
-            [horizontal, vertical, 0.0]
-        )
-        up = self._up_direction(inclination)
-        half_width = self.width_mm * MM_TO_M / 2
-        height = self.height_mm * MM_TO_M
-        return np.asarray(
-            [
-                base + side * np.array([0.0, 0.0, 1.0]) + rise * up
-                for rise in (0.0, height)
-                for side in (-half_width, half_width)
-            ]
-        )
-
-    def samples(
-        self,
-        grid_size: int,
-        position: tuple[float, float, float] | None = None,
-    ) -> np.ndarray:
-        """Sample a uniform rectangular grid over the current or candidate pose.
-
-        Parameters
-        ----------
-        grid_size : int
-            Number of evenly spaced cell centres along each panel dimension.
-        position : tuple of float or None, optional
-            Candidate ``(horizontal_offset_mm, vertical_offset_mm,
-            inclination_deg)``. ``None`` uses the configured pose.
-
-        Returns
-        -------
-        numpy.ndarray, shape (grid_size**2, 3)
-            Sample points in metres in the world frame.
-        """
-        if (
-            not isinstance(grid_size, int)
-            or isinstance(grid_size, bool)
-            or grid_size < 1
-        ):
-            raise ValueError("grid_size must be a positive integer")
-        horizontal, vertical, inclination = (
-            (
-                self.horizontal_offset_mm,
-                self.vertical_offset_mm,
-                self.inclination_deg,
-            )
-            if position is None
-            else position
-        )
-        base = np.asarray(self.position_anchor_m) + MM_TO_M * np.array(
-            [horizontal, vertical, 0.0]
-        )
-        up = self._up_direction(inclination)
-        values = (np.arange(grid_size) + 0.5) / grid_size
-        return np.asarray(
-            [
-                base
-                + self.height_mm * MM_TO_M * rise * up
-                + self.width_mm
-                * MM_TO_M
-                * (2 * side - 1)
-                / 2
-                * np.array([0.0, 0.0, 1.0])
-                for rise in values
-                for side in values
-            ]
-        )
-
-
-class Equipment(opensim.Model, ABC):
+class Equipment(FrameworkModel, ABC):
     """Base class for user-facing OpenSim equipment.
 
     Concrete equipment provides its own user-fitting procedure. If it has a
-    screen, :attr:`screen` returns the complete screen dimensions and pose;
+    screen, :attr:`screen` returns its OpenSim body;
     otherwise it returns ``None``. The default initializer loads a serialized
     ``.osim`` model from the subclass's ``_model_path`` asset directory,
     calling ``_build`` first when that file is missing. Subclasses that build
@@ -258,6 +67,23 @@ class Equipment(opensim.Model, ABC):
         self.state = self.initSystem()
         self.realizePosition(self.state)
 
+    def set_config(self, config: dict[str, Any]) -> None:
+        """Restore equipment-specific Python attributes after .osf loading.
+
+        Parameters
+        ----------
+        config : dict[str, Any]
+            Equipment configuration returned by :meth:`get_config`.
+        """
+        super().set_config(config)
+        model_file = self._osf_model_file
+        model_directory = model_file.parent
+        self.opensim = opensim
+        self._model_path = model_directory
+        self._mesh_path = model_directory / "Geometry"
+        self._model_file = model_file
+        self.geometry_directories = (self._mesh_path,)
+
     @property
     def model_path(self) -> Path | None:
         """Path to the assets directory."""
@@ -291,13 +117,12 @@ class Equipment(opensim.Model, ABC):
 
     @property
     def screen(self) -> Screen | None:
-        """Return this equipment's screen description, if present.
+        """Return this equipment's screen body, if present.
 
         Returns
         -------
         Screen or None
-            Current screen dimensions and world-frame pose, or ``None`` when
-            this equipment has no screen.
+            Screen body and mesh, or ``None`` when this equipment has no screen.
         """
         return None
 
@@ -307,9 +132,111 @@ class Equipment(opensim.Model, ABC):
         Returns
         -------
         bool
-            ``True`` when :attr:`screen` contains a screen description.
+            ``True`` when :attr:`screen` contains a screen body.
         """
         return self.screen is not None
+
+    def screen_panel_corners(
+        self,
+        position: tuple[float, float, float] | None = None,
+    ) -> np.ndarray:
+        """Return the screen's four panel corners in Ground.
+
+        Parameters
+        ----------
+        position : tuple of float or None, optional
+            Candidate equipment-specific screen pose. ``None`` uses the
+            currently attached screen.
+
+        Returns
+        -------
+        numpy.ndarray, shape (4, 3)
+            Screen panel corners in metres.
+
+        Raises
+        ------
+        NotImplementedError
+            If a candidate pose is supplied but the equipment does not
+            implement candidate screen placement.
+        ValueError
+            If the equipment has no screen.
+        """
+        screen = self.screen
+        if screen is None:
+            raise ValueError(f"{type(self).__name__} does not provide a screen")
+        if position is not None:
+            raise NotImplementedError(
+                f"{type(self).__name__} does not implement candidate screen poses"
+            )
+        return screen.surface_corners
+
+    def screen_panel_samples(
+        self,
+        grid_size: int,
+        position: tuple[float, float, float] | None = None,
+    ) -> np.ndarray:
+        """Sample the screen panel in Ground coordinates.
+
+        Parameters
+        ----------
+        grid_size : int
+            Number of evenly spaced cell centres along each panel dimension.
+        position : tuple of float or None, optional
+            Candidate equipment-specific screen pose. ``None`` uses the
+            currently attached screen.
+
+        Returns
+        -------
+        numpy.ndarray, shape (grid_size**2, 3)
+            Screen panel sample points in metres.
+
+        Raises
+        ------
+        NotImplementedError
+            If a candidate pose is supplied but the equipment does not
+            implement candidate screen placement.
+        ValueError
+            If the equipment has no screen or ``grid_size`` is invalid.
+        """
+        screen = self.screen
+        if screen is None:
+            raise ValueError(f"{type(self).__name__} does not provide a screen")
+        if position is not None:
+            raise NotImplementedError(
+                f"{type(self).__name__} does not implement candidate screen poses"
+            )
+        return screen.samples(grid_size)
+
+    @property
+    def screen_offset_minima(self) -> tuple[float | None, float | None]:
+        """Return equipment-specific lower bounds for screen offsets.
+
+        Returns
+        -------
+        tuple of float or None
+            Minimum horizontal and vertical offsets in millimetres. ``None``
+            means that the equipment does not impose a separate lower bound.
+        """
+        return None, None
+
+    @property
+    def screen_position(self) -> tuple[float, float, float]:
+        """Return the equipment-specific current screen pose.
+
+        Returns
+        -------
+        tuple of float
+            Current ``(horizontal_offset_mm, vertical_offset_mm,
+            inclination_deg)``.
+
+        Raises
+        ------
+        NotImplementedError
+            If the equipment does not expose a configurable screen pose.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not expose a configurable screen pose"
+        )
 
     def set_screen_position(
         self,
@@ -363,14 +290,17 @@ class Equipment(opensim.Model, ABC):
             If the equipment has a screen with separate offset limits but
             does not support expanding them.
         """
+        horizontal_limit, vertical_limit = self.screen_offset_minima
         if self.screen is not None and (
             (
                 horizontal_min_mm is not None
-                and self.screen.horizontal_offset_min_mm is not None
+                and horizontal_limit is not None
+                and horizontal_min_mm < horizontal_limit
             )
             or (
                 vertical_min_mm is not None
-                and self.screen.vertical_offset_min_mm is not None
+                and vertical_limit is not None
+                and vertical_min_mm < vertical_limit
             )
         ):
             raise NotImplementedError(
@@ -425,6 +355,94 @@ class Equipment(opensim.Model, ABC):
         result.state = result.initSystem()
         result.realizePosition(result.state)
         return result
+
+    def show_motion(self, duration: float = 5.0, fps: float = 30.0) -> None:
+        """Display a repeating excursion of the equipment's movable joints.
+
+        Each independent coordinate moves from its minimum to its maximum
+        and back, in radians or metres. Dependent coordinates follow the
+        model's kinematic constraints. Coordinate locks and prescribed
+        motions are disabled on a copy for the sweep, leaving the equipment's
+        state and properties unchanged.
+
+        Parameters
+        ----------
+        duration : float, default=5.0
+            Duration of one complete cycle in seconds.
+        fps : float, default=30.0
+            Number of motion samples per second.
+
+        Raises
+        ------
+        ValueError
+            If the timing is invalid, an independent coordinate has no
+            finite range or the model has no independently movable coordinates.
+        """
+        if not math.isfinite(duration) or duration <= 0.0:
+            raise ValueError("duration must be positive and finite")
+        if not math.isfinite(fps) or fps <= 0.0:
+            raise ValueError("fps must be positive and finite")
+
+        from ...viewer import FrameworkViewer
+
+        model = opensim.Model(self)
+        model.geometry_directories = (
+            *getattr(self, "geometry_directories", ()),
+            *((self.mesh_path,) if self.mesh_path is not None else ()),
+        )
+        model.state = model.initSystem()
+        model.realizePosition(model.state)
+        coordinates = model.getCoordinateSet()
+        for index in range(coordinates.getSize()):
+            coordinate = coordinates.get(index)
+            coordinate.set_prescribed(False)
+            coordinate.setIsPrescribed(model.state, False)
+            coordinate.set_locked(False)
+            coordinate.setLocked(model.state, False)
+        model.realizePosition(model.state)
+
+        independent = []
+        dependent = []
+        for index in range(coordinates.getSize()):
+            coordinate = coordinates.get(index)
+            if coordinate.isDependent(model.state):
+                dependent.append(coordinate)
+                continue
+            low, high = coordinate.getRangeMin(), coordinate.getRangeMax()
+            if not math.isfinite(low) or not math.isfinite(high):
+                raise ValueError(
+                    f"Coordinate {coordinate.getName()!r} must have a finite range"
+                )
+            if low < high:
+                independent.append(coordinate)
+        if not independent:
+            raise ValueError("equipment has no independently movable coordinates")
+
+        intervals = max(2, 2 * math.ceil(duration * fps / 2))
+        times = np.linspace(0.0, duration, intervals + 1)
+        motion = opensim.TimeSeriesTable()
+        animated = [*independent, *dependent]
+        motion.setColumnLabels([coordinate.getName() for coordinate in animated])
+        motion.addTableMetaDataString("inDegrees", "no")
+        for time in times:
+            progress = 1.0 - abs(2.0 * float(time) / duration - 1.0)
+            for coordinate in independent:
+                low, high = coordinate.getRangeMin(), coordinate.getRangeMax()
+                coordinate.setValue(model.state, low + progress * (high - low), False)
+            if dependent:
+                model.assemble(model.state)
+            model.realizePosition(model.state)
+            motion.appendRow(
+                float(time),
+                opensim.RowVector(
+                    [float(coordinate.getValue(model.state)) for coordinate in animated]
+                ),
+            )
+
+        window = FrameworkViewer(model, sampling_frequency_hz=fps).show(
+            motion=motion, loop=True
+        )
+        window.wait_closed()
 
     @abstractmethod
     def _build(self) -> None:

@@ -4,3 +4,4 @@ from .framework import *
 from .models import *
 from .viewer import *
 from .utils import *
+from .models.user.shoulder import SHOULDER_GIRDLE_COORDINATES

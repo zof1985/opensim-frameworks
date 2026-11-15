@@ -15,8 +15,7 @@ window embedding the (VTK-based, see :mod:`opensim_frameworks.viewer.visualizer`
   never disabled, since these act on the 3D view itself rather than a loaded
   motion.
 - Export (save the current view as a PNG or SVG, a loaded motion as an
-  MP4, the marker/joint tables as ``.xlsx`` files, or a self-contained
-  Windows player executable -- see
+  MP4, or a self-contained Windows player executable -- see
   :mod:`opensim_frameworks.viewer.export`); the animation button is disabled
   under the same condition as the playback controls, since there is
   nothing to animate without a loaded motion.
@@ -66,6 +65,7 @@ later ``process_events()`` pump need to happen on that same thread.
 from __future__ import annotations
 
 from bisect import bisect_left
+import math
 import threading
 import time as _time
 from pathlib import Path
@@ -120,6 +120,47 @@ class MotionData:
     """
 
     def __init__(self, model: Any, table: Any) -> None:
+        self._model = model
+        self._table = table
+        self._load()
+
+    @property
+    def model(self) -> Any:
+        """Return the model driven by this motion."""
+        return self._model
+
+    @model.setter
+    def model(self, value: Any) -> None:
+        self.set_model(value)
+
+    def set_model(self, value: Any) -> None:
+        """Set the model and validate the existing table against it."""
+        times, columns = self._parse(value, self._table)
+        self._model = value
+        self._times = times
+        self._columns = columns
+
+    @property
+    def table(self) -> Any:
+        """Return the source OpenSim motion table."""
+        return self._table
+
+    @table.setter
+    def table(self, value: Any) -> None:
+        self.set_table(value)
+
+    def set_table(self, value: Any) -> None:
+        """Set the motion table and rebuild its time and coordinate data."""
+        times, columns = self._parse(self._model, value)
+        self._table = value
+        self._times = times
+        self._columns = columns
+
+    def _load(self) -> None:
+        self._times, self._columns = self._parse(self._model, self._table)
+
+    @staticmethod
+    def _parse(model: Any, table: Any) -> tuple[np.ndarray, dict[str, np.ndarray]]:
         # opensim.TimeSeriesTable itself already rejects a non-increasing
         # time column (both built via appendRow and loaded from file), so
         # that isn't re-checked here.
@@ -141,7 +182,9 @@ class MotionData:
         }
         columns: dict[str, np.ndarray] = {}
         for name in table.getColumnLabels():
-            values = np.asarray(table.getDependentColumn(name).to_numpy(), dtype=float)
+            values = np.asarray(
+                table.getDependentColumn(name).to_numpy(), dtype=float
+            )
             if (
                 in_degrees
                 and name in coordinate_names
@@ -150,8 +193,25 @@ class MotionData:
                 values = np.radians(values)
             columns[name] = values
 
-        self.times = times
-        self.columns = columns
+        return times, columns
+
+    @property
+    def times(self) -> np.ndarray:
+        """Return the motion's time samples in seconds."""
+        return self._times
+
+    @times.setter
+    def times(self, value: np.ndarray) -> None:
+        self._times = value
+
+    @property
+    def columns(self) -> dict[str, np.ndarray]:
+        """Return motion columns by name, in model coordinate units."""
+        return self._columns
+
+    @columns.setter
+    def columns(self, value: dict[str, np.ndarray]) -> None:
+        self._columns = value
 
     @property
     def start_time(self) -> float:
@@ -245,14 +305,69 @@ class MotionPlayer:
     def __init__(
         self, start_time: float, end_time: float, *, loop: bool = False
     ) -> None:
+        start_time = float(start_time)
+        end_time = float(end_time)
+        if not math.isfinite(start_time) or not math.isfinite(end_time):
+            raise ValueError("start_time and end_time must be finite")
         if end_time <= start_time:
             raise ValueError("end_time must be greater than start_time")
-        self.start_time = start_time
-        self.end_time = end_time
-        self.loop = loop
-        self.time = start_time
+        if not isinstance(loop, bool):
+            raise TypeError("loop must be a bool")
+        self._start_time = start_time
+        self._end_time = end_time
+        self._loop = loop
+        self.time = self._start_time
         self.playing = False
         self._speed_index = _NEUTRAL_SPEED_INDEX
+
+    @property
+    def start_time(self) -> float:
+        """Return the inclusive start time of this motion."""
+        return self._start_time
+
+    @start_time.setter
+    def start_time(self, value: float) -> None:
+        self.set_start_time(value)
+
+    def set_start_time(self, value: float) -> None:
+        """Set a finite start time earlier than ``end_time``."""
+        start_time = float(value)
+        if not math.isfinite(start_time) or start_time >= self.end_time:
+            raise ValueError("start_time must be finite and less than end_time")
+        self._start_time = start_time
+        self.time = max(self.time, self._start_time)
+
+    @property
+    def end_time(self) -> float:
+        """Return the inclusive end time of this motion."""
+        return self._end_time
+
+    @end_time.setter
+    def end_time(self, value: float) -> None:
+        self.set_end_time(value)
+
+    def set_end_time(self, value: float) -> None:
+        """Set a finite end time later than ``start_time``."""
+        end_time = float(value)
+        if not math.isfinite(end_time) or end_time <= self.start_time:
+            raise ValueError("end_time must be finite and greater than start_time")
+        self._end_time = end_time
+        self.time = min(self.time, self._end_time)
+
+    @property
+    def loop(self) -> bool:
+        """Return whether playback wraps at either end."""
+        return self._loop
+
+    @loop.setter
+    def loop(self, value: bool) -> None:
+        self.set_loop(value)
+
+    def set_loop(self, value: bool) -> None:
+        """Set whether playback wraps at either end."""
+        if not isinstance(value, bool):
+            raise TypeError("loop must be a bool")
+        self._loop = value
 
     @property
     def speed(self) -> float:
@@ -383,9 +498,54 @@ class PlayerWindow:
         stop_event: threading.Event,
         closed_event: threading.Event,
     ) -> None:
-        self.motion_player = motion_player
-        self._stop_event = stop_event
-        self._closed_event = closed_event
+        self.set_motion_player(motion_player)
+        self.set_stop_event(stop_event)
+        self.set_closed_event(closed_event)
+
+    @property
+    def motion_player(self) -> MotionPlayer | None:
+        """Return the playback state machine, if the window has motion."""
+        return self._motion_player
+
+    @motion_player.setter
+    def motion_player(self, value: MotionPlayer | None) -> None:
+        self.set_motion_player(value)
+
+    def set_motion_player(self, value: MotionPlayer | None) -> None:
+        """Replace the playback state machine associated with this window."""
+        if value is not None and not isinstance(value, MotionPlayer):
+            raise TypeError("motion_player must be a MotionPlayer or None")
+        self._motion_player = value
+
+    @property
+    def stop_event(self) -> threading.Event:
+        """Return the event that requests the window to stop."""
+        return self._stop_event
+
+    @stop_event.setter
+    def stop_event(self, value: threading.Event) -> None:
+        self.set_stop_event(value)
+
+    def set_stop_event(self, value: threading.Event) -> None:
+        """Replace the event used to request window shutdown."""
+        if not isinstance(value, threading.Event):
+            raise TypeError("stop_event must be a threading.Event")
+        self._stop_event = value
+
+    @property
+    def closed_event(self) -> threading.Event:
+        """Return the event signaled after the window has closed."""
+        return self._closed_event
+
+    @closed_event.setter
+    def closed_event(self, value: threading.Event) -> None:
+        self.set_closed_event(value)
+
+    def set_closed_event(self, value: threading.Event) -> None:
+        """Replace the event used to signal window shutdown."""
+        if not isinstance(value, threading.Event):
+            raise TypeError("closed_event must be a threading.Event")
+        self._closed_event = value
 
     def close(self) -> None:
         """Close the window and stop its background thread.
@@ -903,60 +1063,6 @@ def start_player(
         animation_button.grid(row=0, column=1, padx=2)
         WidgetTooltip(root, animation_button, "Export the motion as an MP4 video")
 
-        def do_save_tables() -> None:
-            directory = filedialog.askdirectory(
-                parent=root, title="Export marker and joint tables (.xlsx)"
-            )
-            if not directory:
-                return
-            path_map = getattr(model, "path_map", None)
-            try:
-                targets = _export.xlsx_export_paths(model, directory, path_map=path_map)
-                existing = [path.name for path in targets if path.exists()]
-                if existing and not messagebox.askyesno(
-                    "Overwrite files",
-                    "These files already exist and will be replaced:\n"
-                    + "\n".join(existing),
-                    parent=root,
-                ):
-                    return
-            except Exception as error:  # noqa: BLE001 -- reported via a dialog
-                messagebox.showerror("Export failed", str(error), parent=root)
-                return
-            was_playing = player is not None and player.playing
-            if was_playing:
-                player.play_pause()
-                play_button.config(text="▶")
-            original_time = None if player is None else player.time
-            root.config(cursor="wait")
-            root.update()
-            try:
-                _export.export_tables_to_xlsx(
-                    model, data, directory, path_map=path_map, overwrite=True
-                )
-            except (
-                Exception
-            ) as error:  # noqa: BLE001 -- reported via a dialog, not swallowed
-                messagebox.showerror("Export failed", str(error), parent=root)
-            finally:
-                root.config(cursor="")
-                # Restore the pose the viewer was showing before the export.
-                if data is not None:
-                    _apply_time(model, data, original_time)
-                if was_playing:
-                    player.play_pause()
-                    play_button.config(text="⏸")
-
-        tables_button = ttk.Button(
-            export_group,
-            text="📊",
-            width=3,
-            style="Icon.TButton",
-            command=do_save_tables,
-        )
-        tables_button.grid(row=0, column=2, padx=2)
-        WidgetTooltip(root, tables_button, "Export marker and joint tables as XLSX")
-
         def ask_player_export() -> tuple[str, bool] | None:
             dialog = tk.Toplevel(root)
             dialog.title("Save standalone player")
@@ -1075,7 +1181,6 @@ def start_player(
                     fps=fps,
                     clean=clean,
                     overwrite=True,
-                    path_map=getattr(model, "path_map", None),
                 )
             except Exception as error:  # noqa: BLE001 -- reported via a dialog
                 messagebox.showerror("Export failed", str(error), parent=root)

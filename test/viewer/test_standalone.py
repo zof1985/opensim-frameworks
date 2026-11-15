@@ -11,7 +11,6 @@ from types import SimpleNamespace
 import pytest
 
 opensim = pytest.importorskip("opensim")
-pytest.importorskip("openpyxl")
 
 from opensim_frameworks.viewer.animation import _ViewerModel
 from opensim_frameworks.viewer.player import MotionData
@@ -72,7 +71,6 @@ def test_precomputes_geometry_and_per_frame_motion_without_runtime_opensim(tmp_p
         show_axes=True,
         show_reachability=True,
         show_vision_cone=True,
-        path_map=None,
     )
 
     assert len(manifest["frames"]) == 3
@@ -85,7 +83,6 @@ def test_precomputes_geometry_and_per_frame_motion_without_runtime_opensim(tmp_p
     geometry = tmp_path / "assets" / manifest["body_actors"][0]["geometry"]
     assert geometry.is_file()
     assert b'compressor="vtkZLibDataCompressor"' in geometry.read_bytes()
-    assert (tmp_path / "assets" / "tables" / "portable.xlsx").is_file()
 
 
 def test_executable_passes_clean_and_appends_scene_archive(tmp_path, monkeypatch):

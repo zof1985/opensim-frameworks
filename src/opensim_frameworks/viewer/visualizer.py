@@ -218,6 +218,11 @@ class VTKVisualizer:
         offscreen: bool = False,
         size: tuple[int, int] = DEFAULT_SIZE,
     ) -> None:
+        normalized_size = self._validate_size(size)
+        if embed is not None and not callable(embed):
+            raise TypeError("embed must be callable or None")
+        if not isinstance(offscreen, bool):
+            raise TypeError("offscreen must be a bool")
         try:
             import vtk
         except ImportError as error:
@@ -227,6 +232,9 @@ class VTKVisualizer:
             ) from error
         self._vtk = vtk
         self._model = model
+        self._embed = embed
+        self._offscreen = offscreen
+        self._size = normalized_size
 
         self._renderer = vtk.vtkRenderer()
         self._renderer.SetBackground(0.92, 0.93, 0.95)
@@ -234,7 +242,7 @@ class VTKVisualizer:
         if offscreen:
             self._render_window.SetOffScreenRendering(1)
         self._render_window.AddRenderer(self._renderer)
-        self._render_window.SetSize(*size)
+        self._render_window.SetSize(*self._size)
         self._render_window.SetWindowName(self._window_title())
         self._interactor = None
         self._interactor_style = None
@@ -294,6 +302,98 @@ class VTKVisualizer:
         # the ground plane's own placement rather than relying on that).
         self._axes_actor = self._build_axes_actor()
         self._renderer.AddActor(self._axes_actor)
+        self._render_window.Render()
+
+    @staticmethod
+    def _validate_size(size: Any) -> tuple[int, int]:
+        try:
+            width, height = size
+        except (TypeError, ValueError) as error:
+            raise ValueError("size must be a pair of positive integers") from error
+        if (
+            isinstance(width, bool)
+            or isinstance(height, bool)
+            or not isinstance(width, int)
+            or not isinstance(height, int)
+            or width <= 0
+            or height <= 0
+        ):
+            raise ValueError("size must be a pair of positive integers")
+        return width, height
+
+    @property
+    def model(self) -> Any:
+        """Return the model currently rendered by this visualizer."""
+        return self._model
+
+    @model.setter
+    def model(self, value: Any) -> None:
+        self.set_model(value)
+
+    def set_model(self, value: Any) -> None:
+        """Rebuild the VTK scene for a new model."""
+        if value is self._model:
+            return
+        self.close()
+        self.__init__(
+            value,
+            embed=self._embed,
+            offscreen=self._offscreen,
+            size=self._size,
+        )
+
+    @property
+    def embed(self) -> Any:
+        """Return the window embedding callback."""
+        return self._embed
+
+    @embed.setter
+    def embed(self, value: Any) -> None:
+        self.set_embed(value)
+
+    def set_embed(self, value: Any) -> None:
+        """Set and apply a native-window embedding callback."""
+        if value is not None and not callable(value):
+            raise TypeError("embed must be callable or None")
+        if value is not None and not self._offscreen:
+            value(self.get_window_id())
+        self._embed = value
+
+    @property
+    def offscreen(self) -> bool:
+        """Return whether this visualizer renders without an interactive window."""
+        return self._offscreen
+
+    @offscreen.setter
+    def offscreen(self, value: bool) -> None:
+        self.set_offscreen(value)
+
+    def set_offscreen(self, value: bool) -> None:
+        """Recreate the renderer with interactive or offscreen rendering."""
+        if not isinstance(value, bool):
+            raise TypeError("offscreen must be a bool")
+        if value == self._offscreen:
+            return
+        model = self._model
+        embed = self._embed
+        size = self._size
+        self.close()
+        self.__init__(model, embed=embed, offscreen=value, size=size)
+
+    @property
+    def size(self) -> tuple[int, int]:
+        """Return the render-window dimensions in pixels."""
+        return self._size
+
+    @size.setter
+    def size(self, value: tuple[int, int]) -> None:
+        self.set_size(value)
+
+    def set_size(self, size: tuple[int, int]) -> None:
+        """Resize and render the VTK window."""
+        normalized_size = self._validate_size(size)
+        self._render_window.SetSize(*normalized_size)
+        self._size = normalized_size
         self._render_window.Render()
 
     @property

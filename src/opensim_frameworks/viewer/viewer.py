@@ -1,30 +1,38 @@
-"""Public viewer entry point for native OpenSim models and frameworks."""
+"""Framework-centered viewer and export operations."""
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
+import os
+import shutil
+import tempfile
+import zipfile
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-
 from ..framework import Framework
+from ..models.model import FrameworkModel
 from ..utils.constants import DEFAULT_SIZE
-from ..utils.opensim import import_opensim
+from ..utils.opensim import get_referenced_meshes, import_opensim, resolve_geometry_file
 from .animation import _ViewerModel, save_animation as _render_animation
-from .export import export_tables_to_xlsx as _export_tables, save_image as _save_image
-from .player import MotionData, PlayerWindow, _apply_time, start_player
+from .export import save_image as _save_image
+from .player import PlayerWindow, start_player
 from .standalone import (
     _player_runtime as _prepare_player_runtime,
     save_player_executable as _save_player_executable,
 )
 from .visualizer import VTKVisualizer
 
-__all__ = ["VTKViewer"]
+__all__ = ["FrameworkViewer"]
+
+_TIME_TOLERANCE = 1e-10
 
 
 def _camera_vector(
-    name: str, value: tuple[float, float, float] | None
+    name: str, value: Sequence[float] | None
 ) -> tuple[float, float, float] | None:
     if value is None:
         return None
@@ -37,175 +45,333 @@ def _camera_vector(
     return vector
 
 
-class VTKViewer:
-    """Display and export native OpenSim models and frameworks with VTK.
+def _json_value(value: Any) -> Any:
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return value
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, Mapping):
+        return {str(key): _json_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_value(item) for item in value]
+    if hasattr(value, "tolist"):
+        return _json_value(value.tolist())
+    raise TypeError(f"Value of type {type(value).__name__} is not JSON serializable")
 
-    Examples
-    --------
-    >>> viewer = VTKViewer()
-    >>> viewer.show(framework)  # doctest: +SKIP
-    >>> viewer.save_snapshot(framework, path="pose.svg")  # doctest: +SKIP
-    >>> viewer.save_animation(model, "motion.mp4", motion="motion.sto")  # doctest: +SKIP
+
+class FrameworkViewer:
+    """View and export a framework, normalizing every input to ``Framework``.
+
+    Parameters
+    ----------
+    framework : Framework, FrameworkModel, or opensim.Model
+        Object to display. OpenSim models are copied into a temporary
+        ``FrameworkModel`` and then wrapped in a ``Framework``.
+    trajectories : opensim.StatesTrajectory or None, optional
+        States used only when ``framework`` is a plain ``opensim.Model``.
+    sampling_frequency_hz : float, default=30.0
+        Sampling frequency used to interpolate recorded framework states.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        framework: Framework | FrameworkModel | Any,
+        trajectories: Any = None,
+        sampling_frequency_hz: float = 30.0,
+    ) -> None:
         self._opensim = import_opensim()
+        self._framework: Framework
+        self._source_model: Any = None
+        self._trajectories: Any = None
+        self._sampling_frequency_hz = 30.0
+        self.set_sampling_frequency_hz(sampling_frequency_hz)
+        self.set_framework(framework, trajectories=trajectories)
 
-    def _native_model_and_map(self, obj: Any) -> tuple[Any, Any]:
-        if isinstance(obj, Framework):
-            return obj.merge_to_model(return_mapping=True)
-        return self._native_model(obj), None
+    @property
+    def framework(self) -> Framework:
+        """Return the normalized framework used by this viewer."""
+        return self._framework
 
-    def _native_model(self, obj: Any) -> Any:
-        if isinstance(obj, Framework):
-            return obj.merge_to_model()
-        if isinstance(obj, self._opensim.Model):
-            return obj
-        raise TypeError("object must be an opensim.Model or Framework")
+    @framework.setter
+    def framework(self, value: Framework | FrameworkModel | Any) -> None:
+        self.set_framework(value)
 
-    def _table(self, motion: Any) -> Any:
-        if isinstance(motion, (str, Path)):
-            return self._opensim.TimeSeriesTable(str(motion))
-        if isinstance(motion, self._opensim.TimeSeriesTable):
-            return motion
-        raise TypeError("motion must be a path or opensim.TimeSeriesTable")
+    def set_framework(
+        self,
+        value: Framework | FrameworkModel | Any,
+        *,
+        trajectories: Any = None,
+    ) -> None:
+        """Replace the viewed object and normalize it to a Framework."""
+        if isinstance(value, Framework):
+            if trajectories is not None:
+                raise ValueError("trajectories may only be supplied with opensim.Model")
+            framework = value
+            source_model = None
+            stored_trajectories = None
+        elif isinstance(value, FrameworkModel):
+            if trajectories is not None and not isinstance(
+                trajectories, self._opensim.StatesTrajectory
+            ):
+                raise ValueError(
+                    "trajectories must be an opensim.StatesTrajectory or None"
+                )
+            model = (
+                FrameworkModel.from_model(value, trajectories)
+                if trajectories is not None
+                else value
+            )
+            framework = Framework(model=model)
+            source_model = value if trajectories is not None else None
+            stored_trajectories = trajectories
+            converted = getattr(model, "_osf_trajectory", None)
+            if converted is not None:
+                for index in range(converted.getSize()):
+                    state = converted.get(index)
+                    model.state = self._opensim.State(state)
+                    framework.record_state(time=state.getTime())
+        elif isinstance(value, self._opensim.Model):
+            if trajectories is not None and not isinstance(
+                trajectories, self._opensim.StatesTrajectory
+            ):
+                raise TypeError(
+                    "trajectories must be an opensim.StatesTrajectory or None"
+                )
+            model = FrameworkModel.from_model(value, trajectories)
+            framework = Framework(model=model)
+            source_model = value
+            stored_trajectories = trajectories
+            converted = getattr(model, "_osf_trajectory", None)
+            if converted is not None:
+                for index in range(converted.getSize()):
+                    state = converted.get(index)
+                    model.state = self._opensim.State(state)
+                    framework.record_state(time=state.getTime())
+        else:
+            raise TypeError(
+                "framework must be a Framework, FrameworkModel, or opensim.Model"
+            )
+        self._framework = framework
+        self._source_model = source_model
+        self._trajectories = stored_trajectories
+
+    @property
+    def trajectories(self) -> Any:
+        """Return the StatesTrajectory supplied for a plain OpenSim model."""
+        return self._trajectories
+
+    @trajectories.setter
+    def trajectories(self, value: Any) -> None:
+        self.set_trajectories(value)
+
+    def set_trajectories(self, value: Any) -> None:
+        """Replace the source trajectory and rebuild the normalized framework."""
+        if self._source_model is None:
+            if value is not None:
+                raise ValueError(
+                    "trajectories can only be set when the source is opensim.Model"
+                )
+            self._trajectories = None
+            return
+        self.set_framework(self._source_model, trajectories=value)
+
+    @property
+    def sampling_frequency_hz(self) -> float:
+        """Return the interpolation and export sampling frequency."""
+        return self._sampling_frequency_hz
+
+    @sampling_frequency_hz.setter
+    def sampling_frequency_hz(self, value: float) -> None:
+        self.set_sampling_frequency_hz(value)
+
+    def set_sampling_frequency_hz(self, value: float) -> None:
+        """Set a finite, positive sampling frequency in hertz."""
+        self._sampling_frequency_hz = self._validate_sampling_frequency(value)
+
+    @staticmethod
+    def _validate_sampling_frequency(value: float) -> float:
+        if isinstance(value, bool):
+            raise ValueError("sampling_frequency_hz must be finite and positive")
+        try:
+            frequency = float(value)
+        except (TypeError, ValueError, OverflowError) as error:
+            raise ValueError(
+                "sampling_frequency_hz must be finite and positive"
+            ) from error
+        if not math.isfinite(frequency) or frequency <= 0.0:
+            raise ValueError("sampling_frequency_hz must be finite and positive")
+        return frequency
+
+    def _motion_table(self, sampling_frequency_hz: float | None = None) -> Any | None:
+        if self.framework.states_trajectory.getSize() < 2:
+            return None
+        frequency = (
+            self.sampling_frequency_hz
+            if sampling_frequency_hz is None
+            else self._validate_sampling_frequency(sampling_frequency_hz)
+        )
+        table = self.framework.get_motion_table(frequency)
+        return table if table.getNumRows() >= 2 else None
 
     def show(
         self,
-        object: Framework | Any,
-        motion: Any = None,
+        sampling_frequency_hz: float | None = None,
         *,
+        motion: Any = None,
         loop: bool = False,
-        fps: float = 30.0,
     ) -> PlayerWindow:
-        """Open the interactive viewer.
-
-        Parameters
-        ----------
-        object : opensim.Model or Framework
-            Model to display. A framework is displayed as a merged snapshot;
-            its member models remain unchanged.
-        motion : str, pathlib.Path, opensim.TimeSeriesTable, or None, default=None
-            Optional motion table or path to a ``.mot``/``.sto`` file.
-        loop : bool, default=False
-            Whether playback repeats after the final sample.
-        fps : float, default=30.0
-            Playback refresh and animation-export frame rate.
-
-        Returns
-        -------
-        PlayerWindow
-            Handle used to inspect playback state or close the viewer.
-
-        Raises
-        ------
-        TypeError
-            If ``object`` is neither an OpenSim model nor a ``Framework``.
-        """
-        model, path_map = self._native_model_and_map(object)
+        """Open the interactive viewer for this framework."""
+        frequency = (
+            self.sampling_frequency_hz
+            if sampling_frequency_hz is None
+            else self._validate_sampling_frequency(sampling_frequency_hz)
+        )
+        model = self.framework.merge_to_model()
         adapter = _ViewerModel(model)
-        # Lets the player's xlsx export restore the members' original names.
-        adapter.path_map = path_map
-        return start_player(adapter, motion, loop=loop, fps=fps)
+        table = (
+            self._motion_table(frequency)
+            if motion is None
+            else motion
+        )
+        return start_player(
+            adapter,
+            table,
+            loop=loop,
+            fps=frequency,
+        )
 
     def save_player(
         self,
-        object: Framework | Any,
         path: str | Path,
-        motion: Any = None,
         *,
-        fps: float = 30.0,
         clean: bool = False,
         overwrite: bool = True,
     ) -> Path:
-        """Build a self-contained Windows player executable.
-
-        The model is sampled and its VTK geometry is packaged frame by frame.
-        The generated executable keeps the interactive camera, visibility,
-        playback, and export controls, but does not include or load OpenSim.
-
-        Parameters
-        ----------
-        object : opensim.Model or Framework
-            Model or framework to package.
-        path : str or pathlib.Path
-            Destination ``.exe`` file.
-        motion : str, pathlib.Path, opensim.TimeSeriesTable, or None
-            Optional motion to precalculate into the player.
-        fps : float, default=30.0
-            Frame rate used for the precalculated motion and MP4 export.
-        clean : bool, default=False
-            Rebuild the model-independent PyInstaller runtime instead of
-            reusing a compatible cached build.
-        overwrite : bool, default=True
-            Replace an existing executable at ``path``.
-
-        Returns
-        -------
-        pathlib.Path
-            The generated executable path.
-
-        Notes
-        -----
-        The exported player's default window is half the standard viewer size.
-        It starts with standard camera, visibility, and loop settings. If
-        ``motion`` is provided, its animation is included; the current player
-        window's view and playback-control settings are not copied.
-
-        The model-independent PyInstaller runtime is cached in AppData and
-        reused by later exports. If that location is not writable, the runtime
-        is built in a temporary directory, with a warning, and removed after
-        the executable is created.
-
-        Raises
-        ------
-        ImportError
-            If PyInstaller is not installed.
-        RuntimeError
-            If the current platform is not Windows.
-        FileExistsError
-            If the destination exists and ``overwrite`` is false.
-        """
-        model, path_map = self._native_model_and_map(object)
+        """Build a self-contained player executable for this framework."""
+        destination = Path(path)
+        if not isinstance(overwrite, bool):
+            raise TypeError("overwrite must be a bool")
+        if not isinstance(clean, bool):
+            raise TypeError("clean must be a bool")
+        if destination.exists() and not overwrite:
+            raise FileExistsError(destination)
+        model = self.framework.merge_to_model()
         adapter = _ViewerModel(model)
-        try:
-            adapter.state = self._opensim.State(model.getWorkingState())
-        except RuntimeError:
-            adapter.state = self._opensim.State(adapter.state)
-        adapter.path_map = path_map
-        data = None if motion is None else MotionData(adapter, self._table(motion))
+        table = self._motion_table()
+        from .player import MotionData
+
+        data = None if table is None else MotionData(adapter, table)
         return _save_player_executable(
             adapter,
             data,
-            path,
-            fps=fps,
+            destination,
+            fps=self.sampling_frequency_hz,
             clean=clean,
             overwrite=overwrite,
-            path_map=path_map,
         )
 
-    def prepare_player_export(self) -> None:
-        """Prebuild the reusable runtime for future :meth:`save_player` calls.
+    def _snapshot_state(
+        self,
+        frame: int | None,
+        time_s: float | None,
+    ) -> Any:
+        framework = self.framework
+        model = framework.composite
+        current_state = framework.state
+        trajectory_size = framework.states_trajectory.getSize()
 
-        If the persistent cache is unavailable, the temporary build is removed
-        after this call and will need to be rebuilt during export.
-        """
-        with _prepare_player_runtime():
-            pass
+        if frame is not None and time_s is not None:
+            raise ValueError("specify either frame or time_s, not both")
+
+        if trajectory_size < 2:
+            if frame not in (None, 0):
+                raise ValueError("frame is out of range")
+            state_time = float(current_state.getTime())
+            requested_time = state_time if time_s is None else float(time_s)
+            if not math.isfinite(requested_time) or not math.isclose(
+                requested_time,
+                state_time,
+                rel_tol=0.0,
+                abs_tol=_TIME_TOLERANCE,
+            ):
+                raise ValueError("the requested time is unavailable in this framework")
+            return self._opensim.State(current_state)
+
+        table = self._motion_table()
+        if table is None:
+            raise ValueError("the framework has no interpolated motion samples")
+        times = [float(value) for value in table.getIndependentColumn()]
+        if frame is not None:
+            if isinstance(frame, bool) or not isinstance(frame, int):
+                raise TypeError("frame must be an integer or None")
+            if not -len(times) <= frame < len(times):
+                raise ValueError("frame is out of range")
+            row_index = frame % len(times)
+            selected_time = times[row_index]
+            row = table.getRowAtIndex(row_index)
+            labels = list(table.getColumnLabels())
+        else:
+            recorded_times = framework.state_times
+            requested_time = (
+                float(recorded_times[0])
+                if time_s is None
+                else float(time_s)
+            )
+            if not math.isfinite(requested_time):
+                raise ValueError("time_s must be finite")
+            available_times = (*recorded_times, *times)
+            selected_time = next(
+                (
+                    value
+                    for value in available_times
+                    if math.isclose(
+                        requested_time,
+                        value,
+                        rel_tol=0.0,
+                        abs_tol=_TIME_TOLERANCE,
+                    )
+                ),
+                None,
+            )
+            if selected_time is None:
+                raise ValueError(
+                    "time_s must match a recorded state or a sampled time"
+                )
+            source_table = framework._motion_source_table()
+            one_row_table = framework._interpolate_motion_table(
+                source_table, [requested_time]
+            )
+            row = one_row_table.getRowAtIndex(0)
+            labels = list(one_row_table.getColumnLabels())
+
+        label_values = {
+            str(labels[index]): float(row[index])
+            for index in range(len(labels))
+        }
+        state = self._opensim.State(current_state)
+        state_names = model.getStateVariableNames()
+        for index in range(state_names.getSize()):
+            name = state_names.get(index)
+            if name not in label_values:
+                raise ValueError(f"motion table is missing state variable {name!r}")
+            model.setStateVariableValue(state, name, label_values[name])
+        state.setTime(float(selected_time))
+        model.realizePosition(state)
+        model.realizeVelocity(state)
+        return state
 
     def save_snapshot(
         self,
-        object: Framework | Any,
-        frame: int | None = None,
-        time_s: float | None = 0.0,
-        path: str | Path = "snapshot.svg",
+        path: str | Path,
         *,
-        motion: Any = None,
+        time_s: float | None = None,
+        frame: int | None = None,
+        overwrite: bool = True,
         size: tuple[int, int] = DEFAULT_SIZE,
         dpi: int = 300,
-        camera_position: tuple[float, float, float] | None = None,
-        camera_focal_point: tuple[float, float, float] | None = None,
-        camera_view_up: tuple[float, float, float] | None = None,
+        camera_position: Sequence[float] | None = None,
+        camera_focal_point: Sequence[float] | None = None,
+        camera_view_up: Sequence[float] | None = None,
         show_ground: bool = True,
         show_muscles: bool = True,
         show_markers: bool = True,
@@ -213,74 +379,20 @@ class VTKViewer:
         show_reachability: bool = True,
         show_vision_cone: bool = True,
     ) -> Path:
-        """Save the posed model as an SVG or PNG image, without opening a window.
-
-        Parameters
-        ----------
-        object : opensim.Model or Framework
-            Model to render. It is not modified.
-        frame : int or None, default=None
-            Row of ``motion`` to render. Takes precedence over ``time_s``.
-        time_s : float or None, default=0.0
-            Time in seconds on ``motion`` to render (linearly interpolated).
-        path : str or pathlib.Path
-            Destination; the extension must be ``.svg`` or ``.png``.
-        motion : str, pathlib.Path, opensim.TimeSeriesTable, or None, default=None
-            Motion that ``frame`` and ``time_s`` refer to. Without a motion
-            the model is rendered in its current posture, and ``frame`` and
-            ``time_s`` must be ``None``, ``0`` or ``0.0``.
-        size : tuple[int, int], default=DEFAULT_SIZE
-            Render size in pixels; sets PNG dimensions and SVG layout.
-        dpi : int, default=300
-            Resolution metadata for PNG output. Ignored for SVG output.
-        camera_position : tuple of float or None, default=None
-            Camera position ``(x, y, z)`` in ground-frame metres. ``None``
-            uses the automatically framed position.
-        camera_focal_point : tuple of float or None, default=None
-            Ground-frame point in metres for the camera to look at. ``None``
-            uses the automatically framed target.
-        camera_view_up : tuple of float or None, default=None
-            Ground-frame camera up direction. ``None`` keeps the automatic
-            direction unless another camera vector is supplied.
-        show_ground : bool, default=True
-            Show the ground reference grid.
-        show_muscles : bool, default=True
-            Show muscle paths.
-        show_markers : bool, default=True
-            Show model markers.
-        show_axes : bool, default=True
-            Show the ground-frame XYZ coordinate axes.
-        show_reachability : bool, default=True
-            Show palm reachability regions when present.
-        show_vision_cone : bool, default=True
-            Show the visual cone and its centre line when present.
-
-        Returns
-        -------
-        pathlib.Path
-            The destination path.
-
-        Raises
-        ------
-        ValueError
-            If the extension is not ``.svg`` or ``.png``, PNG ``dpi`` is not
-            a positive integer, ``frame`` is out of range, or ``frame``/
-            ``time_s`` is requested without a motion.
-        TypeError
-            If ``object`` or ``motion`` has an unsupported type.
-        ValueError
-            If a camera vector is malformed or the requested camera vectors
-            do not define a valid view.
-        """
+        """Save the framework at a recorded or sampled time as PNG or SVG."""
         destination = Path(path)
         extension = destination.suffix.lower()
         if extension not in {".svg", ".png"}:
             raise ValueError("path must have a .svg or .png extension")
+        if not isinstance(overwrite, bool):
+            raise TypeError("overwrite must be a bool")
+        if destination.exists() and not overwrite:
+            raise FileExistsError(destination)
         if extension == ".png" and (
-            not isinstance(dpi, int) or isinstance(dpi, bool) or dpi <= 0
+            isinstance(dpi, bool) or not isinstance(dpi, int) or dpi <= 0
         ):
             raise ValueError("dpi must be a positive integer for PNG output")
-        visibility_options = {
+        visibility = {
             "show_ground": show_ground,
             "show_muscles": show_muscles,
             "show_markers": show_markers,
@@ -288,39 +400,21 @@ class VTKViewer:
             "show_reachability": show_reachability,
             "show_vision_cone": show_vision_cone,
         }
-        for name, value in visibility_options.items():
-            if not isinstance(value, (bool, np.bool_)):
-                raise TypeError(f"{name} must be a boolean")
-        camera_vectors = {
+        for name, enabled in visibility.items():
+            if not isinstance(enabled, bool):
+                raise TypeError(f"{name} must be a bool")
+        camera = {
             "camera_position": _camera_vector("camera_position", camera_position),
             "camera_focal_point": _camera_vector(
                 "camera_focal_point", camera_focal_point
             ),
             "camera_view_up": _camera_vector("camera_view_up", camera_view_up),
         }
-        model = self._native_model(object)
-        meta = _ViewerModel(model)
-        try:
-            state = self._opensim.State(model.getWorkingState())
-        except RuntimeError:
-            state = self._opensim.State(meta.state)
-        meta.state = state
-
-        if motion is None:
-            if frame not in (None, 0) or time_s not in (None, 0, 0.0):
-                raise ValueError("frame and time_s require a motion")
-        else:
-            data = MotionData(meta, self._table(motion))
-            if frame is not None:
-                if not -len(data.times) <= frame < len(data.times):
-                    raise ValueError("frame is out of range")
-                time = float(data.times[frame])
-            else:
-                time = data.start_time if time_s is None else float(time_s)
-            _apply_time(meta, data, time)
-
+        model = self.framework.composite
+        state = self._snapshot_state(frame, time_s)
+        adapter = _ViewerModel(model, state)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        visualizer = VTKVisualizer(meta, offscreen=True, size=size)
+        visualizer = VTKVisualizer(adapter, offscreen=True, size=size)
         try:
             visualizer.set_ground_visible(show_ground)
             visualizer.set_muscles_visible(show_muscles)
@@ -328,11 +422,11 @@ class VTKViewer:
             visualizer.set_axes_visible(show_axes)
             visualizer.set_reachability_visible(show_reachability)
             visualizer.set_vision_cone_visible(show_vision_cone)
-            if any(value is not None for value in camera_vectors.values()):
+            if any(value is not None for value in camera.values()):
                 visualizer.set_camera(
-                    position=camera_vectors["camera_position"],
-                    focal_point=camera_vectors["camera_focal_point"],
-                    view_up=camera_vectors["camera_view_up"],
+                    position=camera["camera_position"],
+                    focal_point=camera["camera_focal_point"],
+                    view_up=camera["camera_view_up"],
                 )
             if extension == ".svg":
                 visualizer.save_svg(destination)
@@ -344,14 +438,14 @@ class VTKViewer:
 
     def save_animation(
         self,
-        object: Framework | Any,
-        file: str | Path,
+        path: str | Path,
         *,
-        motion: Any,
+        sampling_frequency_hz: float | None = None,
+        overwrite: bool = True,
         size: tuple[int, int] = DEFAULT_SIZE,
-        camera_position: tuple[float, float, float] | None = None,
-        camera_focal_point: tuple[float, float, float] | None = None,
-        camera_view_up: tuple[float, float, float] | None = None,
+        camera_position: Sequence[float] | None = None,
+        camera_focal_point: Sequence[float] | None = None,
+        camera_view_up: Sequence[float] | None = None,
         show_ground: bool = True,
         show_muscles: bool = True,
         show_markers: bool = True,
@@ -359,53 +453,33 @@ class VTKViewer:
         show_reachability: bool = True,
         show_vision_cone: bool = True,
     ) -> Path:
-        """Render a motion of the model to an MP4 without opening a window.
-
-        Parameters
-        ----------
-        object : opensim.Model or Framework
-            Model driven by ``motion``. It is not modified.
-        file : str or pathlib.Path
-            Destination ``.mp4`` path.
-        motion : str, pathlib.Path or opensim.TimeSeriesTable
-            Motion whose coordinate columns drive the model.
-        size : tuple[int, int], default=DEFAULT_SIZE
-            Output frame dimensions in pixels.
-        camera_position : tuple of float or None, default=None
-            Camera position ``(x, y, z)`` in ground-frame metres. ``None``
-            uses the automatically framed position.
-        camera_focal_point : tuple of float or None, default=None
-            Ground-frame point in metres for the camera to look at. ``None``
-            uses the automatically framed target.
-        camera_view_up : tuple of float or None, default=None
-            Ground-frame camera up direction.
-        show_ground : bool, default=True
-            Show the ground reference grid.
-        show_muscles : bool, default=True
-            Show muscle paths.
-        show_markers : bool, default=True
-            Show model markers.
-        show_axes : bool, default=True
-            Show the ground-frame XYZ coordinate axes.
-        show_reachability : bool, default=True
-            Show palm reachability regions when present.
-        show_vision_cone : bool, default=True
-            Show the visual cone and its centre line when present.
-
-        Returns
-        -------
-        pathlib.Path
-            The destination path.
-        """
-        model = self._native_model(object)
+        """Render the framework trajectory as an MP4."""
+        destination = Path(path)
+        if destination.suffix.lower() != ".mp4":
+            raise ValueError("path must have an .mp4 extension")
+        if not isinstance(overwrite, bool):
+            raise TypeError("overwrite must be a bool")
+        if destination.exists() and not overwrite:
+            raise FileExistsError(destination)
+        table = self._motion_table(sampling_frequency_hz)
+        if table is None:
+            raise ValueError("animation requires at least two recorded states")
+        camera = {
+            "camera_position": _camera_vector("camera_position", camera_position),
+            "camera_focal_point": _camera_vector(
+                "camera_focal_point", camera_focal_point
+            ),
+            "camera_view_up": _camera_vector("camera_view_up", camera_view_up),
+        }
+        destination.parent.mkdir(parents=True, exist_ok=True)
         return _render_animation(
-            model,
-            self._table(motion),
-            file,
+            self.framework.merge_to_model(),
+            table,
+            destination,
             size=size,
-            camera_position=camera_position,
-            camera_focal_point=camera_focal_point,
-            camera_view_up=camera_view_up,
+            camera_position=camera["camera_position"],
+            camera_focal_point=camera["camera_focal_point"],
+            camera_view_up=camera["camera_view_up"],
             show_ground=show_ground,
             show_muscles=show_muscles,
             show_markers=show_markers,
@@ -414,59 +488,176 @@ class VTKViewer:
             show_vision_cone=show_vision_cone,
         )
 
-    def save_tables(
+    def _package_model(
         self,
-        object: Framework | Any,
-        directory: str | Path,
-        motion: Any = None,
-        *,
-        overwrite: bool = False,
-    ) -> list[Path]:
-        """Export marker and joint tables to ``.xlsx`` files without a window.
+        model: Any,
+        directory: Path,
+        resolver_model: Any,
+        used_names: dict[str, Path],
+        archive_root: Path,
+        geometry_directories: Sequence[str | Path] = (),
+    ) -> str:
+        directory.mkdir(parents=True, exist_ok=True)
+        clone = self._opensim.Model(model)
+        clone.finalizeFromProperties()
+        clone.finalizeConnections()
+        geometry_dir = directory / "Geometry"
+        geometry_dir.mkdir()
+        search_directories = (
+            *getattr(model, "geometry_directories", ()),
+            *geometry_directories,
+        )
+        for mesh, filename in get_referenced_meshes(clone):
+            source = resolve_geometry_file(
+                self._opensim,
+                resolver_model,
+                filename,
+                (*search_directories,),
+            )
+            if source is None or not source.is_file():
+                raise FileNotFoundError(f"Unable to resolve mesh file {filename!r}")
+            target_name = Path(filename).name
+            previous = used_names.get(target_name)
+            if previous is not None and previous != source:
+                digest = hashlib.sha256(source.read_bytes()).hexdigest()[:10]
+                target_name = f"{Path(target_name).stem}_{digest}{Path(target_name).suffix}"
+            used_names[target_name] = source
+            shutil.copy2(source, geometry_dir / target_name)
+            mesh.set_mesh_file(target_name)
+        model_path = directory / "model.osim"
+        clone.printToXML(str(model_path))
+        return model_path.relative_to(archive_root).as_posix()
 
-        Same export as the viewer's Export button: one file per framework
-        member (``<member>.xlsx``) or a single file for a model, each with a
-        ``markers`` sheet (Ground-frame ``X``/``Y``/``Z`` per marker, metres)
-        and a ``joints`` sheet (one column per coordinate, degrees for
-        rotational and metres for translational, locked ones included), with
-        a ``time [s]`` column and one row per row of ``motion`` (a single row
-        at time 0 without a motion).
+    def _coupling_manifest(self) -> list[dict[str, Any]]:
+        couplings = []
+        for coupling in self.framework.couplings.values():
+            options: dict[str, Any] = {}
+            for name, value in coupling.options:
+                if name == "component":
+                    options[name] = {
+                        "class": value.getConcreteClassName(),
+                        "name": value.getName(),
+                    }
+                elif name == "function":
+                    options[name] = (
+                        None
+                        if value is None
+                        else {
+                            "class": value.getConcreteClassName(),
+                            "name": value.getName(),
+                        }
+                    )
+                else:
+                    options[name] = _json_value(value)
+            couplings.append(
+                {
+                    "name": coupling.name,
+                    "kind": coupling.kind,
+                    "references": [list(reference) for reference in coupling.references],
+                    "options": options,
+                }
+            )
+        return couplings
 
-        Parameters
-        ----------
-        object : opensim.Model or Framework
-            Model or framework to export. It is not modified.
-        directory : str or pathlib.Path
-            Destination directory, created when missing.
-        motion : str, pathlib.Path, opensim.TimeSeriesTable, or None, default=None
-            Motion whose coordinate columns drive the model; ``None`` exports
-            the current pose.
-        overwrite : bool, default=False
-            Replace existing files. When ``False``, ``FileExistsError`` is
-            raised before anything is written if a target file exists (the
-            safe default, since several files are produced at once).
+    def save_framework(self, path: str | Path, *, overwrite: bool = True) -> Path:
+        """Save models, configuration, couplings, trajectories, and geometry to .osf."""
+        destination = Path(path)
+        if destination.suffix.lower() != ".osf":
+            raise ValueError("path must have an .osf extension")
+        if not isinstance(overwrite, bool):
+            raise TypeError("overwrite must be a bool")
+        if destination.exists() and not overwrite:
+            raise FileExistsError(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
 
-        Returns
-        -------
-        list[pathlib.Path]
-            The files written.
+        with tempfile.TemporaryDirectory(prefix="opensim-framework-") as temp_dir:
+            root = Path(temp_dir)
+            members: list[dict[str, Any]] = []
+            used_names: dict[str, Path] = {}
+            for name, model in self.framework.items():
+                model_path = self._package_model(
+                    model,
+                    root / "models" / name,
+                    model,
+                    used_names,
+                    root,
+                )
+                member: dict[str, Any] = {
+                    "name": name,
+                    "class": f"{type(model).__module__}:{type(model).__qualname__}",
+                    "model": model_path,
+                    "config": _json_value(model.get_config()),
+                }
+                trajectory = self.framework.states_trajectories[name]
+                if trajectory.getSize():
+                    trajectory_path = root / "trajectories" / f"{name}.ostates"
+                    trajectory_path.parent.mkdir(parents=True, exist_ok=True)
+                    trajectory.exportToStatesDocument(model).serialize(
+                        str(trajectory_path)
+                    )
+                    member["trajectory"] = str(
+                        trajectory_path.relative_to(root)
+                    ).replace("\\", "/")
+                members.append(member)
 
-        Raises
-        ------
-        FileExistsError
-            If a target file exists and ``overwrite`` is ``False``.
-        ImportError
-            If ``openpyxl`` is not installed.
-        ValueError
-            If ``motion`` has fewer than 2 rows or two members map to the
-            same file name.
-        """
-        model, path_map = self._native_model_and_map(object)
-        meta = _ViewerModel(model)
-        # Work on a copy of the state so the given model keeps its pose.
-        try:
-            meta.state = self._opensim.State(model.getWorkingState())
-        except RuntimeError:
-            meta.state = self._opensim.State(meta.state)
-        data = None if motion is None else MotionData(meta, self._table(motion))
-        return _export_tables(meta, data, directory, path_map=path_map, overwrite=overwrite)
+            composite = self.framework.merge_to_model()
+            geometry_directories = tuple(
+                directory
+                for model in self.framework.values()
+                for directory in getattr(model, "geometry_directories", ())
+            )
+            composite_path = self._package_model(
+                composite,
+                root / "composite",
+                composite,
+                used_names,
+                root,
+                geometry_directories,
+            )
+            composite_trajectory = self.framework.states_trajectory
+            composite_trajectory_path = None
+            if composite_trajectory.getSize():
+                trajectory_path = root / "trajectories" / "composite.ostates"
+                trajectory_path.parent.mkdir(parents=True, exist_ok=True)
+                composite_trajectory.exportToStatesDocument(composite).serialize(
+                    str(trajectory_path)
+                )
+                composite_trajectory_path = str(
+                    trajectory_path.relative_to(root)
+                ).replace("\\", "/")
+
+            manifest = {
+                "format": "opensim-framework",
+                "version": 1,
+                "members": members,
+                "couplings": self._coupling_manifest(),
+                "composite_model": composite_path,
+                "composite_trajectory": composite_trajectory_path,
+                "state_times": list(self.framework.state_times),
+            }
+            (root / "manifest.json").write_text(
+                json.dumps(manifest, indent=2, allow_nan=False),
+                encoding="utf-8",
+            )
+            temporary_archive = destination.with_name(
+                f".{destination.name}.{os.getpid()}.tmp"
+            )
+            try:
+                with zipfile.ZipFile(
+                    temporary_archive, "w", compression=zipfile.ZIP_DEFLATED
+                ) as archive:
+                    for file in root.rglob("*"):
+                        if file.is_file():
+                            archive.write(file, file.relative_to(root).as_posix())
+                if destination.exists() and not overwrite:
+                    raise FileExistsError(destination)
+                os.replace(temporary_archive, destination)
+            finally:
+                if temporary_archive.exists():
+                    temporary_archive.unlink()
+        return destination
+
+    def prepare_player_export(self) -> None:
+        """Prebuild the reusable runtime for future :meth:`save_player` calls."""
+        with _prepare_player_runtime():
+            pass

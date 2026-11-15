@@ -303,7 +303,7 @@ def test_optimization_returns_independent_framework_and_respects_screen_bounds(
     )
     eye, gaze_rotation = optimized._eye_center_and_line_of_sight_rotation()
     gaze = gaze_rotation[:, 0]
-    screen_corners = optimized.equipment.screen.corners(
+    screen_corners = optimized.equipment.screen_panel_corners(
         (
             optimized.equipment.screen_horizontal_offset_mm,
             optimized.equipment.screen_vertical_offset_mm,
@@ -358,10 +358,9 @@ def test_inplace_optimization_changes_only_the_screen(screen_ready_manager):
 
 def test_screen_pose_parameters_accept_fixed_values(screen_ready_manager):
     screen_ready_manager.optimize_screen_position(inplace=True)
-    original = screen_ready_manager.equipment.screen
-    horizontal = original.horizontal_offset_mm
-    vertical = original.vertical_offset_mm
-    inclination = original.inclination_deg
+    horizontal, vertical, inclination = (
+        screen_ready_manager.equipment.screen_position
+    )
 
     optimized = screen_ready_manager.optimize_screen_position(
         screen_horizontal_offset_mm=horizontal,
@@ -373,31 +372,30 @@ def test_screen_pose_parameters_accept_fixed_values(screen_ready_manager):
     assert optimized.equipment.screen_vertical_offset_mm == pytest.approx(vertical)
     assert optimized.equipment.screen_inclination_deg == pytest.approx(inclination)
     assert screen_ready_manager.equipment.screen_horizontal_offset_mm == pytest.approx(
-        original.horizontal_offset_mm
+        horizontal
     )
 
 
 def test_screen_offset_range_expands_equipment_limit(screen_ready_manager):
     screen_ready_manager.optimize_screen_position(inplace=True)
-    screen = screen_ready_manager.equipment.screen
-    horizontal_limit = screen.horizontal_offset_min_mm - 0.1
+    horizontal_limit = screen_ready_manager.equipment.screen_offset_minima[0] - 0.1
 
     with pytest.warns(UserWarning, match="expanding the limits"):
         optimized = screen_ready_manager.optimize_screen_position(
             screen_horizontal_offset_mm=(
                 horizontal_limit,
-                screen.horizontal_offset_mm,
+                screen_ready_manager.equipment.screen_horizontal_offset_mm,
             ),
         )
 
-    assert optimized.equipment.screen.horizontal_offset_min_mm == pytest.approx(
+    assert optimized.equipment.screen_offset_minima[0] == pytest.approx(
         horizontal_limit
     )
     assert optimized.equipment.screen_horizontal_offset_mm >= horizontal_limit
 
 
 def test_optimize_user_position_fixes_float_and_expands_coordinate_limits(manager):
-    original_screen = manager.equipment.screen
+    original_screen_position = manager.equipment.screen_position
     target_degrees = -41.0
     state = manager._user_state()
     arm_flexion_degrees = math.degrees(
@@ -427,13 +425,13 @@ def test_optimize_user_position_fixes_float_and_expands_coordinate_limits(manage
         optimized._user_state()
     ) == pytest.approx(np.deg2rad(trunk_flexion_degrees))
     assert optimized.equipment.screen_horizontal_offset_mm == pytest.approx(
-        original_screen.horizontal_offset_mm
+        original_screen_position[0]
     )
     assert optimized.equipment.screen_vertical_offset_mm == pytest.approx(
-        original_screen.vertical_offset_mm
+        original_screen_position[1]
     )
     assert optimized.equipment.screen_inclination_deg == pytest.approx(
-        original_screen.inclination_deg
+        original_screen_position[2]
     )
     assert manager.user.getCoordinateSet().get(
         "neck_base_flexion"

@@ -15,10 +15,10 @@ from opensim_frameworks.bodies import (
     mass_properties,
 )
 from opensim_frameworks.models.equipment import Equipment, Screen
-from opensim_frameworks.models.equipment.bikes.bike.fitting import (
+from opensim_frameworks.models.equipment.bike.fitting import (
     _horn_local,
 )
-from opensim_frameworks.models.equipment.bikes.bike.bike import horn_direction
+from opensim_frameworks.models.equipment.bike.bike import horn_direction
 
 
 def _forefoot_midpoint_pedal_coordinates_mm(bike, user, side):
@@ -123,12 +123,10 @@ def test_bike_is_equipment_and_exposes_screen_geometry():
     assert isinstance(bike, Equipment)
     assert bike.has_screen()
     assert isinstance(bike.screen, Screen)
-    assert bike.screen.width_mm == pytest.approx(bike.screen_width_mm)
-    assert bike.screen.height_mm == pytest.approx(bike.screen_height_mm)
-    assert bike.screen.base_position_m == pytest.approx(bike._screen_base_m)
-    assert bike.screen.center_position_m == pytest.approx(bike._screen_center_m)
-    assert bike.screen.corners() == pytest.approx(
-        bike.screen.corners(
+    assert bike.screen.width_mm == pytest.approx(bike._screen_width_mm)
+    assert bike.screen.height_mm == pytest.approx(bike._screen_height_mm)
+    assert bike.screen_panel_corners() == pytest.approx(
+        bike.screen_panel_corners(
             (
                 bike.screen_horizontal_offset_mm,
                 bike.screen_vertical_offset_mm,
@@ -266,7 +264,7 @@ def test_bike_screen_geometry_and_center_follow_configured_offsets():
     screen_position = screen.getPositionInGround(bike.state)
     assert np.allclose(
         [screen_position.get(i) * 1000.0 for i in range(3)],
-        bike.screen_base,
+        bike.screen_center,
     )
     screen_rotation = screen.getTransformInGround(bike.state).R()
     panel_up = np.array([screen_rotation.get(i, 1) for i in range(3)])

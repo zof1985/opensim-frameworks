@@ -18,7 +18,7 @@ import numpy as np
 
 from .opensim import import_opensim, rotation_to_numpy, vec3_to_numpy
 
-__all__ = ["KinematicChain"]
+__all__ = ["KinematicChain", "marker_position_array"]
 
 _IDENTITY = np.eye(3)
 
@@ -168,7 +168,60 @@ class KinematicChain:
     """
 
     def __init__(self, model: Any, root: str, end: str) -> None:
+        candidate = self._build(model, root, end)
         self._model = model
+        self._root = root
+        self._end = end
+        self.body_names, self._joints, self.coordinate_names = candidate
+
+    @property
+    def model(self) -> Any:
+        """Return the OpenSim model whose kinematics are represented."""
+        return self._model
+
+    @model.setter
+    def model(self, value: Any) -> None:
+        self.set_model(value)
+
+    def set_model(self, value: Any) -> None:
+        """Set the model and rebuild the chain after validating its endpoints."""
+        candidate = self._build(value, self.root, self.end)
+        self._model = value
+        self.body_names, self._joints, self.coordinate_names = candidate
+
+    @property
+    def root(self) -> str:
+        """Return the root body name."""
+        return self._root
+
+    @root.setter
+    def root(self, value: str) -> None:
+        self.set_root(value)
+
+    def set_root(self, value: str) -> None:
+        """Set the root body and rebuild the chain."""
+        candidate = self._build(self.model, value, self.end)
+        self._root = value
+        self.body_names, self._joints, self.coordinate_names = candidate
+
+    @property
+    def end(self) -> str:
+        """Return the final body name."""
+        return self._end
+
+    @end.setter
+    def end(self, value: str) -> None:
+        self.set_end(value)
+
+    def set_end(self, value: str) -> None:
+        """Set the final body and rebuild the chain."""
+        candidate = self._build(self.model, self.root, value)
+        self._end = value
+        self.body_names, self._joints, self.coordinate_names = candidate
+
+    def _build(
+        self, model: Any, root: str, end: str
+    ) -> tuple[tuple[str, ...], list[_Joint], tuple[str, ...]]:
         bodies = model.getBodySet()
         for name in (root, end):
             if not bodies.contains(name):
@@ -190,11 +243,10 @@ class KinematicChain:
             name = joint.getParentFrame().findBaseFrame().getName()
         path.reverse()
 
-        self.body_names = (root, *[j.getChildFrame().findBaseFrame().getName() for j in path])
-        self.coordinate_names: tuple[str, ...] = ()
+        body_names = (root, *[j.getChildFrame().findBaseFrame().getName() for j in path])
         names: list[str] = []
-        self._joints = [self._read_joint(joint, names) for joint in path]
-        self.coordinate_names = tuple(names)
+        joints = [self._read_joint(joint, names) for joint in path]
+        return body_names, joints, tuple(names)
 
     def _coordinate_index(self, names: list[str], coordinate: str) -> int:
         """Return the column of a coordinate, adding it if it is new."""
@@ -358,3 +410,21 @@ class KinematicChain:
                 ),
             )
         return position_error, rotation_error
+
+
+def marker_position_array(marker: Any, state: Any) -> np.ndarray:
+    """Return a marker's position in Ground as a NumPy array.
+
+    Parameters
+    ----------
+    marker : opensim.Marker
+        Marker whose position is queried.
+    state : opensim.State
+        System state at which the marker position is evaluated.
+
+    Returns
+    -------
+    numpy.ndarray, shape (3,)
+        Marker position in Ground frame (metres).
+    """
+    return vec3_to_numpy(marker.getLocationInGround(state))

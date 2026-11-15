@@ -28,6 +28,7 @@ __all__ = [
     "weld_bodies",
     "read_vtp_vertices",
     "body_mass_center_array",
+    "body_transform_array",
     "get_referenced_meshes",
 ]
 
@@ -862,6 +863,31 @@ def body_mass_center_array(body: Any) -> np.ndarray:
         Mass-centre coordinates in metres.
     """
     return vec3_to_numpy(body.getMassCenter())
+
+
+def body_transform_array(body: Any, state: Any) -> np.ndarray:
+    """Return an OpenSim body's transformation matrix in Ground as a NumPy array.
+
+    Parameters
+    ----------
+    body : opensim.Body or opensim.Frame
+        Body or frame whose transformation is queried.
+    state : opensim.State
+        System state at which the transformation is evaluated.
+
+    Returns
+    -------
+    numpy.ndarray, shape (4, 4)
+        Homogeneous transformation matrix (rotation + translation) from body
+        to Ground frame.
+    """
+    transform = body.getTransformInGround(state)
+    rotation = rotation_to_numpy(transform.R())
+    position = vec3_to_numpy(transform.p())
+    matrix = np.eye(4)
+    matrix[0:3, 0:3] = rotation
+    matrix[0:3, 3] = position
+    return matrix
 
 
 def get_referenced_meshes(model: Any) -> list[tuple[Any, str]]:

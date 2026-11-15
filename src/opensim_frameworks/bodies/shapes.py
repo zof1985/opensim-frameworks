@@ -122,6 +122,31 @@ class Shape:
     orientation: Sequence[float] = (0.0, 0.0, 0.0)
     color: Sequence[float] | None = field(default=None, kw_only=True)
 
+    def set_center(self, value: Sequence[float]) -> None:
+        center = np.asarray(value, dtype=float)
+        if center.shape != (3,) or not np.all(np.isfinite(center)):
+            raise ValueError("center must contain three finite values")
+        self._center = tuple(float(component) for component in center)
+
+    def set_orientation(self, value: Sequence[float]) -> None:
+        orientation = np.asarray(value, dtype=float)
+        if orientation.shape != (3,) or not np.all(np.isfinite(orientation)):
+            raise ValueError("orientation must contain three finite values")
+        self._orientation = tuple(float(component) for component in orientation)
+
+    def set_color(self, value: Sequence[float] | None) -> None:
+        if value is None:
+            self._color = None
+            return
+        color = np.asarray(value, dtype=float)
+        if (
+            color.shape != (3,)
+            or not np.all(np.isfinite(color))
+            or np.any((color < 0.0) | (color > 1.0))
+        ):
+            raise ValueError("color must contain three finite values in [0, 1]")
+        self._color = tuple(float(component) for component in color)
+
     @property
     def volume(self) -> float:
         """Return the analytic primitive volume in cubic metres.
@@ -204,6 +229,12 @@ class Box(Shape):
 
     size: Sequence[float] = (1.0, 1.0, 1.0)
 
+    def set_size(self, value: Sequence[float]) -> None:
+        size = np.asarray(value, dtype=float)
+        if size.shape != (3,) or not np.all(np.isfinite(size)) or np.any(size <= 0):
+            raise ValueError("size must contain three positive finite values")
+        self._size = tuple(float(component) for component in size)
+
     def __post_init__(self):
         _validate(**{f"size[{i}]": v for i, v in enumerate(self.size)})
 
@@ -245,6 +276,25 @@ class Cylinder(Shape):
     radius: float = 0.5
     length: float = 1.0
     axis: str = "y"
+
+    def set_radius(self, value: float) -> None:
+        radius = float(value)
+        if not math.isfinite(radius) or radius <= 0.0:
+            raise ValueError("radius must be a positive finite value")
+        if hasattr(self, "_inner_radius") and self._inner_radius >= radius:
+            raise ValueError("inner_radius must be smaller than radius")
+        self._radius = radius
+
+    def set_length(self, value: float) -> None:
+        length = float(value)
+        if not math.isfinite(length) or length <= 0.0:
+            raise ValueError("length must be a positive finite value")
+        self._length = length
+
+    def set_axis(self, value: str) -> None:
+        if value not in _AXIS_EULER:
+            raise ValueError("axis must be 'x', 'y' or 'z'")
+        self._axis = value
 
     def __post_init__(self):
         _validate(radius=self.radius, length=self.length)
@@ -292,6 +342,16 @@ class Disk(Cylinder):
     thickness: float = 0.005
     length: float = field(init=False, default=0.005)
 
+    def set_thickness(self, value: float) -> None:
+        thickness = float(value)
+        if not math.isfinite(thickness) or thickness <= 0.0:
+            raise ValueError("thickness must be a positive finite value")
+        self._thickness = thickness
+        self._length = thickness
+
+    def set_length(self, value: float) -> None:
+        self.set_thickness(value)
+
     def __post_init__(self):
         self.length = self.thickness
         super().__post_init__()
@@ -316,6 +376,15 @@ class Tube(Cylinder):
     """
 
     inner_radius: float = 0.0
+
+    def set_inner_radius(self, value: float) -> None:
+        inner_radius = float(value)
+        if (
+            not math.isfinite(inner_radius)
+            or not 0.0 <= inner_radius < self.radius
+        ):
+            raise ValueError("inner_radius must be finite and in [0, radius)")
+        self._inner_radius = inner_radius
 
     def __post_init__(self):
         super().__post_init__()
@@ -353,6 +422,12 @@ class Sphere(Shape):
 
     radius: float = 0.5
 
+    def set_radius(self, value: float) -> None:
+        radius = float(value)
+        if not math.isfinite(radius) or radius <= 0.0:
+            raise ValueError("radius must be a positive finite value")
+        self._radius = radius
+
     def __post_init__(self):
         _validate(radius=self.radius)
 
@@ -388,6 +463,12 @@ class Ellipsoid(Shape):
 
     radii: Sequence[float] = (0.5, 0.5, 0.5)
 
+    def set_radii(self, value: Sequence[float]) -> None:
+        radii = np.asarray(value, dtype=float)
+        if radii.shape != (3,) or not np.all(np.isfinite(radii)) or np.any(radii <= 0):
+            raise ValueError("radii must contain three positive finite values")
+        self._radii = tuple(float(component) for component in radii)
+
     def __post_init__(self):
         _validate(**{f"radii[{i}]": value for i, value in enumerate(self.radii)})
 
@@ -411,6 +492,29 @@ class Ellipsoid(Shape):
                 rx**2 + ry**2,
             ]
         ) * mass / 5
+
+
+def _install_parameter_property(model_class: type, name: str) -> None:
+    def getter(instance):
+        return getattr(instance, f"_{name}")
+
+    def setter(instance, value):
+        getattr(instance, f"set_{name}")(value)
+
+    setattr(model_class, name, property(getter, setter))
+
+
+for _class, _parameters in (
+    (Shape, ("center", "orientation", "color")),
+    (Box, ("size",)),
+    (Cylinder, ("radius", "length", "axis")),
+    (Disk, ("thickness", "length")),
+    (Tube, ("inner_radius",)),
+    (Sphere, ("radius",)),
+    (Ellipsoid, ("radii",)),
+):
+    for _parameter in _parameters:
+        _install_parameter_property(_class, _parameter)
 
     def _geometry(self):
         return _mesh("unit_sphere.vtp", tuple(2 * radius for radius in self.radii))

@@ -18,12 +18,14 @@ from __future__ import annotations
 
 import math
 import shutil
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
 
 from ...bodies.shapes import MESHES_DIR
+from ..model import FrameworkModel
 from ...utils.opensim import (
     extend_coordinate_range,
     get_referenced_meshes,
@@ -31,7 +33,7 @@ from ...utils.opensim import (
     read_vtp_vertices,
     register_geometry_search_path,
 )
-from .data import DEFAULT_DATASET, resolve_reference
+from .data import AnthropometricReference, DEFAULT_DATASET, resolve_reference
 from .fingers import _FingerMixin
 from .grasp import _GraspMixin
 from .hand import MOVING_HAND_SEGMENTS, add_articulated_hands
@@ -89,7 +91,7 @@ def _remove_segment_mass(body: Any, mass: float, center: np.ndarray) -> None:
 
 
 class User(
-    opensim.Model,
+    FrameworkModel,
     _MeasurementMixin,
     _PostureMixin,
     _JointCenterMixin,
@@ -228,7 +230,13 @@ class User(
         """
         if mass_kg is not None:
             _validate_mass_kg(mass_kg)
-        self._reference = resolve_reference(gender, height_cm, percentile, dataset)
+        self._requested_gender = gender
+        self._requested_height_cm = height_cm
+        self._requested_percentile = percentile
+        self._dataset = Path(dataset).expanduser().resolve()
+        self._reference = resolve_reference(
+            gender, height_cm, percentile, self._dataset
+        )
         self.opensim = opensim
         self._geometry_dirs: list[Path] = []
         self._side_measurements: dict[str, float] = {}
@@ -238,7 +246,7 @@ class User(
         opensim.Model.__init__(self, str(DEFAULT_MODEL_PATH))
         self._unlock_coordinates()
         self._baseline = resolve_reference(
-            self.gender, percentile=50.0, dataset=dataset
+            self.gender, percentile=50.0, dataset=self._dataset
         )
         self._add_anatomical_bodies()
         # Insert clavicle and scapula between torso and humerus.
@@ -274,6 +282,149 @@ class User(
         self._rescale_total_mass(target_mass_kg)
         self._mass_kg = target_mass_kg
         self._place_feet_on_ground()
+
+    def get_config(self) -> dict[str, Any]:
+        """Return the Python-side anthropometric configuration.
+
+        Returns
+        -------
+        dict[str, Any]
+            Resolved references, side-specific overrides, and calibrated mass.
+            Model geometry and state are serialized separately.
+        """
+        return {
+            "reference": {
+                "gender": self._reference.gender,
+                "percentile": float(self._reference.percentile),
+                "values": {
+                    name: float(value)
+                    for name, value in self._reference.values.items()
+                },
+            },
+            "baseline": {
+                "gender": self._baseline.gender,
+                "percentile": float(self._baseline.percentile),
+                "values": {
+                    name: float(value)
+                    for name, value in self._baseline.values.items()
+                },
+            },
+            "side_measurements": {
+                name: float(value)
+                for name, value in self._side_measurements.items()
+            },
+            "mass_kg": float(self._mass_kg),
+            "requested_gender": self._requested_gender,
+            "requested_height_cm": self._requested_height_cm,
+            "requested_percentile": float(self._requested_percentile),
+            "dataset": str(self._dataset),
+        }
+
+    def set_config(self, config: Mapping[str, Any]) -> None:
+        """Restore the Python-side anthropometric configuration.
+
+        Parameters
+        ----------
+        config : collections.abc.Mapping
+            Configuration returned by :meth:`get_config`.
+
+        Raises
+        ------
+        TypeError
+            If the configuration or its reference records have invalid types.
+        ValueError
+            If required fields are missing or contain non-finite values.
+        """
+        required = {"reference", "baseline", "side_measurements", "mass_kg"}
+        optional = {
+            "requested_gender",
+            "requested_height_cm",
+            "requested_percentile",
+            "dataset",
+        }
+        if not isinstance(config, Mapping):
+            raise TypeError("config must be a mapping")
+        if not required <= set(config) or set(config) - required - optional:
+            raise ValueError("user config must contain the complete user schema")
+
+        references: dict[str, AnthropometricReference] = {}
+        for key in ("reference", "baseline"):
+            record = config[key]
+            if not isinstance(record, Mapping) or set(record) != {
+                "gender",
+                "percentile",
+                "values",
+            }:
+                raise ValueError(f"{key} must contain gender, percentile, and values")
+            values = record["values"]
+            if not isinstance(values, Mapping):
+                raise TypeError(f"{key}.values must be a mapping")
+            normalized_values = {
+                str(name): float(value) for name, value in values.items()
+            }
+            if any(not math.isfinite(value) for value in normalized_values.values()):
+                raise ValueError(f"{key}.values must contain only finite numbers")
+            percentile = float(record["percentile"])
+            if not math.isfinite(percentile):
+                raise ValueError(f"{key}.percentile must be finite")
+            gender = record["gender"]
+            if gender not in {"M", "F"}:
+                raise ValueError(f"{key}.gender must be 'M' or 'F'")
+            references[key] = AnthropometricReference(
+                gender, percentile, normalized_values
+            )
+
+        side_measurements = config["side_measurements"]
+        if not isinstance(side_measurements, Mapping):
+            raise TypeError("side_measurements must be a mapping")
+        normalized_side_measurements = {
+            str(name): float(value) for name, value in side_measurements.items()
+        }
+        if any(
+            not math.isfinite(value)
+            for value in normalized_side_measurements.values()
+        ):
+            raise ValueError("side_measurements must contain only finite numbers")
+        mass_kg = float(config["mass_kg"])
+        _validate_mass_kg(mass_kg)
+
+        self._reference = references["reference"]
+        self._baseline = references["baseline"]
+        self._side_measurements = normalized_side_measurements
+        self._mass_kg = mass_kg
+        self._requested_gender = config.get(
+            "requested_gender", self._reference.gender
+        )
+        if self._requested_gender not in {"M", "F"}:
+            raise ValueError("requested_gender must be 'M' or 'F'")
+        self._requested_height_cm = config.get("requested_height_cm")
+        if self._requested_height_cm is not None:
+            self._requested_height_cm = float(self._requested_height_cm)
+            if (
+                not math.isfinite(self._requested_height_cm)
+                or self._requested_height_cm <= 0.0
+            ):
+                raise ValueError("requested_height_cm must be positive and finite")
+        self._requested_percentile = float(
+            config.get("requested_percentile", self._reference.percentile)
+        )
+        if not math.isfinite(self._requested_percentile):
+            raise ValueError("requested_percentile must be finite")
+        dataset = config.get("dataset", DEFAULT_DATASET)
+        if not isinstance(dataset, (str, Path)):
+            raise TypeError("dataset must be a string or pathlib.Path")
+        self._dataset = Path(dataset).expanduser().resolve()
+        self.opensim = opensim
+        self._visualizer = None
+        asset_directory = getattr(self, "_osf_assets_directory", None)
+        self._geometry_dirs = (
+            [
+                Path(asset_directory).resolve(),
+                (Path(asset_directory).resolve() / "Geometry"),
+            ]
+            if asset_directory is not None
+            else []
+        )
 
     def _place_feet_on_ground(self) -> None:
         """Translate the scaled model so both foot meshes touch ground."""
@@ -568,31 +719,6 @@ class User(
         self._sync_coordinate_defaults()
         self.state = self.initSystem()
 
-    def add_geometry_directory(self, directory: str | Path) -> None:
-        """Register a directory containing geometry files for this model.
-
-        Parameters
-        ----------
-        directory : str or pathlib.Path
-            Directory to resolve and register with OpenSim's geometry search
-            path.
-        """
-        path = Path(directory).expanduser().resolve()
-        register_geometry_search_path(self.opensim, path)
-        self._geometry_dirs.append(path)
-
-    @property
-    def geometry_directories(self) -> tuple[Path, ...]:
-        """Return the geometry directories registered for this user.
-
-        Returns
-        -------
-        tuple of pathlib.Path
-            Resolved directories registered for mesh lookup, in registration
-            order.
-        """
-        return tuple(self._geometry_dirs)
-
     @property
     def visualizer(self) -> Any | None:
         """Return the active VTK visualizer, if one is displaying this user.
@@ -627,9 +753,11 @@ class User(
         PlayerWindow
             Handle used to inspect playback state or close the viewer.
         """
-        from ...viewer import VTKViewer
+        from ...viewer import FrameworkViewer
 
-        return VTKViewer().show(self, motion, loop=loop, fps=fps)
+        return FrameworkViewer(self, sampling_frequency_hz=fps).show(
+            motion, loop=loop
+        )
 
     def to_osim(
         self,

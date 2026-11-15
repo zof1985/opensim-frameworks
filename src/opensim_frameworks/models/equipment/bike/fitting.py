@@ -9,9 +9,8 @@ from typing import Any
 import numpy as np
 from scipy.optimize import least_squares, minimize_scalar
 
-from .....bodies.shapes import matrix_to_euler_xyz
-from .....framework import Framework
-from .....utils.opensim import (
+from ....bodies.shapes import matrix_to_euler_xyz
+from ....utils.opensim import (
     import_opensim,
     numpy_to_vec3,
     rotation_to_numpy,
@@ -847,6 +846,8 @@ def fit_user(
     user.reinitialize()
     bike.finalizeConnections()
     bike.reset_state()
+
+    from .....framework import Framework
 
     framework = Framework(user=user, bike=bike)
     for side, name in (("r", "right"), ("l", "left")):

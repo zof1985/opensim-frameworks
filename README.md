@@ -17,7 +17,7 @@ tools.
   using material densities and colours when available.
 - **`Framework`**: named container for separate OpenSim models, with composite
   snapshots, couplings, and tools for simulation or standalone model creation.
-- **Visualization**: `VTKViewer` and `VTKVisualizer` display models. The
+- **Visualization**: `FrameworkViewer` and `VTKVisualizer` display models. The
   interactive player supports `.mot` and `.sto` motions; export tools save SVG
   snapshots and MP4 animations.
 - **Portable viewer**: export a self-contained Windows `.exe` player with a
@@ -33,21 +33,25 @@ src/opensim_frameworks/
 │   ├── user/       User, ANSUR II references, scaling, and anatomical assets
 │   └── equipment/
 │       ├── equipment.py    Equipment, Screen, and STEP import
-│       └── bikes/
-│           └── bike/       Parametric Bike and kinematic fitting
+│       └── bike/           Parametric Bike and kinematic fitting
 ├── bodies/         Geometric primitives and OpenSim body builders
 ├── framework/      Model composition and couplings
 ├── viewer/         VTK scene, player, off-screen animation, and SVG export
 └── utils/
     ├── opensim.py    OpenSim, frame, and geometry utilities
+    ├── geometry.py   Point clouds, mesh transforms, and line/surface geometry
     ├── step.py       STEP parsing, tessellation, and tree utilities
     └── constants.py Shared package constants
 ```
 
+The public `opensim_frameworks` namespace exports the geometry helpers,
+including cylinder fitting, line/plane projections and distances, and
+transformation of attached mesh vertices into Ground coordinates.
+
 `User` and `Bike` are native OpenSim models. `Framework` keeps its members as
 separate models and builds a composite snapshot when simulation, coupling, or
 visualization is needed. Framework couplings belong to the snapshot and do not
-modify the source models. `VTKViewer` is the public facade for models and
+modify the source models. `FrameworkViewer` is the public facade for models and
 frameworks; `VTKVisualizer` manages the VTK scene, and the interactive player
 provides playback controls.
 
@@ -97,7 +101,7 @@ package. `Bike` uses bundled primitives and meshes.
 ```python
 from pathlib import Path
 
-from opensim_frameworks import Bike, VTKViewer
+from opensim_frameworks import Bike, FrameworkViewer
 
 # Create and fit the bike to the reference rider.
 bike = Bike()
@@ -107,8 +111,8 @@ user = framework["user"]
 print(user.height_cm, user.mass_kg)
 print(bike.screen_center)  # World coordinates in mm.
 
-viewer = VTKViewer()
-viewer.save_snapshot(framework, path=Path("output") / "bike_user.svg")
+viewer = FrameworkViewer(framework)
+viewer.save_snapshot(path=Path("output") / "bike_user.svg")
 ```
 
 If no user is passed to `fit_user()`, the method creates a male reference user
@@ -701,14 +705,12 @@ containing an `opensim.FreeJoint`.
 ## Visualization and export
 
 ```python
-from opensim_frameworks import VTKViewer
+from opensim_frameworks import FrameworkViewer
 
-viewer = VTKViewer()
-window = viewer.show(framework, motion="motion.sto", loop=True, fps=30.0)
+viewer = FrameworkViewer(framework, sampling_frequency_hz=30.0)
+window = viewer.show(loop=True)
 viewer.save_snapshot(
-    framework,
     path="output/pose.svg",
-    motion="motion.sto",
     time_s=1.5,
     camera_position=(2.0, 1.5, 0.0),
     camera_focal_point=(0.0, 1.0, 0.0),
@@ -721,9 +723,7 @@ viewer.save_snapshot(
     show_vision_cone=True,
 )
 viewer.save_animation(
-    framework,
     "output/motion.mp4",
-    motion="motion.sto",
     camera_position=(2.0, 1.5, 0.0),
     camera_focal_point=(0.0, 1.0, 0.0),
     camera_view_up=(0.0, 1.0, 0.0),
@@ -736,23 +736,23 @@ viewer.save_animation(
 )
 ```
 
-`show()` opens the interactive viewer and returns a playback-control window.
-It supports OpenSim models and `Framework` objects; a framework is rendered
-as a composite snapshot. Motion tables can be supplied as `.mot`/`.sto` paths
-or as an `opensim.TimeSeriesTable` with at least two samples. The window
-provides playback, stop, seek, and repeat controls; preset camera views; and
-visibility toggles for ground, muscles, markers, XYZ axes, the visual cone,
-and reachability regions. Unavailable overlay controls are disabled when a
-model does not contain those overlays.
+`FrameworkViewer` accepts a `Framework`, `FrameworkModel`, or
+`opensim.Model`; internally it always works with a `Framework`. A plain
+OpenSim model can be accompanied by an `opensim.StatesTrajectory`. `show()`
+opens the interactive viewer and returns a playback-control window. A
+framework with recorded states is interpolated at
+`sampling_frequency_hz`; a static framework has playback disabled. The
+window provides playback, stop, seek, and repeat controls; preset camera
+views; and visibility toggles for ground, muscles, markers, XYZ axes, the
+visual cone, and reachability regions.
 
-`save_snapshot()` exports an **SVG** or **PNG** image without opening a
-window, based on the destination extension. For PNG output, `dpi` sets the
-DPI recorded in the metadata (300 by default) and does not change pixel
-dimensions; use `size` to configure those dimensions. `frame` selects a row
-from a motion table and `time_s` interpolates the pose at the requested time.
-Without a motion table, the current pose is used; if both are supplied,
-`frame` takes precedence over `time_s`. Export does not modify the source
-model pose.
+`save_snapshot(path=...)` exports an **SVG** or **PNG** image without opening
+a window, based on the destination extension. For PNG output, `dpi` sets the
+DPI recorded in the metadata (300 by default) and `size` configures pixel
+dimensions. Select a frame with `frame` or a time with `time_s`; times must
+match a recorded state or a sample at `sampling_frequency_hz`, and are
+interpolated with a cubic spline. If neither is supplied, the first available
+state is used. Export does not modify the source models.
 
 `camera_position`, `camera_focal_point`, and `camera_view_up` configure the
 camera and focal point in world coordinates (metres). If omitted, the camera
@@ -761,47 +761,24 @@ is fitted automatically. The Boolean options `show_ground`, `show_axes`,
 control the ground grid, XYZ axes, muscle paths, markers, and overlays; they
 are all enabled by default. Other image extensions are not supported.
 
-`save_animation()` exports an off-screen **MP4** and restores the model's
-coordinate values after rendering. It accepts the same camera and visibility
-options as `save_snapshot()`. `size` configures frame dimensions, which must
-be positive even integers. The frame rate is derived from the motion time
-interval, and the motion is sampled uniformly. Columns matching model
-coordinates are applied, including `/coordinate/value` labels in a states
-table. The top-level `save_animation(model, table, path, ...)` function also
-accepts an OpenSim model, a table, or a motion path. `VTKViewer.save_animation()`
-additionally accepts a `Framework`. If any camera option is supplied, omitted
-vectors retain their current automatic values. `User.show()` and
+`save_animation(path=...)` exports the framework's recorded trajectory as an
+off-screen **MP4** at the viewer's sampling frequency. At least two recorded
+states are required. It accepts the same camera and visibility options as
+`save_snapshot()`; `size` must contain positive even frame dimensions. The
+sampling frequency is configurable through the viewer's
+`sampling_frequency_hz` property. `save_player(path=...)` builds a
+self-contained Windows player and retains the `clean` option for rebuilding
+its cached runtime. `save_framework(path=...)` writes an `.osf` archive with
+member models, configurations, couplings, trajectories, and geometry assets.
+All save methods accept `overwrite=True` by default. `User.show()` and
 `Framework.show()` also provide a shortcut to open the viewer.
 
-### Export marker and joint tables (xlsx)
-
-```python
-files = viewer.save_tables(framework, "output/tables", motion="motion.sto")
-files = framework.save_tables("output/tables", motion="motion.sto", overwrite=True)
-```
-
-`save_tables()` (also `Framework.save_tables()`, like `show()`) writes
-`.xlsx` files without opening a window and returns the list of files. The
-viewer's Export window has the same command (the table button): it asks for a
-directory, confirms before replacing existing files and restores the pose that
-was shown. A `Framework` gives one `<member>.xlsx` per member model, with the
-members' original marker and coordinate names (not the prefixed composite
-ones); a single model gives one file named after the model. Each file has two
-sheets, with one row per row of the motion table (a single row at time 0
-without a motion) and a first column `time [s]`:
-
-- `markers`: `<marker>.X [m]`, `.Y [m]`, `.Z [m]`, the position in the Ground
-  frame, in metres.
-- `joints`: one column per coordinate, `<name> [deg]` for rotational and
-  `<name> [m]` for translational coordinates, locked coordinates included.
-
-The motion is applied as the viewer does: columns naming an unlocked
-coordinate are set (radians/metres internally, `inDegrees` honoured), other
-coordinates keep their current value, and the model is realized once per row.
-With `overwrite=False` (default) `FileExistsError` is raised before writing
-anything if a target file exists. Requires `openpyxl>=3.1` (a package
-dependency). The lower-level function is
-`opensim_frameworks.viewer.export.export_tables_to_xlsx()`.
+`equipment.show_motion(duration=5.0, fps=30.0)` opens a looping viewer and
+waits until it closes. It sweeps every independently movable coordinate
+through its finite range and back, and samples dependent coordinates from
+the model constraints. The animation uses a copy, so the equipment's state
+and coordinate locks are unchanged; prescribed motions are disabled only
+on the copy so their coordinates can also be swept.
 
 ## Tests
 
@@ -819,7 +796,7 @@ the Python test framework.
 ## Public API
 
 The top-level `opensim_frameworks` namespace exposes `User`, `Bike`,
-`IRON_DENSITY_KG_M3`, `Framework`, `save_animation`, `VTKViewer`,
+`IRON_DENSITY_KG_M3`, `Framework`, `FrameworkViewer`,
 `VTKVisualizer`, `MotionData`, `MotionPlayer`, `PlayerWindow`, `DEFAULT_SIZE`,
 and `VIEW_NAMES`.
 

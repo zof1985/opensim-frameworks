@@ -3,14 +3,108 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from opensim_frameworks.utils.geometry import enclosing_capsule, segment_pair_distance
+from opensim_frameworks import enclosing_cylinder as public_enclosing_cylinder
+from opensim_frameworks.utils.geometry import (
+    enclosing_capsule,
+    enclosing_cylinder,
+    enclosing_parallelepiped,
+    fit_cylinder,
+    fit_parallelepiped,
+    fit_cylinder,
+    get_angles_between_lines,
+    get_distance_to_axis,
+    get_distance_to_mesh,
+    get_distance_to_plane,
+    get_ls_line,
+    get_plane_from_axis_and_point,
+    get_projection_point_on_axis,
+    get_projection_point_on_plane,
+    segment_pair_distance,
+)
 
 
 def test_geometry_module_wildcard_exports():
     """Export only the declared geometry helpers."""
     namespace = {}
     exec("from opensim_frameworks.utils.geometry import *", namespace)
-    assert set(namespace) == {"__builtins__", "enclosing_capsule", "segment_pair_distance"}
+    assert set(namespace) == {
+        "__builtins__",
+        "enclosing_capsule",
+        "segment_pair_distance",
+        "get_mesh_vertices_in_ground",
+        "enclosing_parallelepiped",
+        "fit_parallelepiped",
+        "enclosing_cylinder",
+        "fit_cylinder",
+        "get_plane_from_axis_and_point",
+        "get_projection_point_on_plane",
+        "get_projection_point_on_axis",
+        "get_distance_to_plane",
+        "get_distance_to_axis",
+        "get_distance_to_mesh",
+        "get_ls_line",
+        "get_angles_between_lines",
+    }
+    assert public_enclosing_cylinder is enclosing_cylinder
+    assert fit_cylinder is enclosing_cylinder
+    assert fit_parallelepiped is enclosing_parallelepiped
+
+
+def test_enclosing_cylinder_and_distance_to_mesh():
+    angles = np.linspace(0, 2 * np.pi, 24, endpoint=False)
+    positions = np.linspace(-1.0, 1.0, 9)
+    points = np.array(
+        [[x, 0.25 * np.cos(angle), 0.25 * np.sin(angle)] for x in positions for angle in angles]
+    )
+
+    fit = enclosing_cylinder(points)
+    axis, radius, endpoint_min, endpoint_max = fit
+
+    assert radius == pytest.approx(0.25, abs=1e-6)
+    assert abs((endpoint_max - endpoint_min) @ axis[3:]) == pytest.approx(
+        2.0, abs=1e-6
+    )
+    assert get_distance_to_mesh([0.0, 0.35, 0.0], points, cylinder_fit=fit) == pytest.approx(
+        0.1, abs=1e-6
+    )
+
+
+def test_enclosing_cylinder_contains_every_vertex():
+    points = np.array(
+        [
+            [-2.0, -0.5, 0.0],
+            [-1.0, 0.7, 0.2],
+            [0.0, -0.4, 0.8],
+            [1.0, 0.6, -0.3],
+            [2.0, -0.2, -0.7],
+        ]
+    )
+    axis, radius, endpoint_min, endpoint_max = enclosing_cylinder(points)
+    direction = axis[3:]
+    axial = (points - axis[:3]) @ direction
+    radial = points - axis[:3] - np.outer(axial, direction)
+    endpoint_limits = (np.array([endpoint_min, endpoint_max]) - axis[:3]) @ direction
+
+    assert np.max(np.linalg.norm(radial, axis=1)) <= radius + 1e-12
+    assert axial.min() >= endpoint_limits.min() - 1e-12
+    assert axial.max() <= endpoint_limits.max() + 1e-12
+
+
+def test_line_and_plane_projections_distances_and_angles():
+    line = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0])
+    plane = get_plane_from_axis_and_point(line, [0.0, 1.0, 0.0])
+
+    np.testing.assert_allclose(get_projection_point_on_axis([2, 3, 0], line), [2, 0, 0])
+    np.testing.assert_allclose(
+        get_projection_point_on_plane([1, 2, 4], plane), [1, 2, 0]
+    )
+    assert get_distance_to_axis(line, [2, 3, 0]) == pytest.approx(3.0)
+    assert get_distance_to_plane(plane, [1, 2, 4]) == pytest.approx(4.0)
+
+    fitted_line = get_ls_line([0, 0, 0], [1, 0, 0], [2, 0, 0])
+    target_line = np.array([0.0, 0.0, 0.0, 0.0, 1.0, 0.0])
+    angles = get_angles_between_lines(fitted_line, target_line)
+    assert angles[2] == pytest.approx(90.0)
 
 
 def test_enclosing_capsule_recovers_a_known_cylinder_of_points():

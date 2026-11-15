@@ -6,17 +6,17 @@ import pytest
 
 opensim = pytest.importorskip("opensim")
 
-from opensim_frameworks import Framework
+from opensim_frameworks import Framework, FrameworkModel, row_to_state, state_to_row
 
 
 def make_model(name: str = "model"):
-    model = opensim.Model()
+    model = FrameworkModel()
     model.setName(name)
     return model
 
 
 def make_single_body_model() -> opensim.Model:
-    model = opensim.Model()
+    model = FrameworkModel()
     body = opensim.Body("body", 1.0, opensim.Vec3(0), opensim.Inertia(1))
     model.addBody(body)
     model.addJoint(
@@ -35,7 +35,7 @@ def make_single_body_model() -> opensim.Model:
 
 
 def make_pin_model() -> opensim.Model:
-    model = opensim.Model()
+    model = FrameworkModel()
     body = opensim.Body("body", 1.0, opensim.Vec3(0), opensim.Inertia(1))
     model.addBody(body)
     model.addJoint(
@@ -78,7 +78,7 @@ def test_framework_accepts_assignment_add_and_attribute_access():
 def test_framework_rejects_non_models_and_invalid_names():
     framework = Framework()
 
-    with pytest.raises(TypeError, match="opensim.Model"):
+    with pytest.raises(TypeError, match="FrameworkModel"):
         framework["body"] = opensim.Body("body", 1.0, opensim.Vec3(0), opensim.Inertia(1))
     with pytest.raises(TypeError, match="str"):
         framework[1] = make_model()
@@ -102,7 +102,7 @@ def test_update_is_atomic_and_validates_all_entries():
     replacement = make_model("replacement")
     invalid = opensim.Body("body", 1.0, opensim.Vec3(0), opensim.Inertia(1))
 
-    with pytest.raises(TypeError, match="opensim.Model"):
+    with pytest.raises(TypeError, match="FrameworkModel"):
         framework.update({"new": replacement, "invalid": invalid})
 
     assert list(framework) == ["existing"]
@@ -252,6 +252,7 @@ def test_forward_integrates_and_synchronizes_the_member_state():
     state = framework.forward(0.01)
 
     composite_coordinate = framework.composite.getCoordinateSet().get(0)
+    assert state.model is framework.composite
     assert state.getTime() == pytest.approx(0.01)
     assert coordinate.getValue(member.state) == pytest.approx(
         composite_coordinate.getValue(state)
@@ -260,11 +261,12 @@ def test_forward_integrates_and_synchronizes_the_member_state():
         composite_coordinate.getSpeedValue(state)
     )
     settled_state = framework.settle_under_gravity(0.01)
+    assert settled_state.model is framework.composite
     assert settled_state.getTime() == pytest.approx(0.02)
 
 
 def test_forward_rejects_free_joint_before_native_manager_integration():
-    model = opensim.Model()
+    model = FrameworkModel()
     body = opensim.Body("body", 1.0, opensim.Vec3(0), opensim.Inertia(1))
     model.addBody(body)
     model.addJoint(opensim.FreeJoint("free", model.getGround(), body))
@@ -273,3 +275,109 @@ def test_forward_rejects_free_joint_before_native_manager_integration():
 
     with pytest.raises(RuntimeError, match="opensim.FreeJoint"):
         framework.forward(0.01)
+
+
+def test_framework_state_keeps_its_originating_composite_model():
+    framework = Framework({"first": make_pin_model()})
+    state = framework.state
+    owner_id = id(state.model)
+
+    framework["second"] = make_pin_model()
+
+    assert isinstance(state, opensim.State)
+    assert id(state.model) == owner_id
+    state.model.realizePosition(state)
+
+
+def test_framework_state_row_round_trip_preserves_values_speeds_and_time():
+    framework = Framework({"arm": make_pin_model()})
+    state = framework.state
+    coordinate = framework.composite.getCoordinateSet().get(0)
+    coordinate.setValue(state, 0.75, False)
+    coordinate.setSpeedValue(state, 1.25)
+    state.setTime(0.5)
+
+    time, labels, row = state_to_row(framework)
+
+    coordinate.setValue(state, -0.25, False)
+    coordinate.setSpeedValue(state, -0.5)
+    state.setTime(0.0)
+    restored = row_to_state(framework, row, labels, time)
+
+    assert restored is framework.state
+    assert restored.model is framework.composite
+    assert restored.getTime() == pytest.approx(0.5)
+    assert coordinate.getValue(restored) == pytest.approx(0.75)
+    assert coordinate.getSpeedValue(restored) == pytest.approx(1.25)
+
+
+def test_row_to_state_reorders_columns_by_state_variable_name():
+    framework = Framework({"arm": make_pin_model()})
+    _, labels, row = state_to_row(framework)
+    reversed_row = opensim.RowVector(
+        [row[index] for index in reversed(range(row.size()))]
+    )
+
+    row_to_state(framework, reversed_row, tuple(reversed(labels)), 0.25)
+
+    assert framework.state.getTime() == pytest.approx(0.25)
+
+
+def test_row_to_state_rejects_missing_state_variable_columns():
+    framework = Framework({"arm": make_pin_model()})
+    time, labels, row = state_to_row(framework)
+    incomplete_row = opensim.RowVector(
+        [row[index] for index in range(row.size() - 1)]
+    )
+
+    with pytest.raises(ValueError, match="column_labels"):
+        row_to_state(framework, incomplete_row, labels[:-1], time)
+
+
+def test_get_motion_table_resamples_with_cubic_spline():
+    model = make_pin_model()
+    framework = Framework({"arm": model})
+    coordinate = model.getCoordinateSet().get(0)
+    for time in range(4):
+        coordinate.setValue(model.state, 0.1 * time**3, False)
+        model.realizePosition(model.state)
+        framework.record_state(float(time))
+
+    table = framework.get_motion_table(sampling_frequency_hz=2.0)
+
+    times = table.getIndependentColumn()
+    assert [times[index] for index in range(table.getNumRows())] == pytest.approx(
+        [index / 2 for index in range(7)]
+    )
+    labels = list(table.getColumnLabels())
+    value_column = next(
+        index for index, label in enumerate(labels) if label.endswith("/value")
+    )
+    values = table.getDependentColumnAtIndex(value_column)
+    assert [values[index] for index in range(table.getNumRows())] == pytest.approx(
+        [0.1 * time**3 for time in [index / 2 for index in range(7)]]
+    )
+
+    undersampled = framework.get_motion_table(sampling_frequency_hz=1.5)
+    sample_times = undersampled.getIndependentColumn()
+    assert [sample_times[index] for index in range(undersampled.getNumRows())] == pytest.approx(
+        [index / 1.5 for index in range(5)]
+    )
+
+
+@pytest.mark.parametrize(
+    "sampling_frequency_hz",
+    [0.0, -1.0, float("nan"), float("inf"), True],
+)
+def test_get_motion_table_rejects_invalid_sampling_frequency(sampling_frequency_hz):
+    with pytest.raises(ValueError, match="sampling_frequency_hz"):
+        Framework().get_motion_table(sampling_frequency_hz)
+
+
+def test_get_motion_table_rejects_single_state_trajectory():
+    model = make_pin_model()
+    framework = Framework({"arm": model})
+    framework.record_state(0.0)
+
+    with pytest.raises(ValueError, match="at least two recorded states"):
+        framework.get_motion_table(30.0)

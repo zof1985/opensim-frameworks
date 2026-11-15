@@ -16,7 +16,6 @@ dependencies = [
     "Pillow>=9",
     "imageio>=2.30",
     "imageio-ffmpeg>=0.4",
-    "openpyxl>=3.1",
     "pyinstaller>=6",
     "opensim",
     "pytest>=8",

@@ -25,6 +25,8 @@ from .animation import _ViewerModel
 from .player import MotionData
 from .visualizer import VTKVisualizer
 
+__all__ = ["save_player_executable"]
+
 _OVERLAY_MAGIC = b"OSFPLAY1"
 _DEFAULT_PLAYER_SIZE = (DEFAULT_SIZE[0] // 2, DEFAULT_SIZE[1] // 2)
 
@@ -233,14 +235,12 @@ def _make_frames(
     show_axes: bool,
     show_reachability: bool,
     show_vision_cone: bool,
-    path_map: Any,
 ) -> dict[str, Any]:
     import vtk
 
     assets = output / "assets"
     geometry_dir = assets / "geometry"
     muscle_dir = assets / "muscles"
-    tables_dir = assets / "tables"
     geometry_dir.mkdir(parents=True)
     muscle_dir.mkdir(parents=True)
 
@@ -361,9 +361,6 @@ def _make_frames(
             "focal_point": list(camera.GetFocalPoint()),
             "view_up": list(camera.GetViewUp()),
         }
-        tables = _export.export_tables_to_xlsx(
-            model, data, tables_dir, path_map=path_map, overwrite=True
-        )
         return {
             "title": model.getName() or "opensim-frameworks",
             "fps": fps,
@@ -377,7 +374,6 @@ def _make_frames(
             "muscle_actors": muscle_actors,
             "marker_actors": marker_actors,
             "frames": frames,
-            "tables": [path.name for path in tables],
             "show_ground": show_ground,
             "show_muscles": show_muscles,
             "show_markers": show_markers,
@@ -408,13 +404,12 @@ def save_player_executable(
     show_reachability: bool = True,
     show_vision_cone: bool = True,
     overwrite: bool = True,
-    path_map: Any = None,
 ) -> Path:
     """Build a self-contained Windows executable for an interactive player.
 
     OpenSim is used only while generating the data-only VTK scene. The
-    resulting executable contains the VTK geometry, per-frame transforms,
-    and precomputed XLSX exports, but does not package or import OpenSim.
+    resulting executable contains the VTK geometry and per-frame transforms,
+    but does not package or import OpenSim.
     With ``clean=True``, the model-independent PyInstaller runtime is rebuilt
     instead of reusing the compatible cached executable.
     Existing destination files are replaced by default; pass
@@ -464,7 +459,6 @@ def save_player_executable(
     except RuntimeError:
         initial_state = opensim.State(native_model.getWorkingState())
     export_model = _ViewerModel(native_model, initial_state)
-    export_model.path_map = path_map
     if motion is not None and not isinstance(motion, MotionData):
         raise TypeError("motion must be MotionData or None")
 
@@ -489,7 +483,6 @@ def save_player_executable(
             show_axes=show_axes,
             show_reachability=show_reachability,
             show_vision_cone=show_vision_cone,
-            path_map=path_map,
         )
         manifest["loop"] = loop
         manifest_path = work_dir / "assets" / "manifest.json"

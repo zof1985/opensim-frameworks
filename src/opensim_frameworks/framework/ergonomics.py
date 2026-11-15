@@ -307,10 +307,14 @@ class VisualErgonomicsFramework(Framework):
         self._validate_angle("cone_width_angle_deg", cone_width_angle_deg, 0.0, 180.0)
         self._validate_angle("cone_height_angle_deg", cone_height_angle_deg, 0.0, 89.0)
         self._validate_angle("line_of_sight_offset_deg", line_of_sight_offset_deg, -89.0, 89.0)
-        object.__setattr__(self, "cone_width_angle_deg", float(cone_width_angle_deg))
-        object.__setattr__(self, "cone_height_angle_deg", float(cone_height_angle_deg))
         object.__setattr__(
-            self, "line_of_sight_offset_deg", float(line_of_sight_offset_deg)
+            self, "_cone_width_angle_deg", float(cone_width_angle_deg)
+        )
+        object.__setattr__(
+            self, "_cone_height_angle_deg", float(cone_height_angle_deg)
+        )
+        object.__setattr__(
+            self, "_line_of_sight_offset_deg", float(line_of_sight_offset_deg)
         )
         object.__setattr__(
             self,
@@ -337,6 +341,18 @@ class VisualErgonomicsFramework(Framework):
         """
         return self["user"]
 
+    @user.setter
+    def user(self, value: opensim.Model) -> None:
+        self.set_user(value)
+
+    def set_user(self, value: opensim.Model) -> None:
+        """Replace the user model while retaining the current equipment."""
+        if not isinstance(value, _OPENSIM.Model):
+            raise TypeError("user must be an OpenSim Model")
+        self.set_models({"user": value, "equipment": self.equipment})
+        self._reachability_cache.clear()
+        self._refresh_visualization()
+
     @property
     def equipment(self) -> Equipment:
         """Return the equipment analyzed by this framework.
@@ -348,14 +364,73 @@ class VisualErgonomicsFramework(Framework):
         """
         return self["equipment"]
 
+    @equipment.setter
+    def equipment(self, value: Equipment) -> None:
+        self.set_equipment(value)
+
+    def set_equipment(self, value: Equipment) -> None:
+        """Replace the equipment model while retaining the current user."""
+        if not isinstance(value, Equipment):
+            raise TypeError("equipment must be an Equipment")
+        if not value.has_screen():
+            raise ValueError("equipment must provide a screen for visual ergonomics")
+        self.set_models({"user": self.user, "equipment": value})
+        self._reachability_cache.clear()
+        self._refresh_visualization()
+
+    @property
+    def cone_width_angle_deg(self) -> float:
+        """Return the full horizontal visual-cone angle in degrees."""
+        return self._cone_width_angle_deg
+
+    @cone_width_angle_deg.setter
+    def cone_width_angle_deg(self, value: float) -> None:
+        self.set_cone_width_angle_deg(value)
+
+    def set_cone_width_angle_deg(self, value: float) -> None:
+        """Set the full horizontal visual-cone angle."""
+        self._validate_angle("cone_width_angle_deg", value, 0.0, 180.0)
+        self._cone_width_angle_deg = float(value)
+        self._refresh_visualization()
+
+    @property
+    def cone_height_angle_deg(self) -> float:
+        """Return the full vertical visual-cone angle in degrees."""
+        return self._cone_height_angle_deg
+
+    @cone_height_angle_deg.setter
+    def cone_height_angle_deg(self, value: float) -> None:
+        self.set_cone_height_angle_deg(value)
+
+    def set_cone_height_angle_deg(self, value: float) -> None:
+        """Set the full vertical visual-cone angle."""
+        self._validate_angle("cone_height_angle_deg", value, 0.0, 89.0)
+        self._cone_height_angle_deg = float(value)
+        self._refresh_visualization()
+
+    @property
+    def line_of_sight_offset_deg(self) -> float:
+        """Return the line-of-sight offset in degrees."""
+        return self._line_of_sight_offset_deg
+
+    @line_of_sight_offset_deg.setter
+    def line_of_sight_offset_deg(self, value: float) -> None:
+        self.set_line_of_sight_offset_deg(value)
+
+    def set_line_of_sight_offset_deg(self, value: float) -> None:
+        """Set the line-of-sight offset relative to the head plane."""
+        self._validate_angle("line_of_sight_offset_deg", value, -89.0, 89.0)
+        self._line_of_sight_offset_deg = float(value)
+        self._refresh_visualization()
+
     @property
     def screen(self) -> Screen:
-        """Return the current screen description after validating availability.
+        """Return the current screen body after validating availability.
 
         Returns
         -------
         Screen
-            Current screen dimensions, mounting offsets, and world-frame pose.
+            Screen body containing its mesh geometry.
 
         Raises
         ------
@@ -444,11 +519,11 @@ class VisualErgonomicsFramework(Framework):
 
     def _screen_points(self, position: Sequence[float] | None = None) -> np.ndarray:
         candidate = None if position is None else tuple(map(float, position))
-        return self.screen.corners(candidate)
+        return self.equipment.screen_panel_corners(candidate)
 
     def _screen_samples(self, position: Sequence[float] | None = None) -> np.ndarray:
         candidate = None if position is None else tuple(map(float, position))
-        return self.screen.samples(_SCREEN_GRID_SIZE, candidate)
+        return self.equipment.screen_panel_samples(_SCREEN_GRID_SIZE, candidate)
 
     def _metrics(self, position: Sequence[float] | None = None) -> dict[str, float]:
         """Evaluate incidence, visual coverage, and reachable screen coverage.
@@ -481,7 +556,7 @@ class VisualErgonomicsFramework(Framework):
         screen = self._screen_points(position)
         screen_center = screen.mean(axis=0)
         inclination = math.radians(
-            self.screen.inclination_deg if position is None else position[2]
+            self.equipment.screen_position[2] if position is None else position[2]
         )
         normal = np.array([math.sin(inclination), -math.cos(inclination), 0.0])
         sight = screen_center - eye
@@ -1013,7 +1088,8 @@ class VisualErgonomicsFramework(Framework):
                 self.line_of_sight_offset_deg,
             )
 
-        screen = target.screen
+        if target.equipment.screen is None:
+            raise ValueError("equipment must provide a screen for visual ergonomics")
         eye, visual_rotation = target._eye_center_and_line_of_sight_rotation()
         gaze = np.asarray(visual_rotation[:, 0], dtype=float)
         gaze_norm = float(np.linalg.norm(gaze))
@@ -1127,18 +1203,19 @@ class VisualErgonomicsFramework(Framework):
             "screen_horizontal_offset_mm",
             screen_horizontal_offset_mm,
             screen_horizontal_offset_range_mm,
-            screen.horizontal_offset_min_mm,
+            target.equipment.screen_offset_minima[0],
         )
         vertical_bounds = offset_bounds(
             "screen_vertical_offset_mm",
             screen_vertical_offset_mm,
             screen_vertical_offset_range_mm,
-            screen.vertical_offset_min_mm,
+            target.equipment.screen_offset_minima[1],
         )
 
-        current_horizontal = screen.horizontal_offset_mm
-        current_vertical = screen.vertical_offset_mm
-        reference_center = screen.corners(
+        current_horizontal, current_vertical, _ = (
+            target.equipment.screen_position
+        )
+        reference_center = target.equipment.screen_panel_corners(
             (current_horizontal, current_vertical, inclination)
         ).mean(axis=0)
         if abs(float(reference_center[2] - eye[2])) > 1e-8:
@@ -1208,7 +1285,7 @@ class VisualErgonomicsFramework(Framework):
                 "equipment placement and offset constraints"
             )
 
-        corners_at_reference = screen.corners(
+        corners_at_reference = target.equipment.screen_panel_corners(
             (current_horizontal, current_vertical, inclination)
         )
         corner_offsets = corners_at_reference - reference_center
@@ -1263,7 +1340,7 @@ class VisualErgonomicsFramework(Framework):
             key=lambda candidate: abs(candidate - preferred_distance),
         )
         position = pose_at(distance)
-        corners = screen.corners(position)
+        corners = target.equipment.screen_panel_corners(position)
         corner_reachable = np.zeros(len(corners), dtype=bool)
         for shoulder, radius in reach_spheres:
             corner_reachable |= (
@@ -1462,9 +1539,7 @@ class VisualErgonomicsFramework(Framework):
 
         palm_reference = target._palm_marker_positions()
         screen_position = (
-            target.equipment.screen_horizontal_offset_mm,
-            target.equipment.screen_vertical_offset_mm,
-            target.equipment.screen_inclination_deg,
+            *target.equipment.screen_position,
         )
         if np.min(target._screen_constraints(screen_position)) < -1e-6:
             raise ValueError("the current screen position violates the handlebar constraints")
