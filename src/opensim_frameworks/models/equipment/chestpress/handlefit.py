@@ -118,15 +118,15 @@ def fit_handle(
     arm, wrist and shoulder girdle are optimized; finger coordinates are left
     unchanged. The handle meshes are approximated by an enclosing cylinder.
     Retraction, low shoulder elevation, arm-plane alignment, knuckle-line
-    alignment and palmar orientation are weighted objectives. The palm marker
-    must remain outside the cylinder, and each MCP joint center must project
-    strictly between its end disks. Scapular proximity is optimized against
-    the rib mesh. Scapula intersections with ribs or spine and remaining
-    separation violations are reported as warnings.
+    alignment and palmar orientation are weighted objectives. The desired
+    pose has the palm marker outside the cylinder and each MCP joint center
+    projecting strictly between its end disks. Scapular proximity is optimized
+    against the rib mesh.
 
-    The weighted solution is checked after optimization and after any scapular
-    correction. An invalid solution is rejected without a constrained retry,
-    even if another feasible solution might exist.
+    The final weighted solution is retained even if it violates the palm or
+    knuckle criteria, and a warning identifies the violations. Scapula
+    intersections with ribs or spine and remaining separation violations are
+    reported by the user model.
 
     Parameters
     ----------
@@ -156,7 +156,7 @@ def fit_handle(
         joint centers with the handle axis.
     knuckle_end_weight : float, default=1e8
         Weight penalizing MCP joint projections outside the handle ends.
-        A final validity check rejects projections at or beyond an end.
+        Projections at or beyond an end are reported by a warning.
     plane_distance_weight : float, default=1e6
         Weight for the elbow's distance from the plane through the shoulder
         and palm that is parallel to the handle axis.
@@ -181,9 +181,10 @@ def fit_handle(
     Returns
     -------
     tuple of (float or None, np.ndarray or None)
-        Fitted elbow flexion angle in degrees (or None if no valid fit was
-        found), and palm position relative to the handle's center marker,
-        expressed along its body's local axes (or None if no valid fit).
+        Fitted elbow flexion angle in degrees (or None if the optimizer did not
+        converge), and palm position relative to the handle's center marker,
+        expressed along its body's local axes (or None if the optimizer did not
+        converge).
 
     Raises
     ------
@@ -290,16 +291,6 @@ def fit_handle(
         knuckles_local = (knuckles_ground - frame[:3, 3]) @ frame[:3, :3]
         axial = (knuckles_local - axis_origin) @ axis_direction
         return np.concatenate((axial - min_axial, max_axial - axial))
-
-    def _constraints_satisfied() -> bool:
-        frame = body_transform_array(handle, equipment.state)
-        knuckles = np.asarray([
-            user.joint_center(f"{finger}_mcp_{suffix}")
-            for finger in ("index", "middle", "ring", "little")
-        ])
-        return _surface_gap() >= -1e-9 and bool(
-            np.all(_knuckle_end_gaps(knuckles, frame) > 0.0)
-        )
 
     def _objective(coord_values: npt.ArrayLike) -> np.ndarray:
         """Evaluate weighted residuals for the arm fit."""
@@ -420,15 +411,6 @@ def fit_handle(
 
     if result.success:
         _apply_coordinates(result.x)
-        if not _constraints_satisfied():
-            _apply_coordinates(x0)
-            warnings.warn(
-                "No valid arm fit satisfying the palm and knuckle handle constraints",
-                RuntimeWarning,
-            )
-            return None, None
-
-    if result.success and _constraints_satisfied():
         # L'utente gestisce la correzione e la segnalazione del contatto
         # scapolare; se la cintura cambia, riadatto soltanto braccio e polso.
         if user.resolve_scapula_intersection(suffix, x0[len(arm_names):]):
@@ -447,13 +429,31 @@ def fit_handle(
             else:
                 _apply_coordinates(np.concatenate((result.x[:len(arm_names)], shoulder_values)))
                 warnings.warn("Arm refit after scapula correction did not converge", RuntimeWarning)
-        if not _constraints_satisfied():
-            _apply_coordinates(x0)
+        # Segnalo i criteri geometrici non rispettati senza annullare la posa.
+        violations = []
+        surface_gap = _surface_gap()
+        if surface_gap < -1e-9:
+            violations.append(f"palm inside cylinder by {-surface_gap * 1000:.3f} mm")
+        frame = body_transform_array(handle, equipment.state)
+        fingers = ("index", "middle", "ring", "little")
+        knuckles = np.asarray([
+            user.joint_center(f"{finger}_mcp_{suffix}") for finger in fingers
+        ])
+        gaps = _knuckle_end_gaps(knuckles, frame)
+        nearest_ends = np.minimum(gaps[:len(fingers)], gaps[len(fingers):])
+        outside = [
+            f"{finger} ({max(0.0, -gap) * 1000:.3f} mm)"
+            for finger, gap in zip(fingers, nearest_ends)
+            if gap <= 0.0
+        ]
+        if outside:
+            violations.append(f"knuckles at or beyond handle ends: {', '.join(outside)}")
+        if violations:
             warnings.warn(
-                "Arm fit violates the palm or knuckle handle constraints",
+                f"{side} handle fit: {'; '.join(violations)}",
                 RuntimeWarning,
+                stacklevel=2,
             )
-            return None, None
         # Restituisco il gomito e la posizione del palmo rispetto al marker
         # centrale, mantenendo gli assi locali dell'impugnatura.
 
