@@ -41,7 +41,7 @@ _ARM_COORDINATE_PREFIXES = (
     "thumb_",
 )
 _FIT_COORDINATE_PREFIXES = ("arm_", "elbow_flex_", "pro_sup_", "wrist_")
-_PALM_GAP_TOLERANCE_M = 0.001
+_WRIST_AXIS_DISTANCE_TOLERANCE_M = 0.001
 _P = ParamSpec("_P")
 _FIT_LOG_LOCK = threading.RLock()
 _FitMessage = dict[str, str | int | None]
@@ -229,21 +229,23 @@ def fit_handle(
     arm, wrist and two shoulder coordinates are optimized; finger coordinates
     are left unchanged. User derives the scapular coordinates from the shoulder
     angles. The handle meshes are approximated by an enclosing cylinder.
-    Retraction, low shoulder elevation, arm-plane alignment and knuckle-line
-    alignment are weighted objectives. Forearm rotation
-    is encouraged to remain between 75 and 115 degrees and external upper-arm
-    rotation is penalized. The desired pose has the palm marker on the
-    cylindrical surface, facing down, and each MCP joint center projecting strictly
-    between its end disks. Scapular proximity is optimized
+    Retraction, low shoulder elevation, wrist-to-axis distance, arm-plane
+    alignment and knuckle-line alignment are weighted objectives. Forearm
+    rotation is encouraged to remain between 75 and 115 degrees and external
+    upper-arm rotation is penalized. The wrist-to-axis target is the enclosing
+    cylinder radius plus half the palm-marker-to-wrist-center distance. The
+    desired pose has the palm above the handle axis and each MCP joint center
+    projecting between its end disks; palm orientation and the MCP end checks
+    are reported, not imposed as hard constraints. Scapular proximity is optimized
     at three costal-surface points against the rib mesh. A soft penalty uses
     collision risk interpolated from the shoulder map. Neither these unsigned
     distances nor the interpolated risk guarantee contact or exclude mesh
     intersections.
 
-    The final weighted solution is retained even if it violates the palm or
-    knuckle criteria. A palm gap differing from its target by more than 1 mm is
-    reported when the contact objective is enabled. Palm orientation and
-    position relative to the handle axis are reported without being optimized.
+    The final weighted solution is retained even if it violates the wrist or
+    knuckle criteria. A wrist-to-axis distance differing from its target by
+    more than 1 mm is reported when the contact objective is enabled. Palm
+    orientation is reported without being optimized.
     Warnings and enabled
     Python logging records generated on the fitting thread are returned in the
     log. Warnings are not displayed; logging retains its existing handlers.
@@ -260,8 +262,8 @@ def fit_handle(
     side : {'left', 'right'}
         Side being fitted (for the arm and shoulder prefix matching).
     palm_contact_weight : float, default=1e7
-        Weight for matching the palm-to-axis distance to the radius of the
-        enclosing cylindrical approximation of the handle.
+        Weight for matching the wrist-center-to-axis distance to the enclosing
+        cylinder radius plus half the palm-marker-to-wrist-center distance.
     knuckle_weight : float, default=10000.0
         Weight for aligning the least-squares line through the four MCP
         joint centers with the handle axis.
@@ -270,7 +272,7 @@ def fit_handle(
         Projections at or beyond an end are reported by a warning.
     plane_distance_weight : float, default=1e6
         Weight for the elbow's distance from the plane through the shoulder
-        and palm that is parallel to the handle axis.
+        and wrist joint center that is parallel to the handle axis.
     pro_sup_weight : float, default=100000.0
         Weight penalizing forearm rotation outside 75-115 degrees.
     wrist_dev_weight : float, default=1000.0
@@ -382,13 +384,19 @@ def fit_handle(
             coordinates.get(coord_name).setValue(user.state, float(value), False)
         user.set_shoulder_girdle(suffix, *values[len(arm_names) :], check_contact=False)
 
-    def _surface_gap() -> float:
-        palm = marker_position_array(user_marker, user.state)
-        frame = body_transform_array(handle, equipment.state)
-        local = frame[:3, :3].T @ (palm - frame[:3, 3])
-        delta = local - axis_origin
+    def _wrist_axis_distance(
+        palm_ground: np.ndarray,
+        wrist_ground: np.ndarray,
+        frame: np.ndarray,
+    ) -> tuple[float, float]:
+        wrist_local = frame[:3, :3].T @ (wrist_ground - frame[:3, 3])
+        delta = wrist_local - axis_origin
         radial = delta - np.dot(delta, axis_direction) * axis_direction
-        return float(np.linalg.norm(radial) - cylinder_radius)
+        wrist_axis_distance = float(np.linalg.norm(radial))
+        target_distance = cylinder_radius + 0.5 * float(
+            np.linalg.norm(palm_ground - wrist_ground)
+        )
+        return wrist_axis_distance, target_distance
 
     def _knuckle_end_gaps(knuckles_ground: np.ndarray, frame: np.ndarray) -> np.ndarray:
         # Proietto ogni nocca sull'asse del cilindro nel riferimento locale.
@@ -409,18 +417,21 @@ def fit_handle(
 
     def _objective(coord_values: npt.ArrayLike) -> np.ndarray:
         """Evaluate weighted residuals for the arm fit."""
-        # Aggiorno la postura e calcolo la distanza radiale dal cilindro.
+        # Aggiorno la postura e calcolo la distanza radiale del polso.
         _apply_coordinates(coord_values)
         equipment.realizePosition(equipment.state)
 
         palm_marker_pos = marker_position_array(user_marker, user.state)
         handle_frame = body_transform_array(handle, equipment.state)
         rotation = handle_frame[:3, :3]
-        palm_in_body = rotation.T @ (palm_marker_pos - handle_frame[:3, 3])
-        axial_position = np.dot(palm_in_body - axis_origin, axis_direction)
-        radial = palm_in_body - axis_origin - axial_position * axis_direction
-        surface_gap = np.linalg.norm(radial) - cylinder_radius
-        residuals = [math.sqrt(palm_contact_weight) * surface_gap]
+        wrist = np.asarray(user.joint_center(f"radius_hand_{suffix}"))
+        wrist_axis_distance, target_wrist_axis_distance = _wrist_axis_distance(
+            palm_marker_pos, wrist, handle_frame
+        )
+        residuals = [
+            math.sqrt(palm_contact_weight)
+            * (wrist_axis_distance - target_wrist_axis_distance)
+        ]
 
         # Regolarizzo polso, avambraccio e rotazione dell'omero. Nel modello
         # la flessione del polso e' positiva e l'estensione e' negativa.
@@ -468,15 +479,13 @@ def fit_handle(
             math.sqrt(knuckle_end_weight) * np.minimum(knuckle_end_gaps, 0.0)
         )
 
-        # Il piano contiene spalla e palmo ed e' parallelo all'asse; la
-        # distanza del gomito da quel piano misura il criterio richiesto.
-        plane_normal = np.cross(handle_axis_ground, shoulder - palm_marker_pos)
+        # Il piano contiene spalla e centro del polso ed e' parallelo all'asse.
+        plane_normal = np.cross(handle_axis_ground, shoulder - wrist)
         plane_norm = np.linalg.norm(plane_normal)
         if plane_norm > 1e-12:
-            plane_distance = np.dot(plane_normal, elbow - palm_marker_pos) / plane_norm
+            plane_distance = np.dot(plane_normal, elbow - wrist) / plane_norm
         else:
-            # Se spalla e palmo sono sull'asse, esiste sempre un piano che
-            # contiene anche il gomito.
+            # Se spalla e polso sono sull'asse, il gomito appartiene al piano.
             plane_distance = 0.0
         residuals.append(math.sqrt(plane_distance_weight) * plane_distance)
 
@@ -517,12 +526,20 @@ def fit_handle(
         user.scapula_contact_report(suffix)
         # Segnalo i criteri geometrici non rispettati senza annullare la posa.
         violations = []
-        surface_gap = _surface_gap()
-        if surface_gap < -1e-9:
-            violations.append(f"palm inside cylinder by {-surface_gap * 1000:.3f} mm")
-        elif palm_contact_weight > 0 and surface_gap > _PALM_GAP_TOLERANCE_M:
+        frame = body_transform_array(handle, equipment.state)
+        palm = marker_position_array(user_marker, user.state)
+        wrist = np.asarray(user.joint_center(f"radius_hand_{suffix}"))
+        wrist_axis_distance, target_wrist_axis_distance = _wrist_axis_distance(
+            palm, wrist, frame
+        )
+        if (
+            palm_contact_weight > 0
+            and abs(wrist_axis_distance - target_wrist_axis_distance)
+            > _WRIST_AXIS_DISTANCE_TOLERANCE_M
+        ):
             violations.append(
-                f"palm gap {surface_gap * 1000:.3f} mm differs from target 0.000 mm"
+                f"wrist-to-axis distance {wrist_axis_distance * 1000:.3f} mm "
+                f"differs from target {target_wrist_axis_distance * 1000:.3f} mm"
             )
         pro_sup_deg = math.degrees(
             coordinates.get(f"pro_sup_{suffix}").getValue(user.state)
@@ -536,16 +553,14 @@ def fit_handle(
         )
         if arm_weight > 0 and arm_rot_deg < -1e-6:
             violations.append(f"external upper-arm rotation {-arm_rot_deg:.2f} deg")
-        frame = body_transform_array(handle, equipment.state)
         fingers = ("index", "middle", "ring", "little")
         knuckles = np.asarray(
             [user.joint_center(f"{finger}_mcp_{suffix}") for finger in fingers]
         )
-        wrist = np.asarray(user.joint_center(f"radius_hand_{suffix}"))
+
         palmar = _palmar_direction(knuckles, wrist)
         if palmar[1] >= 0.0:
             violations.append("palm does not face downward")
-        palm = marker_position_array(user_marker, user.state)
         local = frame[:3, :3].T @ (palm - frame[:3, 3])
         radial = local - axis_origin
         radial -= np.dot(radial, axis_direction) * axis_direction
@@ -568,8 +583,7 @@ def fit_handle(
                 RuntimeWarning,
                 stacklevel=2,
             )
-        # Restituisco il gomito e la posizione del palmo rispetto al marker
-        # centrale, mantenendo gli assi locali dell'impugnatura.
+        # Restituisco la posizione del palmo negli assi locali dell'impugnatura.
 
         elbow_flex_deg = math.degrees(
             coordinates.get(f"elbow_flex_{suffix}").getValue(user.state)

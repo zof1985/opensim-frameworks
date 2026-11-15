@@ -202,9 +202,17 @@ def run_fit(monkeypatch, user, equipment, *, probes=(), solution=None, **weights
 
 
 @pytest.mark.parametrize("palm_y", [0.30, 0.40, 0.50])
-def test_palm_contact_does_not_penalize_sliding_along_handle(fit_setup, monkeypatch, palm_y):
+def test_wrist_axis_target_tracks_palm_and_wrist_sliding_together(
+    fit_setup, monkeypatch, palm_y
+):
     user, equipment, _, palm_ground = fit_setup
     palm_ground[:] = [0.325, palm_y, 0.5]
+    original_joint_center = user.joint_center
+    user.joint_center = lambda name: (
+        palm_ground.copy()
+        if name == "radius_hand_r"
+        else original_joint_center(name)
+    )
     monkeypatch.setattr(
         handlefit, "enclosing_cylinder",
         lambda vertices: (
@@ -222,7 +230,13 @@ def test_palm_contact_does_not_penalize_sliding_along_handle(fit_setup, monkeypa
 @pytest.mark.parametrize("radius", [0.02, 0.025, 0.03])
 def test_palm_contact_targets_the_actual_cylinder_radius(fit_setup, monkeypatch, radius):
     user, equipment, _, palm_ground = fit_setup
-    palm_ground[:] = [0.325, 0.4, 0.5]
+    palm_ground[:] = [0.33, 0.4, 0.5]
+    original_joint_center = user.joint_center
+    user.joint_center = lambda name: (
+        np.array([0.3, 0.4, 0.5])
+        if name == "radius_hand_r"
+        else original_joint_center(name)
+    )
     monkeypatch.setattr(
         handlefit, "enclosing_cylinder",
         lambda vertices: (
@@ -231,21 +245,19 @@ def test_palm_contact_targets_the_actual_cylinder_radius(fit_setup, monkeypatch,
         ),
     )
     _, costs = run_fit(monkeypatch, user, equipment, probes=[{}], palm_contact_weight=2.0)
-    assert costs[0] == pytest.approx(2.0 * (0.025 - radius)**2, abs=1e-10)
+    assert costs[0] == pytest.approx(2.0 * (radius + 0.015)**2, abs=1e-10)
 
 
-def test_palm_orientation_does_not_affect_contact_objective(fit_setup, monkeypatch):
+def test_wrist_axis_target_includes_half_palm_to_wrist_distance(fit_setup, monkeypatch):
     user, equipment, coordinates, palm_ground = fit_setup
     palm_ground[:] = [0.325, 0.4, 0.5]
     original_joint_center = user.joint_center
-    fingers = ("index", "middle", "ring", "little")
 
     def joint_center(name):
         if name == "radius_hand_r":
-            return np.array([0.3 + 0.1 * coordinates.get("pro_sup_r").value, 0.4, 0.48])
-        for index, finger in enumerate(fingers):
-            if name == f"{finger}_mcp_r":
-                return np.array([0.3, 0.4, 0.45 + 0.02 * index])
+            return np.array(
+                [0.325 - 0.01 * (coordinates.get("pro_sup_r").value > 0.0), 0.4, 0.5]
+            )
         return original_joint_center(name)
 
     user.joint_center = joint_center
@@ -255,8 +267,7 @@ def test_palm_orientation_does_not_affect_contact_objective(fit_setup, monkeypat
         solution={"pro_sup_r": -0.5},
         palm_contact_weight=2.0,
     )
-    assert costs[0] == pytest.approx(2.0 * 0.005**2, abs=1e-9)
-    assert costs[1] == pytest.approx(costs[0], abs=1e-12)
+    np.testing.assert_allclose(costs, [2.0 * 0.005**2, 2.0 * 0.01**2], atol=2e-9)
 
 
 @pytest.mark.parametrize("angle", [0.0, 0.7])
@@ -266,10 +277,12 @@ def test_palm_relative_to_marker_and_cylindrical_surface(fit_setup, monkeypatch,
     equipment.realizePosition(equipment.state)
     transform = body_transform_array(equipment.getBodySet().get("right_handle"), equipment.state)
     original_joint_center = user.joint_center
-    user.joint_center = lambda name: (
-        transform[:3, :3] @ original_joint_center(name) + transform[:3, 3]
-    )
     palm_local = np.array([0.32, 0.48, 0.5])
+    user.joint_center = lambda name: (
+        transform[:3, :3] @ palm_local + transform[:3, 3]
+        if name == "radius_hand_r"
+        else transform[:3, :3] @ original_joint_center(name) + transform[:3, 3]
+    )
     palm_ground[:] = transform[:3, :3] @ palm_local + transform[:3, 3]
 
     (_, palm, _), costs = run_fit(
@@ -500,11 +513,21 @@ def test_knuckles_outside_warn_and_keep_fitted_coordinates(fit_setup, monkeypatc
 def test_palm_penetration_warns_and_keeps_fitted_coordinates(fit_setup, monkeypatch):
     user, equipment, coordinates, palm_ground = fit_setup
     palm_ground[:] = [0.3, 0.4, 0.5]
+    original_joint_center = user.joint_center
+    user.joint_center = lambda name: (
+        palm_ground.copy()
+        if name == "radius_hand_r"
+        else original_joint_center(name)
+    )
     coordinates.get("arm_rot_r").value = 0.2
     (elbow, palm, messages), _ = run_fit(
-        monkeypatch, user, equipment, solution={"arm_rot_r": 0.6}
+        monkeypatch, user, equipment, solution={"arm_rot_r": 0.6},
+        palm_contact_weight=1.0,
     )
-    assert any("palm inside cylinder by" in m["message"] for m in messages)
+    assert any(
+        "wrist-to-axis distance 0.000 mm differs from target 20.000 mm"
+        in m["message"] for m in messages
+    )
     assert elbow is not None
     assert palm is not None
     assert coordinates.get("arm_rot_r").value == pytest.approx(0.6)
@@ -513,27 +536,42 @@ def test_palm_penetration_warns_and_keeps_fitted_coordinates(fit_setup, monkeypa
 def test_fit_log_reports_palm_gap_far_from_target(fit_setup, monkeypatch):
     user, equipment, _, palm_ground = fit_setup
     palm_ground[:] = [0.335, 0.4, 0.5]
+    original_joint_center = user.joint_center
+    user.joint_center = lambda name: (
+        palm_ground.copy()
+        if name == "radius_hand_r"
+        else original_joint_center(name)
+    )
     (_, _, messages), _ = run_fit(
         monkeypatch, user, equipment, palm_contact_weight=1.0,
     )
-    assert any("palm gap 15.000 mm differs from target 0.000 mm" in m["message"] for m in messages)
+    assert any(
+        "wrist-to-axis distance 35.000 mm differs from target 20.000 mm"
+        in m["message"] for m in messages
+    )
 
 
 def test_warning_reports_both_palm_and_specific_knuckle(fit_setup, monkeypatch):
     user, equipment, _, palm_ground = fit_setup
     palm_ground[:] = [0.3, 0.4, 0.5]
     original_joint_center = user.joint_center
-    user.joint_center = lambda name: (
-        np.array([0.3, 0.25, 0.55])
-        if name == "index_mcp_r" else original_joint_center(name)
+    def joint_center(name):
+        if name == "radius_hand_r":
+            return palm_ground.copy()
+        if name == "index_mcp_r":
+            return np.array([0.3, 0.25, 0.55])
+        return original_joint_center(name)
+
+    user.joint_center = joint_center
+    (elbow, palm, recorded), _ = run_fit(
+        monkeypatch, user, equipment, palm_contact_weight=1.0
     )
-    (elbow, palm, recorded), _ = run_fit(monkeypatch, user, equipment)
     assert elbow is not None
     assert palm is not None
     assert len(recorded) == 1
     warning = recorded[0]["message"]
     assert "right handle fit" in warning
-    assert "palm inside cylinder by 20.000 mm" in warning
+    assert "wrist-to-axis distance 0.000 mm differs from target 20.000 mm" in warning
     assert "index (30.000 mm)" in warning
 
 
@@ -592,12 +630,11 @@ def test_fit_optimizes_shoulder_angles_and_user_derives_scapula(fit_setup, monke
 
 
 def test_plane_and_knuckle_alignment_use_joint_geometry(fit_setup, monkeypatch):
-    user, equipment, _, palm_ground = fit_setup
-    palm_ground[:] = [0.325, 0.48, 0.5]
+    user, equipment, _, _ = fit_setup
     points = {
-        "acromial_r": np.array([0.325, 0.2, 0.0]),
-        "elbow_r": np.array([0.325, 0.35, 0.25]),
-        "radius_hand_r": np.array([0.2, 0.35, 0.5]),
+        "acromial_r": np.array([0.0, 0.0, 0.0]),
+        "elbow_r": np.array([0.5, 0.5, 0.0]),
+        "radius_hand_r": np.array([1.0, 0.0, 0.0]),
         **{
             f"{finger}_mcp_r": np.array([0.3, 0.30 + 0.02 * index, 0.55])
             for index, finger in enumerate(("index", "middle", "ring", "little"))
@@ -609,7 +646,7 @@ def test_plane_and_knuckle_alignment_use_joint_geometry(fit_setup, monkeypatch):
         knuckle_weight=1.0,
     )
     assert aligned[0] == pytest.approx(0.0, abs=1e-12)
-    points["elbow_r"][0] += 0.02
+    points["elbow_r"][2] += 0.02
     _, displaced = run_fit(
         monkeypatch, user, equipment, probes=[{}], plane_distance_weight=1.0
     )

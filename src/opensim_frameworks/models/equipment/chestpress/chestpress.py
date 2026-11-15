@@ -182,12 +182,13 @@ class ChestPress(Equipment, abc.ABC):
         pro_sup_weight : float, default=100000.0
             Weight penalizing forearm rotation outside 75-115 degrees.
         plane_distance_weight : float, default=1e6
-            Weight for the elbow's distance from the shoulder-palm plane
+            Weight for the elbow's distance from the shoulder-wrist plane
             parallel to the handle axis.
         wrist_flexion_weight : float, default=10000.0
             Weight strongly penalizing positive wrist flexion.
         palm_contact_weight : float, default=1e7
-            Weight for palm contact.
+            Weight for the wrist-center-to-axis distance target used by
+            :func:`fit_handle`.
         Returns
         -------
         tuple of (opensim_frameworks.Framework, dict)
@@ -401,12 +402,13 @@ class ChestPress(Equipment, abc.ABC):
         pro_sup_weight : float, default=100000.0
             Weight penalizing forearm rotation outside 75-115 degrees.
         plane_distance_weight : float, default=1e6
-            Weight for the elbow's distance from the shoulder-palm plane
+            Weight for the elbow's distance from the shoulder-wrist plane
             parallel to the handle axis.
         wrist_flexion_weight : float, default=10000.0
             Weight penalizing positive wrist flexion.
         palm_contact_weight : float, default=1e7
-            Weight for palm contact.
+            Weight for the wrist-center-to-axis distance target used by
+            :func:`fit_handle`.
         Returns
         -------
         tuple of (opensim_frameworks.Framework, list of dict)

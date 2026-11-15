@@ -71,9 +71,10 @@ mirrored to the left, including the scapular and finger coordinates. The left
 hand is not independently fitted or checked for handle contact, and its
 `grip["fingers"]["left"]` report is `None`. The mirrored scapula is checked for
 thoracic intersections but is not independently fitted to the left shoulder map.
-The palm-contact objective targets a palm-to-axis distance equal to the radius
-of the handle's cylindrical approximation, with a default weight of `1e7`; the
-fit does not penalize movement
+The palm-contact weight (`1e7` by default) penalizes wrist-center-to-axis
+distance differing from the handle-cylinder radius plus half the distance from
+the wrist center to the palm marker. The shoulder-elbow-wrist plane is used for
+arm alignment. The fit does not penalize movement
 relative to a fixed palm position or penalize palm orientation. Unexpected palm
 orientation is still reported. Wrist flexion is penalized without a wrist-extension
 target, and the knuckle projections, rather than the palm marker, are
