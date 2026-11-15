@@ -42,6 +42,7 @@ _ARM_COORDINATE_PREFIXES = (
 )
 _FIT_COORDINATE_PREFIXES = ("arm_", "elbow_flex_", "pro_sup_", "wrist_")
 _WRIST_AXIS_DISTANCE_TOLERANCE_M = 0.001
+_KNUCKLE_CENTER_DISTANCE_TOLERANCE_M = 0.001
 _P = ParamSpec("_P")
 _FIT_LOG_LOCK = threading.RLock()
 _FitMessage = dict[str, str | int | None]
@@ -234,13 +235,15 @@ def fit_handle(
     rotation is encouraged to remain between 75 and 115 degrees and external
     upper-arm rotation is penalized. The wrist-to-axis target is the enclosing
     cylinder radius plus half the palm-marker-to-wrist-center distance. The
-    desired pose has the palm above the handle axis and each MCP joint center
-    projecting between its end disks; palm orientation and the MCP end checks
-    are reported, not imposed as hard constraints. Scapular proximity is optimized
-    at three costal-surface points against the rib mesh. A soft penalty uses
-    collision risk interpolated from the shoulder map. Neither these unsigned
-    distances nor the interpolated risk guarantee contact or exclude mesh
-    intersections.
+    desired pose has the palm above the handle axis. The index MCP center is
+    targeted to a distance from the fitted handle center of half the endpoint
+    distance minus half the index-to-little MCP distance. The little MCP may
+    coincide with an endpoint. Palm orientation and deviation from the index
+    target are reported, not imposed as hard constraints. Scapular proximity
+    is optimized at three costal-surface points against the rib mesh. A soft
+    penalty uses collision risk interpolated from the shoulder map. Neither
+    these unsigned distances nor the interpolated risk guarantee contact or
+    exclude mesh intersections.
 
     The final weighted solution is retained even if it violates the wrist or
     knuckle criteria. A wrist-to-axis distance differing from its target by
@@ -268,8 +271,10 @@ def fit_handle(
         Weight for aligning the least-squares line through the four MCP
         joint centers with the handle axis.
     knuckle_end_weight : float, default=1e8
-        Weight penalizing MCP joint projections outside the handle ends.
-        Projections at or beyond an end are reported by a warning.
+        Weight penalizing the index MCP center's deviation from its target
+        distance to the fitted handle center: half the distance between
+        cylinder endpoints minus half the Euclidean distance between the index
+        and little MCP centers.
     plane_distance_weight : float, default=1e6
         Weight for the elbow's distance from the plane through the shoulder
         and wrist joint center that is parallel to the handle axis.
@@ -363,8 +368,6 @@ def fit_handle(
         vertices_local
     )
     axis_origin, axis_direction = cylinder_axis[:3], cylinder_axis[3:]
-    min_axial = np.dot(end_min - axis_origin, axis_direction)
-    max_axial = np.dot(end_max - axis_origin, axis_direction)
     # Recupero il marker del palmo e i centri articolari usati nella funzione
     # obiettivo; tutti i punti saranno letti nello stesso Ground.
     marker_name = side[0].upper() + "PALM"
@@ -398,11 +401,16 @@ def fit_handle(
         )
         return wrist_axis_distance, target_distance
 
-    def _knuckle_end_gaps(knuckles_ground: np.ndarray, frame: np.ndarray) -> np.ndarray:
-        # Proietto ogni nocca sull'asse del cilindro nel riferimento locale.
+    def _index_knuckle_center_distance(
+        knuckles_ground: np.ndarray, frame: np.ndarray
+    ) -> tuple[float, float]:
         knuckles_local = (knuckles_ground - frame[:3, 3]) @ frame[:3, :3]
-        axial = (knuckles_local - axis_origin) @ axis_direction
-        return np.concatenate((axial - min_axial, max_axial - axial))
+        handle_center = 0.5 * (end_min + end_max)
+        index_distance = float(np.linalg.norm(knuckles_local[0] - handle_center))
+        target_distance = 0.5 * float(np.linalg.norm(end_max - end_min)) - 0.5 * float(
+            np.linalg.norm(knuckles_ground[0] - knuckles_ground[-1])
+        )
+        return index_distance, target_distance
 
     def _palmar_direction(knuckles: np.ndarray, wrist: np.ndarray) -> np.ndarray:
         longitudinal = np.mean(knuckles, axis=0) - wrist
@@ -473,10 +481,13 @@ def fit_handle(
             math.sqrt(knuckle_weight) * np.cross(knuckle_axis, handle_axis_ground)
         )
 
-        # Penalizzo soltanto le proiezioni delle nocche oltre gli estremi.
-        knuckle_end_gaps = _knuckle_end_gaps(np.asarray(knuckles), handle_frame)
-        residuals.extend(
-            math.sqrt(knuckle_end_weight) * np.minimum(knuckle_end_gaps, 0.0)
+        # Confronto la nocca indice con la distanza target dal centro impugnatura.
+        index_center_distance, target_knuckle_center_distance = (
+            _index_knuckle_center_distance(np.asarray(knuckles), handle_frame)
+        )
+        residuals.append(
+            math.sqrt(knuckle_end_weight)
+            * (index_center_distance - target_knuckle_center_distance)
         )
 
         # Il piano contiene spalla e centro del polso ed e' parallelo all'asse.
@@ -566,16 +577,17 @@ def fit_handle(
         radial -= np.dot(radial, axis_direction) * axis_direction
         if (frame[:3, :3] @ radial)[1] <= 0.0:
             violations.append("palm is not above handle axis")
-        gaps = _knuckle_end_gaps(knuckles, frame)
-        nearest_ends = np.minimum(gaps[: len(fingers)], gaps[len(fingers) :])
-        outside = [
-            f"{finger} ({max(0.0, -gap) * 1000:.3f} mm)"
-            for finger, gap in zip(fingers, nearest_ends)
-            if gap <= 0.0
-        ]
-        if outside:
+        index_center_distance, target_knuckle_center_distance = (
+            _index_knuckle_center_distance(knuckles, frame)
+        )
+        if (
+            abs(index_center_distance - target_knuckle_center_distance)
+            > _KNUCKLE_CENTER_DISTANCE_TOLERANCE_M
+        ):
             violations.append(
-                f"knuckles at or beyond handle ends: {', '.join(outside)}"
+                f"index knuckle-to-handle-center distance "
+                f"{index_center_distance * 1000:.3f} mm differs from target "
+                f"{target_knuckle_center_distance * 1000:.3f} mm"
             )
         if violations:
             warnings.warn(

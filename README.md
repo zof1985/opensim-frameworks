@@ -77,8 +77,11 @@ the wrist center to the palm marker. The shoulder-elbow-wrist plane is used for
 arm alignment. The fit does not penalize movement
 relative to a fixed palm position or penalize palm orientation. Unexpected palm
 orientation is still reported. Wrist flexion is penalized without a wrist-extension
-target, and the knuckle projections, rather than the palm marker, are
-penalized when they exceed the handle ends.
+target. The index MCP center is penalized for deviations from a target
+distance to the fitted handle center equal to half the cylinder endpoint
+distance minus half the Euclidean distance between the index and little MCP
+joints. The little MCP is not constrained by this target and may coincide with
+a handle endpoint.
 
 ## Requirements and installation
 

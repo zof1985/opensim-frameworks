@@ -302,7 +302,7 @@ def test_palm_relative_to_marker_and_cylindrical_surface(fit_setup, monkeypatch,
 
 @pytest.mark.parametrize("angle", [0.0, 0.7])
 @pytest.mark.parametrize("direction", [1.0, -1.0])
-def test_knuckle_end_penalty_guides_least_squares_inside(
+def test_index_knuckle_distance_penalty_guides_least_squares_to_target(
     fit_setup, angle, direction
 ):
     user, equipment, coordinates, palm_ground = fit_setup
@@ -311,75 +311,62 @@ def test_knuckle_end_penalty_guides_least_squares_inside(
     transform = body_transform_array(equipment.getBodySet().get("right_handle"), equipment.state)
     palm_ground[:] = transform[:3, :3] @ [0.325, 0.4, 0.5] + transform[:3, 3]
     original_joint_center = user.joint_center
-    fingers = ("index", "middle", "ring", "little")
-    positions = [0.26, 0.31, 0.35, 0.40] if direction > 0 else [0.40, 0.45, 0.49, 0.54]
 
     def joint_center(name):
-        for index, finger in enumerate(fingers):
-            if name == f"{finger}_mcp_r":
-                shift = direction * 0.1 * coordinates.get("pro_sup_r").value
-                local = np.array([0.3, positions[index] + shift, 0.55])
-                return transform[:3, :3] @ local + transform[:3, 3]
+        if name == "index_mcp_r":
+            y = 0.38 + direction * 0.1 * coordinates.get("wrist_dev_r").value
+            local = np.array([0.3, y, 0.5])
+            return transform[:3, :3] @ local + transform[:3, 3]
+        if name == "little_mcp_r":
+            local = np.array([0.3, 0.52, 0.5])
+            return transform[:3, :3] @ local + transform[:3, 3]
         return transform[:3, :3] @ original_joint_center(name) + transform[:3, 3]
 
     user.joint_center = joint_center
     elbow, _, _ = handlefit.fit_handle(
         user, equipment, "right_handle", "right",
         palm_contact_weight=0.0, knuckle_weight=0.0,
-        plane_distance_weight=0.0, pro_sup_weight=100.0,
+        knuckle_end_weight=1e8, plane_distance_weight=0.0, pro_sup_weight=0.0,
         wrist_dev_weight=0.0,
         protraction_weight=0.0, scapular_elevation_weight=0.0,
         wrist_flexion_weight=0.0, arm_weight=0.0,
     )
     assert elbow is not None
-    fitted_positions = (
-        np.array(positions) + direction * 0.1 * coordinates.get("pro_sup_r").value
+    assert coordinates.get("wrist_dev_r").value == pytest.approx(
+        -0.2 * direction, abs=1e-4
     )
-    assert np.all(fitted_positions > 0.28)
-    assert np.all(fitted_positions < 0.52)
 
 
-@pytest.mark.parametrize("angle", [0.0, 0.7])
-def test_knuckle_end_penalty_is_zero_inside_and_grows_outside(fit_setup, monkeypatch, angle):
+def test_index_knuckle_target_uses_cylinder_endpoints_and_little_knuckle(
+    fit_setup, monkeypatch
+):
     user, equipment, coordinates, palm_ground = fit_setup
-    equipment.updCoordinateSet().get(0).setValue(equipment.state, angle)
+    equipment.updCoordinateSet().get(0).setValue(equipment.state, 0.0)
     equipment.realizePosition(equipment.state)
     transform = body_transform_array(equipment.getBodySet().get("right_handle"), equipment.state)
     palm_ground[:] = transform[:3, :3] @ [0.325, 0.4, 0.5] + transform[:3, 3]
     original_joint_center = user.joint_center
 
     def joint_center(name):
-        point = original_joint_center(name).copy()
-        if name.endswith("_mcp_r"):
-            point[1] += coordinates.get("wrist_dev_r").value
-        return transform[:3, :3] @ point + transform[:3, 3]
+        if name == "index_mcp_r":
+            y = 0.38 + 0.1 * coordinates.get("wrist_dev_r").value
+            local = np.array([0.3, y, 0.5])
+            return transform[:3, :3] @ local + transform[:3, 3]
+        if name == "little_mcp_r":
+            local = np.array([0.3, 0.52, 0.5])
+            return transform[:3, :3] @ local + transform[:3, 3]
+        return transform[:3, :3] @ original_joint_center(name) + transform[:3, 3]
 
     user.joint_center = joint_center
     _, costs = run_fit(
         monkeypatch, user, equipment,
         probes=[
-            {"wrist_dev_r": -0.01}, {"wrist_dev_r": 0.06},
-            {"wrist_dev_r": -0.04}, {"wrist_dev_r": 0.18},
+            {"wrist_dev_r": 0.0}, {"wrist_dev_r": -0.2},
+            {"wrist_dev_r": 0.2},
         ],
         knuckle_end_weight=1.0,
     )
-    np.testing.assert_allclose(costs, [0.0, 0.0, 0.02**2, 0.02**2], atol=1e-8)
-
-
-@pytest.mark.parametrize("shift", [-0.01, 0.06])
-def test_knuckle_constraint_does_not_prefer_one_interior_position(fit_setup, monkeypatch, shift):
-    user, equipment, _, palm_ground = fit_setup
-    palm_ground[:] = [0.325, 0.4, 0.5]
-    original_joint_center = user.joint_center
-    user.joint_center = lambda name: (
-        original_joint_center(name) + np.array([0.0, shift, 0.0])
-        if name.endswith("_mcp_r") else original_joint_center(name)
-    )
-    (elbow, _, _), costs = run_fit(
-        monkeypatch, user, equipment, probes=[{}], knuckle_end_weight=1e8
-    )
-    assert elbow is not None
-    assert costs[0] == pytest.approx(0.0)
+    np.testing.assert_allclose(costs, [0.03**2, 0.0, 0.06**2], atol=1e-8)
 
 
 def test_forearm_rotation_penalizes_only_angles_outside_75_to_115(fit_setup, monkeypatch):
@@ -445,7 +432,7 @@ def test_fit_log_reports_palm_orientation_and_side_of_handle(fit_setup, monkeypa
     assert any("palm is not above handle axis" in m["message"] for m in messages)
 
 
-def test_knuckle_exactly_at_handle_end_warns_and_preserves_pose(fit_setup, monkeypatch):
+def test_index_knuckle_target_deviation_warns_and_preserves_pose(fit_setup, monkeypatch):
     user, equipment, _, palm_ground = fit_setup
     palm_ground[:] = [0.325, 0.375, 0.5]
     original_joint_center = user.joint_center
@@ -461,7 +448,10 @@ def test_knuckle_exactly_at_handle_end_warns_and_preserves_pose(fit_setup, monke
         ),
     )
     (elbow, palm, messages), _ = run_fit(monkeypatch, user, equipment)
-    assert any("knuckles at or beyond handle ends: index" in m["message"] for m in messages)
+    assert any(
+        "index knuckle-to-handle-center distance" in m["message"]
+        for m in messages
+    )
     assert elbow is not None
     assert palm is not None
 
@@ -483,7 +473,10 @@ def test_knuckles_are_checked_on_fitted_scapular_pose(fit_setup, monkeypatch):
         monkeypatch, user, equipment,
         solution={"sc_elevation_r": 0.2}, wrist_dev_weight=1.0,
     )
-    assert any("knuckles at or beyond handle ends" in m["message"] for m in messages)
+    assert any(
+        "index knuckle-to-handle-center distance" in m["message"]
+        for m in messages
+    )
     assert elbow is not None
     assert palm is not None
     assert coordinates.get("sc_elevation_r").value == pytest.approx(0.2)
@@ -503,7 +496,10 @@ def test_knuckles_outside_warn_and_keep_fitted_coordinates(fit_setup, monkeypatc
     (elbow, palm, messages), _ = run_fit(
         monkeypatch, user, equipment, solution={"arm_rot_r": 0.6}
     )
-    assert any("knuckles at or beyond handle ends: index" in m["message"] for m in messages)
+    assert any(
+        "index knuckle-to-handle-center distance" in m["message"]
+        for m in messages
+    )
     assert elbow is not None
     assert palm is not None
     assert coordinates.get("arm_rot_r").value == pytest.approx(0.6)
@@ -560,6 +556,8 @@ def test_warning_reports_both_palm_and_specific_knuckle(fit_setup, monkeypatch):
             return palm_ground.copy()
         if name == "index_mcp_r":
             return np.array([0.3, 0.25, 0.55])
+        if name == "little_mcp_r":
+            return np.array([0.3, 0.32, 0.55])
         return original_joint_center(name)
 
     user.joint_center = joint_center
@@ -572,7 +570,11 @@ def test_warning_reports_both_palm_and_specific_knuckle(fit_setup, monkeypatch):
     warning = recorded[0]["message"]
     assert "right handle fit" in warning
     assert "wrist-to-axis distance 0.000 mm differs from target 20.000 mm" in warning
-    assert "index (30.000 mm)" in warning
+    assert (
+        "index knuckle-to-handle-center distance 158.114 mm differs from target "
+        "85.000 mm"
+    ) in warning
+    assert "little knuckle-to-handle-center distance" not in warning
 
 
 @pytest.mark.parametrize("weight", [-1.0, np.nan, np.inf])
@@ -594,7 +596,10 @@ def test_knuckles_outside_on_fitted_scapula_preserve_pose(fit_setup, monkeypatch
     (elbow, palm, messages), _ = run_fit(
         monkeypatch, user, equipment, solution={"sc_elevation_r": 0.5}
     )
-    assert any("knuckles at or beyond handle ends" in m["message"] for m in messages)
+    assert any(
+        "index knuckle-to-handle-center distance" in m["message"]
+        for m in messages
+    )
     assert elbow is not None
     assert palm is not None
     assert coordinates.get("sc_elevation_r").value == pytest.approx(0.5)

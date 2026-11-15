@@ -171,7 +171,8 @@ class ChestPress(Equipment, abc.ABC):
         knuckle_weight : float, default=1e5
             Weight for alignment of the knuckle line and handle axis.
         knuckle_end_weight : float, default=1e8
-            Weight penalizing knuckle projections outside the handle ends.
+            Weight penalizing the index MCP center's deviation from its target
+            distance to the handle center.
         protraction_weight : float, default=5.0
             Weight penalizing scapular protraction relative to its coordinate
             range minimum.
@@ -391,7 +392,8 @@ class ChestPress(Equipment, abc.ABC):
         knuckle_weight : float, default=1e5
             Weight for alignment of the knuckle line and handle axis.
         knuckle_end_weight : float, default=1e8
-            Weight penalizing knuckle projections outside the handle ends.
+            Weight penalizing the index MCP center's deviation from its target
+            distance to the handle center.
         protraction_weight : float, default=5.0
             Weight penalizing scapular protraction relative to its coordinate
             range minimum.
