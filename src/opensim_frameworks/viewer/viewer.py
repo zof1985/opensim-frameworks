@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from ..framework import Framework
-from ..models.model import FrameworkModel
+from ..models.model import Model
 from ..utils.constants import DEFAULT_SIZE
 from ..utils.opensim import get_referenced_meshes, import_opensim, resolve_geometry_file
 from .animation import _ViewerModel, save_animation as _render_animation
@@ -64,9 +64,9 @@ class FrameworkViewer:
 
     Parameters
     ----------
-    framework : Framework, FrameworkModel, or opensim.Model
+    framework : Framework, Model, or opensim.Model
         Object to display. OpenSim models are copied into a temporary
-        ``FrameworkModel`` and then wrapped in a ``Framework``.
+        ``Model`` and then wrapped in a ``Framework``.
     trajectories : opensim.StatesTrajectory or None, optional
         States used only when ``framework`` is a plain ``opensim.Model``.
     sampling_frequency_hz : float, default=30.0
@@ -75,7 +75,7 @@ class FrameworkViewer:
 
     def __init__(
         self,
-        framework: Framework | FrameworkModel | Any,
+        framework: Framework | Model | Any,
         trajectories: Any = None,
         sampling_frequency_hz: float = 30.0,
     ) -> None:
@@ -93,12 +93,12 @@ class FrameworkViewer:
         return self._framework
 
     @framework.setter
-    def framework(self, value: Framework | FrameworkModel | Any) -> None:
+    def framework(self, value: Framework | Model | Any) -> None:
         self.set_framework(value)
 
     def set_framework(
         self,
-        value: Framework | FrameworkModel | Any,
+        value: Framework | Model | Any,
         *,
         trajectories: Any = None,
     ) -> None:
@@ -109,7 +109,7 @@ class FrameworkViewer:
             framework = value
             source_model = None
             stored_trajectories = None
-        elif isinstance(value, FrameworkModel):
+        elif isinstance(value, Model):
             if trajectories is not None and not isinstance(
                 trajectories, self._opensim.StatesTrajectory
             ):
@@ -117,7 +117,7 @@ class FrameworkViewer:
                     "trajectories must be an opensim.StatesTrajectory or None"
                 )
             model = (
-                FrameworkModel.from_model(value, trajectories)
+                Model.from_model(value, trajectories)
                 if trajectories is not None
                 else value
             )
@@ -137,7 +137,7 @@ class FrameworkViewer:
                 raise TypeError(
                     "trajectories must be an opensim.StatesTrajectory or None"
                 )
-            model = FrameworkModel.from_model(value, trajectories)
+            model = Model.from_model(value, trajectories)
             framework = Framework(model=model)
             source_model = value
             stored_trajectories = trajectories
@@ -149,7 +149,7 @@ class FrameworkViewer:
                     framework.record_state(time=state.getTime())
         else:
             raise TypeError(
-                "framework must be a Framework, FrameworkModel, or opensim.Model"
+                "framework must be a Framework, Model, or opensim.Model"
             )
         self._framework = framework
         self._source_model = source_model

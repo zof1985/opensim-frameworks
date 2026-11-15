@@ -11,7 +11,7 @@ from typing import Any, ClassVar, Self
 import numpy as np
 
 from ...utils.opensim import import_opensim
-from ..model import FrameworkModel
+from ..model import Model
 from .screen import Screen
 
 opensim = import_opensim()
@@ -19,7 +19,7 @@ opensim = import_opensim()
 __all__ = ["Equipment"]
 
 
-class Equipment(FrameworkModel, ABC):
+class Equipment(Model, ABC):
     """Base class for user-facing OpenSim equipment.
 
     Concrete equipment provides its own user-fitting procedure. If it has a
@@ -469,7 +469,7 @@ class Equipment(FrameworkModel, ABC):
         """
         raise NotImplementedError
 
-    def simulate_on_user(self, user: Any, **kwargs: Any) -> Any:
+    def simulate_kinematics(self, user: Any, **kwargs: Any) -> Any:
         """Simulate a user performing this equipment's exercise gesture.
 
         Equipment that models a repeatable exercise gesture must override

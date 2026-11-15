@@ -56,7 +56,7 @@ class ChestPress(Equipment, abc.ABC):
         self._verify_required_bodies()
 
     def _verify_required_bodies(self) -> None:
-        """Verify that all bodies required by fit_user and simulate_on_user exist.
+        """Verify that all bodies required by fit_user and simulate_kinematics exist.
 
         Raises
         ------
@@ -104,6 +104,7 @@ class ChestPress(Equipment, abc.ABC):
         palm_handle_distance_m: float = 0.005,
         wrist_dev_weight: float = 1000.0,
         knuckle_weight: float = 10000.0,
+        knuckle_end_weight: float = 1e8,
         protraction_weight: float = 5.0,
         scapular_elevation_weight: float = 1000.0,
         arm_weight: float = 0.05,
@@ -151,6 +152,8 @@ class ChestPress(Equipment, abc.ABC):
             Weight for neutral radial/ulnar deviation.
         knuckle_weight : float, default=10000.0
             Weight for alignment of the knuckle line and handle axis.
+        knuckle_end_weight : float, default=1e8
+            Weight penalizing knuckle projections outside the handle ends.
         protraction_weight : float, default=5.0
             Weight penalizing scapular protraction relative to its coordinate
             range minimum.
@@ -233,6 +236,7 @@ class ChestPress(Equipment, abc.ABC):
                 palm_contact_weight=palm_contact_weight,
                 palm_facing_weight=palm_facing_weight,
                 knuckle_weight=knuckle_weight,
+                knuckle_end_weight=knuckle_end_weight,
                 plane_distance_weight=plane_distance_weight,
                 handle_end_weight=handle_end_weight,
                 pro_sup_weight=pro_sup_weight,
@@ -273,6 +277,7 @@ class ChestPress(Equipment, abc.ABC):
             palm_contact_weight=palm_contact_weight,
             palm_facing_weight=palm_facing_weight,
             knuckle_weight=knuckle_weight,
+            knuckle_end_weight=knuckle_end_weight,
             plane_distance_weight=plane_distance_weight,
             handle_end_weight=handle_end_weight,
             pro_sup_weight=pro_sup_weight,
@@ -306,7 +311,7 @@ class ChestPress(Equipment, abc.ABC):
 
         return F, report
 
-    def simulate_on_user(
+    def simulate_kinematics(
         self,
         user: User,
         step_deg: float = 1.0,
@@ -316,6 +321,7 @@ class ChestPress(Equipment, abc.ABC):
         palm_handle_distance_m: float = 0.005,
         wrist_dev_weight: float = 1000.0,
         knuckle_weight: float = 10000.0,
+        knuckle_end_weight: float = 1e8,
         protraction_weight: float = 5.0,
         scapular_elevation_weight: float = 1000.0,
         arm_weight: float = 0.05,
@@ -350,6 +356,8 @@ class ChestPress(Equipment, abc.ABC):
             Weight for neutral radial/ulnar deviation.
         knuckle_weight : float, default=10000.0
             Weight for alignment of the knuckle line and handle axis.
+        knuckle_end_weight : float, default=1e8
+            Weight penalizing knuckle projections outside the handle ends.
         protraction_weight : float, default=5.0
             Weight penalizing scapular protraction relative to its coordinate
             range minimum.
@@ -402,6 +410,7 @@ class ChestPress(Equipment, abc.ABC):
             palm_handle_distance_m=palm_handle_distance_m,
             wrist_dev_weight=wrist_dev_weight,
             knuckle_weight=knuckle_weight,
+            knuckle_end_weight=knuckle_end_weight,
             protraction_weight=protraction_weight,
             scapular_elevation_weight=scapular_elevation_weight,
             arm_weight=arm_weight,
@@ -442,6 +451,7 @@ class ChestPress(Equipment, abc.ABC):
                 palm_contact_weight=palm_contact_weight,
                 palm_facing_weight=palm_facing_weight,
                 knuckle_weight=knuckle_weight,
+                knuckle_end_weight=knuckle_end_weight,
                 plane_distance_weight=plane_distance_weight,
                 handle_end_weight=handle_end_weight,
                 pro_sup_weight=pro_sup_weight,
@@ -500,6 +510,7 @@ class ChestPress(Equipment, abc.ABC):
                     palm_contact_weight=palm_contact_weight,
                     palm_facing_weight=palm_facing_weight,
                     knuckle_weight=knuckle_weight,
+                    knuckle_end_weight=knuckle_end_weight,
                     plane_distance_weight=plane_distance_weight,
                     handle_end_weight=handle_end_weight,
                     pro_sup_weight=pro_sup_weight,

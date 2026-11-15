@@ -48,7 +48,9 @@ The public `opensim_frameworks` namespace exports the geometry helpers,
 including cylinder fitting, line/plane projections and distances, and
 transformation of attached mesh vertices into Ground coordinates.
 
-`User` and `Bike` are native OpenSim models. `Framework` keeps its members as
+`Model` is the package's OpenSim model base class; `User` and `Bike` derive
+from it. Equipment that supports exercise simulation exposes
+`simulate_kinematics`. `Framework` keeps its members as
 separate models and builds a composite snapshot when simulation, coupling, or
 visualization is needed. Framework couplings belong to the snapshot and do not
 modify the source models. `FrameworkViewer` is the public facade for models and
@@ -736,7 +738,7 @@ viewer.save_animation(
 )
 ```
 
-`FrameworkViewer` accepts a `Framework`, `FrameworkModel`, or
+`FrameworkViewer` accepts a `Framework`, `Model`, or
 `opensim.Model`; internally it always works with a `Framework`. A plain
 OpenSim model can be accompanied by an `opensim.StatesTrajectory`. `show()`
 opens the interactive viewer and returns a playback-control window. A

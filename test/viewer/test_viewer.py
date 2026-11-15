@@ -8,15 +8,15 @@ import pytest
 opensim = pytest.importorskip("opensim")
 
 from opensim_frameworks.framework import Framework
-from opensim_frameworks.models.model import FrameworkModel
+from opensim_frameworks.models.model import Model
 from opensim_frameworks.viewer import FrameworkViewer
 from opensim_frameworks.viewer import viewer as viewer_module
 from opensim_frameworks.viewer.animation import _ViewerModel
 from opensim_frameworks.viewer.visualizer import VTKVisualizer
 
 
-def make_model() -> FrameworkModel:
-    model = FrameworkModel()
+def make_model() -> Model:
+    model = Model()
     body = opensim.Body("body", 1.0, opensim.Vec3(0), opensim.Inertia(1))
     model.addBody(body)
     joint = opensim.PinJoint(

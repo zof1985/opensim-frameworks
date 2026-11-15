@@ -15,7 +15,7 @@ from scipy.interpolate import CubicSpline
 from ..bodies.shapes import MESHES_DIR
 from ..utils.opensim import import_opensim
 from .couplings import ComponentRef, Coupling, normalize_reference
-from ..models.model import FrameworkModel, _registered_model_class
+from ..models.model import Model, _registered_model_class
 
 if TYPE_CHECKING:
     import opensim
@@ -171,21 +171,21 @@ class _FrameworkState(opensim.State):
         return self._model_owner
 
 
-class Framework(dict[str, FrameworkModel]):
+class Framework(dict[str, Model]):
     """Store named OpenSim models while keeping each model independent.
 
     Parameters
     ----------
-    models : Mapping[str, FrameworkModel] or Iterable[tuple[str, FrameworkModel]], optional
+    models : Mapping[str, Model] or Iterable[tuple[str, Model]], optional
         Initial models. Keys must be valid, non-reserved Python identifiers;
         values must be distinct ``opensim.Model`` instances.
-    **named_models : FrameworkModel
+    **named_models : Model
         Additional models keyed by their keyword names.
 
     Raises
     ------
     TypeError
-        If a key is not a string or a value is not a ``FrameworkModel``.
+        If a key is not a string or a value is not a ``Model``.
     ValueError
         If a name is invalid, reserved, or the same model instance is stored
         under more than one name.
@@ -207,10 +207,10 @@ class Framework(dict[str, FrameworkModel]):
 
     def __init__(
         self,
-        models: Mapping[str, FrameworkModel]
-        | Iterable[tuple[str, FrameworkModel]] = (),
+        models: Mapping[str, Model]
+        | Iterable[tuple[str, Model]] = (),
         /,
-        **named_models: FrameworkModel,
+        **named_models: Model,
     ) -> None:
         dict.__init__(self)
         object.__setattr__(self, "_active_composite", None)
@@ -225,26 +225,26 @@ class Framework(dict[str, FrameworkModel]):
         self.update(models, **named_models)
 
     @property
-    def models(self) -> Mapping[str, FrameworkModel]:
+    def models(self) -> Mapping[str, Model]:
         """Return a read-only mapping of framework member models."""
         return MappingProxyType(dict(self))
 
     @models.setter
     def models(
         self,
-        value: Mapping[str, FrameworkModel]
-        | Iterable[tuple[str, FrameworkModel]],
+        value: Mapping[str, Model]
+        | Iterable[tuple[str, Model]],
     ) -> None:
         self.set_models(value)
 
     def set_models(
         self,
-        value: Mapping[str, FrameworkModel]
-        | Iterable[tuple[str, FrameworkModel]],
+        value: Mapping[str, Model]
+        | Iterable[tuple[str, Model]],
     ) -> None:
         """Replace all framework member models and clear dependent couplings."""
         pairs = list(value.items()) if isinstance(value, Mapping) else list(value)
-        staged: dict[str, FrameworkModel] = {}
+        staged: dict[str, Model] = {}
         for pair in pairs:
             try:
                 key, model = pair
@@ -274,14 +274,14 @@ class Framework(dict[str, FrameworkModel]):
         return key
 
     @staticmethod
-    def _is_framework_model(model: object) -> TypeGuard[FrameworkModel]:
-        return isinstance(model, FrameworkModel)
+    def _is_framework_model(model: object) -> TypeGuard[Model]:
+        return isinstance(model, Model)
 
     @staticmethod
-    def _validate_model(model: object) -> FrameworkModel:
+    def _validate_model(model: object) -> Model:
         if not Framework._is_framework_model(model):
             raise TypeError(
-                "Framework values must derive from opensim_frameworks.FrameworkModel; "
+                "Framework values must derive from opensim_frameworks.Model; "
                 f"got {type(model).__name__}"
             )
         return model
@@ -289,10 +289,10 @@ class Framework(dict[str, FrameworkModel]):
     @classmethod
     def _validate_pair(
         cls,
-        target: dict[str, FrameworkModel],
+        target: dict[str, Model],
         key: object,
         value: object,
-    ) -> tuple[str, FrameworkModel]:
+    ) -> tuple[str, Model]:
         name = cls._validate_key(key)
         model = cls._validate_model(value)
         if any(other_name != name and other is model for other_name, other in target.items()):
@@ -313,7 +313,7 @@ class Framework(dict[str, FrameworkModel]):
         )
         object.__setattr__(self, "_state_times", [])
 
-    def __setitem__(self, key: str, value: FrameworkModel) -> None:
+    def __setitem__(self, key: str, value: Model) -> None:
         name, model = self._validate_pair(dict(self), key, value)
         dict.__setitem__(self, name, model)
         self._invalidate_snapshot()
@@ -322,7 +322,7 @@ class Framework(dict[str, FrameworkModel]):
         self,
         models: Any = (),
         /,
-        **named_models: FrameworkModel,
+        **named_models: Model,
     ) -> None:
         """Validate and insert models from a mapping or iterable of pairs.
 
@@ -363,20 +363,20 @@ class Framework(dict[str, FrameworkModel]):
         self._invalidate_snapshot()
 
     def setdefault(
-        self, key: str, default: FrameworkModel | None = None
-    ) -> FrameworkModel:
+        self, key: str, default: Model | None = None
+    ) -> Model:
         """Return a model by name, inserting ``default`` when absent.
 
         Parameters
         ----------
         key : str
             Model name.
-        default : FrameworkModel
+        default : Model
             Model to insert if ``key`` is absent.
 
         Returns
         -------
-        FrameworkModel
+        Model
             Existing or newly inserted model.
 
         Raises
@@ -412,7 +412,7 @@ class Framework(dict[str, FrameworkModel]):
         ----------
         keys : iterable of str
             Framework names to initialize.
-        value : FrameworkModel
+        value : Model
             Model assigned to each name. Since a model cannot be stored under
             multiple names, ``keys`` may contain at most one distinct item.
 
@@ -580,7 +580,7 @@ class Framework(dict[str, FrameworkModel]):
         result = type(self)()
         memo[id(self)] = result
         for name, model in dict.items(self):
-            result[name] = FrameworkModel.from_model(model)
+            result[name] = Model.from_model(model)
         object.__setattr__(result, "_couplings", dict(self._couplings))
         return result
 

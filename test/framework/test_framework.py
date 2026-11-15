@@ -6,17 +6,19 @@ import pytest
 
 opensim = pytest.importorskip("opensim")
 
-from opensim_frameworks import Framework, FrameworkModel, row_to_state, state_to_row
+import opensim_frameworks
+from opensim_frameworks import Framework, Model, row_to_state, state_to_row
+from opensim_frameworks.models.model import _registered_model_class
 
 
 def make_model(name: str = "model"):
-    model = FrameworkModel()
+    model = Model()
     model.setName(name)
     return model
 
 
 def make_single_body_model() -> opensim.Model:
-    model = FrameworkModel()
+    model = Model()
     body = opensim.Body("body", 1.0, opensim.Vec3(0), opensim.Inertia(1))
     model.addBody(body)
     model.addJoint(
@@ -35,7 +37,7 @@ def make_single_body_model() -> opensim.Model:
 
 
 def make_pin_model() -> opensim.Model:
-    model = FrameworkModel()
+    model = Model()
     body = opensim.Body("body", 1.0, opensim.Vec3(0), opensim.Inertia(1))
     model.addBody(body)
     model.addJoint(
@@ -51,6 +53,14 @@ def make_pin_model() -> opensim.Model:
     )
     model.state = model.initSystem()
     return model
+
+
+def test_model_public_name_and_registered_identifier():
+    assert opensim_frameworks.Model is Model
+    assert Model.__name__ == "Model"
+    assert _registered_model_class(f"{Model.__module__}:Model") is Model
+    assert _registered_model_class(f"{Model.__module__}:FrameworkModel") is None
+    assert not hasattr(opensim_frameworks, "FrameworkModel")
 
 
 def test_framework_is_a_dict_of_native_models():
@@ -78,7 +88,7 @@ def test_framework_accepts_assignment_add_and_attribute_access():
 def test_framework_rejects_non_models_and_invalid_names():
     framework = Framework()
 
-    with pytest.raises(TypeError, match="FrameworkModel"):
+    with pytest.raises(TypeError, match="Model"):
         framework["body"] = opensim.Body("body", 1.0, opensim.Vec3(0), opensim.Inertia(1))
     with pytest.raises(TypeError, match="str"):
         framework[1] = make_model()
@@ -102,7 +112,7 @@ def test_update_is_atomic_and_validates_all_entries():
     replacement = make_model("replacement")
     invalid = opensim.Body("body", 1.0, opensim.Vec3(0), opensim.Inertia(1))
 
-    with pytest.raises(TypeError, match="FrameworkModel"):
+    with pytest.raises(TypeError, match="Model"):
         framework.update({"new": replacement, "invalid": invalid})
 
     assert list(framework) == ["existing"]
@@ -266,7 +276,7 @@ def test_forward_integrates_and_synchronizes_the_member_state():
 
 
 def test_forward_rejects_free_joint_before_native_manager_integration():
-    model = FrameworkModel()
+    model = Model()
     body = opensim.Body("body", 1.0, opensim.Vec3(0), opensim.Inertia(1))
     model.addBody(body)
     model.addJoint(opensim.FreeJoint("free", model.getGround(), body))

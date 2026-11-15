@@ -25,7 +25,7 @@ from typing import Any, Literal
 import numpy as np
 
 from ...bodies.shapes import MESHES_DIR
-from ..model import FrameworkModel
+from ..model import Model
 from ...utils.opensim import (
     extend_coordinate_range,
     get_referenced_meshes,
@@ -91,7 +91,7 @@ def _remove_segment_mass(body: Any, mass: float, center: np.ndarray) -> None:
 
 
 class User(
-    FrameworkModel,
+    Model,
     _MeasurementMixin,
     _PostureMixin,
     _JointCenterMixin,

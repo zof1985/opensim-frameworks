@@ -10,42 +10,42 @@ from ..utils.opensim import import_opensim, register_geometry_search_path
 
 opensim = import_opensim()
 
-__all__ = ["FrameworkModel", "register_framework_model"]
+__all__ = ["Model", "register_framework_model"]
 
-_MODEL_CLASSES: dict[str, type[FrameworkModel]] = {}
+_MODEL_CLASSES: dict[str, type[Model]] = {}
 
 
 def _class_identifier(model_class: type) -> str:
     return f"{model_class.__module__}:{model_class.__qualname__}"
 
 
-def register_framework_model(model_class: type[FrameworkModel]) -> type[FrameworkModel]:
-    """Register a FrameworkModel subclass for safe .osf deserialization.
+def register_framework_model(model_class: type[Model]) -> type[Model]:
+    """Register a Model subclass for safe .osf deserialization.
 
     Parameters
     ----------
-    model_class : type[FrameworkModel]
+    model_class : type[Model]
         Model class whose module has already been imported by the application.
 
     Returns
     -------
-    type[FrameworkModel]
+    type[Model]
         The registered class, allowing this function to be used as a decorator.
 
     Raises
     ------
     TypeError
-        If ``model_class`` does not derive from ``FrameworkModel``.
+        If ``model_class`` does not derive from ``Model``.
     """
     if not isinstance(model_class, type) or not issubclass(
-        model_class, FrameworkModel
+        model_class, Model
     ):
-        raise TypeError("model_class must derive from FrameworkModel")
+        raise TypeError("model_class must derive from Model")
     _MODEL_CLASSES[_class_identifier(model_class)] = model_class
     return model_class
 
 
-class FrameworkModel(opensim.Model):
+class Model(opensim.Model):
     """OpenSim model base required for membership in a :class:`Framework`.
 
     Subclasses may override :meth:`get_config` and :meth:`set_config` to
@@ -206,7 +206,7 @@ class FrameworkModel(opensim.Model):
 
         Returns
         -------
-        FrameworkModel
+        Model
             Model initialized from the native file and restored configuration.
         """
         instance = cls.__new__(cls)
@@ -232,19 +232,19 @@ class FrameworkModel(opensim.Model):
         source: opensim.Model,
         trajectories: opensim.StatesTrajectory | None = None,
     ) -> Self:
-        """Create a FrameworkModel copy of a native OpenSim model.
+        """Create a Model copy of a native OpenSim model.
 
         Parameters
         ----------
         source : opensim.Model
-            Model to copy. FrameworkModel subclasses retain their Python
+            Model to copy. Model subclasses retain their Python
             configuration.
         trajectories : opensim.StatesTrajectory or None, optional
             Optional sequence of source-model states to attach to the copy.
 
         Returns
         -------
-        FrameworkModel
+        Model
             Independent model instance with its initial state copied.
 
         Raises
@@ -260,7 +260,7 @@ class FrameworkModel(opensim.Model):
         ):
             raise TypeError("trajectories must be an opensim.StatesTrajectory or None")
 
-        source_is_framework_model = isinstance(source, FrameworkModel)
+        source_is_framework_model = isinstance(source, Model)
         model_class = type(source) if source_is_framework_model else cls
         instance = model_class.__new__(model_class)
         opensim.Model.__init__(instance, source)
@@ -334,9 +334,9 @@ class FrameworkModel(opensim.Model):
             object.__setattr__(instance, "_osf_trajectory", converted_trajectory)
         return instance
 
-register_framework_model(FrameworkModel)
+register_framework_model(Model)
 
 
-def _registered_model_class(identifier: str) -> type[FrameworkModel] | None:
+def _registered_model_class(identifier: str) -> type[Model] | None:
     """Return a previously imported model class by its stable identifier."""
     return _MODEL_CLASSES.get(identifier)
