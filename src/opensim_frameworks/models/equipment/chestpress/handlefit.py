@@ -12,7 +12,7 @@ import threading
 import warnings
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
-from typing import Literal, ParamSpec
+from typing import Any, Literal, ParamSpec
 
 import numpy as np
 import numpy.typing as npt
@@ -27,7 +27,12 @@ from opensim_frameworks.utils.geometry import (
 from opensim_frameworks.utils.kinematics import marker_position_array
 from opensim_frameworks import SHOULDER_GIRDLE_COORDINATES
 
-__all__ = ["fit_handle", "mirror_arm"]
+__all__ = [
+    "fit_handle",
+    "handle_fit_failure_message",
+    "mirror_arm",
+    "mirror_arm_with_log",
+]
 
 _ARM_COORDINATE_PREFIXES = (
     "arm_",
@@ -141,6 +146,28 @@ def _capture_fit_messages(
     return wrapped
 
 
+def handle_fit_failure_message(
+    phase: str, angle_deg: float, messages: list[dict[str, str | int | None]]
+) -> str:
+    prefix = "right handle fit did not converge: "
+    diagnostic = next(
+        (
+            message["message"][len(prefix) :]
+            for message in messages
+            if isinstance(message.get("message"), str)
+            and message["message"].startswith(prefix)
+        ),
+        None,
+    )
+    summary = (
+        f"Handle fit failed during the {phase} phase at "
+        f"{angle_deg:.2f} degrees"
+    )
+    if diagnostic is None:
+        return f"{summary}; optimizer failure details are missing from the fit log"
+    return f"{summary}; optimizer: {diagnostic}"
+
+
 def mirror_arm(user, to_mirror: Literal["left", "right"]) -> None:
     """Mirror the upper-limb and shoulder-girdle coordinates.
 
@@ -204,6 +231,19 @@ def mirror_arm(user, to_mirror: Literal["left", "right"]) -> None:
             target.set_locked(default_locked)
             target.setLocked(user.state, state_locked)
     user.scapula_contact_report(target_suffix[1:])
+
+
+def mirror_arm_with_log(user: Any, fit_log: list[dict[str, Any]]) -> None:
+    with _capture_messages() as messages:
+        completed = False
+        try:
+            mirror_arm(user=user, to_mirror="right")
+            completed = True
+        finally:
+            fit_log[-1]["messages"].extend(messages)
+            error = sys.exc_info()[1] if not completed else None
+            if error is not None:
+                BaseException.__setattr__(error, "handle_fit_log", fit_log)
 
 
 @_capture_fit_messages

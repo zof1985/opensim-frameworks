@@ -62,6 +62,11 @@ Chest-press `fit_user` includes `handle_fit_log` in its `grip` report.
 identifies the fitting phase and lever angle and contains the Python warnings
 and enabled logging records produced by that fit and subsequent arm mirroring,
 with their source location.
+Its `concentric_duration_s` and `eccentric_duration_s` parameters default to
+1.5 s and 2.5 s. State times follow a Beta(3, 5) concentric speed profile and
+a zero-endpoint Gaussian eccentric speed profile; generalized coordinate
+speeds are recorded with the fitted states. Accelerations are not separately
+stored.
 Warnings captured by a fit are returned rather than displayed. Native OpenSim
 output is not included. Direct `fit_handle` calls return
 `(elbow_flexion, palm_position, messages)`; exceptions raised by `fit_handle`

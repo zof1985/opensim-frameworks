@@ -15,6 +15,12 @@ from opensim_frameworks.models.equipment.chestpress.chestpress import ChestPress
 from opensim_frameworks import Framework, Model
 from opensim_frameworks.utils.geometry import body_transform_array
 from opensim_frameworks.utils.kinematics import marker_position_array
+from opensim_frameworks.utils.motion_profiles import (
+    beta_time_for_position,
+    beta_velocity_profile,
+    gaussian_time_for_position,
+    gaussian_velocity_profile,
+)
 
 
 class Coordinate:
@@ -839,7 +845,7 @@ def test_fit_user_returns_messages_for_each_fit(monkeypatch):
         warnings.warn("l scapula: intersection with ribs or spine: True", RuntimeWarning)
         logger.info("left arm mirrored")
 
-    monkeypatch.setattr(chestpress, "mirror_arm", mirror_arm)
+    monkeypatch.setattr(handlefit, "mirror_arm", mirror_arm)
     calls = []
 
     def fit_handle(**kwargs):
@@ -901,10 +907,10 @@ def test_failed_mirror_preserves_accumulated_log_and_restores_hooks(monkeypatch)
         warnings.warn("left scapula warning", RuntimeWarning)
         raise ValueError("mirror failed")
 
-    monkeypatch.setattr(chestpress, "mirror_arm", failed_mirror)
+    monkeypatch.setattr(handlefit, "mirror_arm", failed_mirror)
     with warnings.catch_warnings(record=True) as visible:
         with pytest.raises(ValueError, match="mirror failed") as raised:
-            chestpress._mirror_arm_with_log(object(), log)
+            handlefit.mirror_arm_with_log(object(), log)
     assert not visible
     assert raised.value.handle_fit_log is log
     assert [message["message"] for message in log[-1]["messages"]] == [
@@ -950,7 +956,12 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
         assert "palm_position_weight" not in kwargs
         angle = equipment.getCoordinateSet().get("right_lever-angle").getValue(equipment.state)
         if fail_at_end and angle == pytest.approx(np.deg2rad(2.0)):
-            return None, None, [{"message": "failed"}]
+            return None, None, [{
+                "message": (
+                    "right handle fit did not converge: evaluation limit exceeded; "
+                    "nfev=1000, cost=42, optimality=3"
+                )
+            }]
         user.getCoordinateSet().get("arm_r").setValue(user.state, angle * 0.5, False)
         return (0.5 if angle == pytest.approx(np.deg2rad(2.0)) else 90.0), None, []
 
@@ -960,16 +971,27 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
         coords.get("arm_l").setValue(user.state, coords.get("arm_r").getValue(user.state), False)
 
     monkeypatch.setattr(chestpress, "fit_handle", fit_handle)
-    monkeypatch.setattr(chestpress, "mirror_arm", mirror_arm)
+    monkeypatch.setattr(handlefit, "mirror_arm", mirror_arm)
     with warnings.catch_warnings(record=True) as visible:
         if fail_at_end:
-            with pytest.warns(RuntimeWarning, match="Outward handle fit failed"):
+            with pytest.warns(
+                RuntimeWarning,
+                match="concentric press \\(outward\\) phase at 2.00 degrees",
+            ) as outward_warning:
                 result, fit_log = ChestPress.simulate_kinematics(
-                    wrapper, user, step_deg=1.0, duration_s=4.0, palm_contact_weight=4321.0
+                    wrapper, user, step_deg=1.0,
+                    concentric_duration_s=1.5, eccentric_duration_s=2.5,
+                    palm_contact_weight=4321.0,
                 )
+            assert "evaluation limit exceeded" in str(outward_warning[0].message)
+            assert "nfev=1000, cost=42, optimality=3" in str(
+                outward_warning[0].message
+            )
         else:
             result, fit_log = ChestPress.simulate_kinematics(
-                wrapper, user, step_deg=1.0, duration_s=4.0, palm_contact_weight=4321.0
+                wrapper, user, step_deg=1.0,
+                concentric_duration_s=1.5, eccentric_duration_s=2.5,
+                palm_contact_weight=4321.0,
             )
     assert not visible
 
@@ -983,16 +1005,35 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
         [0, 0, 1, 2, 0] if fail_at_end else [0, 0, 1, 2, 1, 0]
     )
     if fail_at_end:
-        assert fit_log[3]["messages"] == [{"message": "failed"}]
+        assert fit_log[3]["messages"] == [{
+            "message": (
+                "right handle fit did not converge: evaluation limit exceeded; "
+                "nfev=1000, cost=42, optimality=3"
+            )
+        }]
     for entry in fit_log[1:]:
-        if entry["messages"] == [{"message": "failed"}]:
+        if (
+            fail_at_end
+            and entry["phase"] == "outward"
+            and entry["lever_angle_deg"] == pytest.approx(2.0)
+        ):
             continue
         assert [message["message"] for message in entry["messages"]] == [
             "l scapula: intersection"
         ]
         assert entry["messages"][0]["function"] == "mirror_arm"
     assert result is framework
-    assert result.state_times == pytest.approx(np.linspace(0, 4, len(expected_degrees)))
+    if fail_at_end:
+        expected_times = [0.0, 1.5, 4.0]
+    else:
+        expected_times = [
+            0.0,
+            1.5 * beta_time_for_position(0.5),
+            1.5,
+            1.5 + 2.5 * gaussian_time_for_position(0.5),
+            4.0,
+        ]
+    assert result.state_times == pytest.approx(expected_times)
     assert result.states_trajectory.getSize() == len(expected_degrees)
     assert all(t.getSize() == len(expected_degrees) for t in result.states_trajectories.values())
     for index, degrees in enumerate(expected_degrees):
@@ -1005,6 +1046,28 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
         for side in ("l", "r"):
             coordinate = user.getCoordinateSet().get(f"arm_{side}")
             assert coordinate.getValue(user_state) == pytest.approx(angle * 0.5)
+        if fail_at_end:
+            expected_speed = 0.0
+        elif index == 1:
+            phase_time = beta_time_for_position(0.5)
+            expected_speed = (
+                np.deg2rad(2.0) / 1.5
+                * beta_velocity_profile(phase_time)
+            )
+        elif index == 3:
+            phase_time = gaussian_time_for_position(0.5)
+            expected_speed = (
+                -np.deg2rad(2.0) / 2.5
+                * gaussian_velocity_profile(phase_time)
+            )
+        else:
+            expected_speed = 0.0
+        assert equipment.getCoordinateSet().get(
+            "right_lever-angle"
+        ).getSpeedValue(equipment_state) == pytest.approx(expected_speed)
+        assert user.getCoordinateSet().get("arm_r").getSpeedValue(
+            user_state
+        ) == pytest.approx(expected_speed * 0.5)
         composite_state = result.states_trajectory.get(index)
         assert composite_state.getTime() == pytest.approx(result.state_times[index])
         for member, model, name, value in (
@@ -1033,9 +1096,15 @@ def test_simulation_rejects_fewer_than_two_states(monkeypatch):
         )
     )
     monkeypatch.setattr(chestpress, "fit_handle", lambda **kwargs: (None, None, []))
-    with pytest.warns(RuntimeWarning, match="Outward handle fit failed"):
+    with pytest.warns(
+        RuntimeWarning,
+        match="concentric press \\(outward\\) phase at 0.00 degrees",
+    ) as outward_warning:
         with pytest.raises(ValueError, match="fewer than two") as raised:
             ChestPress.simulate_kinematics(wrapper, user)
+    assert "optimizer failure details are missing from the fit log" in str(
+        outward_warning[0].message
+    )
     assert raised.value.handle_fit_log == [
         {"phase": "outward", "lever_angle_deg": 0.0, "messages": []}
     ]

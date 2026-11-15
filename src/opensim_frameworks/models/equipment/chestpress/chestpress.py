@@ -4,34 +4,123 @@ from __future__ import annotations
 
 import abc
 import math
-import sys
 import warnings
 from typing import Any
 
 import numpy as np
 import opensim as osim
+from scipy.interpolate import CubicSpline
 
 from opensim_frameworks import Equipment
 from opensim_frameworks.framework.framework import Framework
 from opensim_frameworks.models.user.hand import FINGERS
 from opensim_frameworks.models.user.user import User
-from .handlefit import _capture_messages, fit_handle, mirror_arm
+from opensim_frameworks.utils.motion_profiles import (
+    beta_time_for_position,
+    beta_velocity_profile,
+    gaussian_time_for_position,
+    gaussian_velocity_profile,
+)
+from .handlefit import (
+    handle_fit_failure_message,
+    fit_handle,
+    mirror_arm_with_log,
+)
 from .userpositioning import position_user
 
 __all__ = ["ChestPress"]
 
 
-def _mirror_arm_with_log(user: User, fit_log: list[dict[str, Any]]) -> None:
-    with _capture_messages() as messages:
-        completed = False
-        try:
-            mirror_arm(user=user, to_mirror="right")
-            completed = True
-        finally:
-            fit_log[-1]["messages"].extend(messages)
-            error = sys.exc_info()[1] if not completed else None
-            if error is not None:
-                BaseException.__setattr__(error, "handle_fit_log", fit_log)
+def _phase_times_and_speeds(
+    state_angles: list[float],
+    state_phases: list[str],
+    lower_angle: float,
+    concentric_duration_s: float,
+    eccentric_duration_s: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    angles = np.asarray(state_angles, dtype=float)
+    phases = np.asarray(state_phases)
+    concentric_indices = np.flatnonzero(phases == "concentric")
+    eccentric_indices = np.flatnonzero(phases == "eccentric")
+    peak_angle = float(angles[concentric_indices[-1]])
+    travel = peak_angle - lower_angle
+    if travel <= 0.0:
+        raise ValueError("the fitted press stroke must span a positive angle")
+
+    times = np.empty(angles.size, dtype=float)
+    angular_speeds = np.zeros(angles.size, dtype=float)
+    for index in concentric_indices:
+        progress = float(np.clip((angles[index] - lower_angle) / travel, 0.0, 1.0))
+        time_fraction = float(beta_time_for_position(progress))
+        times[index] = concentric_duration_s * time_fraction
+        angular_speeds[index] = (
+            travel
+            / concentric_duration_s
+            * float(beta_velocity_profile(time_fraction))
+        )
+
+    for index in eccentric_indices:
+        progress = float(np.clip((peak_angle - angles[index]) / travel, 0.0, 1.0))
+        time_fraction = float(gaussian_time_for_position(progress))
+        times[index] = concentric_duration_s + eccentric_duration_s * time_fraction
+        angular_speeds[index] = (
+            -travel
+            / eccentric_duration_s
+            * float(gaussian_velocity_profile(time_fraction))
+        )
+    return times, angular_speeds
+
+
+def _set_trajectory_coordinate_speeds(
+    framework: Framework,
+    states: list[tuple[osim.State, osim.State]],
+    state_angles: list[float],
+    state_phases: list[str],
+    angular_speeds: np.ndarray,
+) -> None:
+    angles = np.asarray(state_angles, dtype=float)
+    phases = np.asarray(state_phases)
+    concentric_indices = np.flatnonzero(phases == "concentric")
+    eccentric_indices = np.flatnonzero(phases == "eccentric")
+    eccentric_segment_indices = np.concatenate(
+        (concentric_indices[-1:], eccentric_indices)
+    )
+
+    for member_index, model in enumerate((framework.user, framework.equipment)):
+        coordinates = model.getCoordinateSet()
+        for coordinate_index in range(coordinates.getSize()):
+            coordinate = coordinates.get(coordinate_index)
+            positions = np.asarray(
+                [
+                    coordinate.getValue(state[member_index])
+                    for state in states
+                ],
+                dtype=float,
+            )
+            speeds = np.zeros(len(states), dtype=float)
+            if concentric_indices.size >= 2:
+                spline = CubicSpline(
+                    angles[concentric_indices], positions[concentric_indices]
+                )
+                speeds[concentric_indices] = (
+                    spline(angles[concentric_indices], 1)
+                    * angular_speeds[concentric_indices]
+                )
+            if eccentric_segment_indices.size >= 2 and eccentric_indices.size:
+                ordered_indices = eccentric_segment_indices[
+                    np.argsort(angles[eccentric_segment_indices])
+                ]
+                spline = CubicSpline(
+                    angles[ordered_indices], positions[ordered_indices]
+                )
+                speeds[eccentric_indices] = (
+                    spline(angles[eccentric_indices], 1)
+                    * angular_speeds[eccentric_indices]
+                )
+            for state_index, state in enumerate(states):
+                coordinate.setSpeedValue(
+                    state[member_index], float(speeds[state_index])
+                )
 
 
 class ChestPress(Equipment, abc.ABC):
@@ -340,7 +429,7 @@ class ChestPress(Equipment, abc.ABC):
             ),
             "left": None,
         }
-        _mirror_arm_with_log(user, fit_log)
+        mirror_arm_with_log(user, fit_log)
         for finger in FINGERS:
             for joint in ("mcp", "pip", "dip"):
                 user.set_finger_coordinate_locked("left", finger, joint, "flexion", True)
@@ -360,7 +449,8 @@ class ChestPress(Equipment, abc.ABC):
         self,
         user: User,
         step_deg: float = 1.0,
-        duration_s: float = 5.0,
+        concentric_duration_s: float = 1.5,
+        eccentric_duration_s: float = 2.5,
         *,
         wrist_dev_weight: float = 1000.0,
         knuckle_weight: float = 1e5,
@@ -385,8 +475,10 @@ class ChestPress(Equipment, abc.ABC):
             Scaled user to fit and simulate.
         step_deg : float, default=1.0
             Lever-angle increment, in degrees.
-        duration_s : float, default=5.0
-            Total duration assigned to the state sequence, in seconds.
+        concentric_duration_s : float, default=1.5
+            Duration of the concentric press phase, in seconds.
+        eccentric_duration_s : float, default=2.5
+            Duration of the eccentric return phase, in seconds.
         wrist_dev_weight : float, default=1000.0
             Weight for neutral radial/ulnar deviation.
         knuckle_weight : float, default=1e5
@@ -428,15 +520,21 @@ class ChestPress(Equipment, abc.ABC):
 
         Notes
         -----
-        The successful steps are uniformly distributed over ``duration_s``.
-        Sampling for playback is handled separately by the framework viewer.
-        If fewer than two states are produced, the exception exposes the
-        accumulated handle-fit messages as ``handle_fit_log``.
+        Concentric state times follow the inverse CDF of a Beta(3, 5) speed
+        profile; eccentric state times follow the inverse CDF of a normalized
+        Gaussian speed profile with zero endpoint speed. Coordinate speeds are
+        derived from the fitted coordinate positions and lever-angle profile.
+        Accelerations are not separately recorded. Sampling for playback is
+        handled separately by the framework viewer. If fewer than two states
+        are produced, the exception exposes the accumulated handle-fit
+        messages as ``handle_fit_log``.
         """
         if not math.isfinite(step_deg) or step_deg <= 0.0:
             raise ValueError("step_deg must be finite and positive")
-        if not math.isfinite(duration_s) or duration_s <= 0.0:
-            raise ValueError("duration_s must be finite and positive")
+        if not math.isfinite(concentric_duration_s) or concentric_duration_s <= 0.0:
+            raise ValueError("concentric_duration_s must be finite and positive")
+        if not math.isfinite(eccentric_duration_s) or eccentric_duration_s <= 0.0:
+            raise ValueError("eccentric_duration_s must be finite and positive")
         framework, report = self.fit_user(
             user=user,
             step_deg=step_deg,
@@ -463,6 +561,8 @@ class ChestPress(Equipment, abc.ABC):
         step_rad = math.radians(step_deg)
         angle = lower
         states: list[tuple[osim.State, osim.State]] = []
+        state_angles: list[float] = []
+        state_phases: list[str] = []
         while True:
 
             if (
@@ -501,19 +601,25 @@ class ChestPress(Equipment, abc.ABC):
 
             if elbow_flexion is None:
                 warnings.warn(
-                    f"Outward handle fit failed at {math.degrees(angle):.2f} degrees",
+                    handle_fit_failure_message(
+                        "concentric press (outward)",
+                        math.degrees(angle),
+                        messages,
+                    ),
                     RuntimeWarning,
                     stacklevel=2,
                 )
                 break
 
-            _mirror_arm_with_log(framework.user, fit_log)
+            mirror_arm_with_log(framework.user, fit_log)
             states.append(
                 (
                     osim.State(framework.user.state),
                     osim.State(framework.equipment.state),
                 )
             )
+            state_angles.append(angle)
+            state_phases.append("concentric")
 
             if elbow_flexion < 1.0:
                 break
@@ -564,28 +670,49 @@ class ChestPress(Equipment, abc.ABC):
 
                 if elbow_flexion is None:
                     warnings.warn(
-                        f"Return handle fit failed at {math.degrees(angle):.2f} degrees",
+                        handle_fit_failure_message(
+                            "eccentric return",
+                            math.degrees(angle),
+                            messages,
+                        ),
                         RuntimeWarning,
                         stacklevel=2,
                     )
                     break
 
-                _mirror_arm_with_log(framework.user, fit_log)
+                mirror_arm_with_log(framework.user, fit_log)
                 states.append(
                     (
                         osim.State(framework.user.state),
                         osim.State(framework.equipment.state),
                     )
                 )
+                state_angles.append(angle)
+                state_phases.append("eccentric")
 
         if len(states) < 2:
             error = ValueError("fewer than two valid movement states were produced")
             setattr(error, "handle_fit_log", fit_log)
             raise error
 
+        state_times, angular_speeds = _phase_times_and_speeds(
+            state_angles,
+            state_phases,
+            lower,
+            concentric_duration_s,
+            eccentric_duration_s,
+        )
+        _set_trajectory_coordinate_speeds(
+            framework,
+            states,
+            state_angles,
+            state_phases,
+            angular_speeds,
+        )
+
         # Record each member snapshot so the framework builds synchronized trajectories.
         for time, (user_state, equipment_state) in zip(
-            np.linspace(0.0, duration_s, len(states)), states, strict=True
+            state_times, states, strict=True
         ):
             framework.user.state = user_state
             framework.equipment.state = equipment_state
