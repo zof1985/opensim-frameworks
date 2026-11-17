@@ -86,8 +86,9 @@ _GIRDLE_NAMES = tuple(SHOULDER_GIRDLE_COORDINATES)
 _MESH_CONTACT_TARGET_M = 0.005
 _MESH_CONTACT_MAX_GAP_M = 0.0055
 _SHOULDER_MAP_STEP_RAD = math.radians(5.0)
-# Heuristic weight for interpolated distance from collision-free map samples.
-_SHOULDER_COLLISION_PENALTY = 25.0
+# Strong soft preference for collision-free map samples; exact post-fit
+# collision checks remain the final guard.
+_SHOULDER_COLLISION_PENALTY = 1000.0
 # Rib-facing vertices on the inferior, superior and lateral costal surface of
 # the bundled right scapula, in the unscaled mesh frame. The left mesh mirrors
 # them. They are model landmarks, not measured anatomical contact locations.

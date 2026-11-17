@@ -170,6 +170,8 @@ def test_costal_point_distances_follow_the_scapula_and_match_rib_mesh(user, side
 def test_scapular_fit_uses_all_three_costal_distances(user, monkeypatch):
     from types import SimpleNamespace
 
+    from opensim_frameworks.models.user import scapulothoracic as contact
+
     gaps = np.array([0.001, 0.003, 0.006])
     monkeypatch.setattr(user, "scapula_costal_distances", lambda side: gaps)
     monkeypatch.setattr(
@@ -181,7 +183,9 @@ def test_scapular_fit_uses_all_three_costal_distances(user, monkeypatch):
 
     assert residuals.shape == (6,)
     np.testing.assert_allclose(residuals[2:5], 1000.0 / np.sqrt(3) * (gaps - 0.005))
-    assert residuals[5] == pytest.approx(10.0)
+    assert residuals[5] == pytest.approx(
+        contact._SHOULDER_COLLISION_PENALTY * 0.4
+    )
 
 
 def test_contact_report_warns_when_one_costal_point_is_far(user, monkeypatch):

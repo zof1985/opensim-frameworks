@@ -13,8 +13,9 @@ from scipy.interpolate import CubicSpline
 
 from opensim_frameworks import Equipment
 from opensim_frameworks.framework.framework import Framework
-from opensim_frameworks.models.user.hand import FINGERS
 from opensim_frameworks.models.user.user import User
+from opensim_frameworks.utils.geometry import body_transform_array
+from opensim_frameworks.utils.kinematics import marker_position_array
 from opensim_frameworks.utils.motion_profiles import (
     beta_time_for_position,
     beta_velocity_profile,
@@ -22,8 +23,10 @@ from opensim_frameworks.utils.motion_profiles import (
     gaussian_velocity_profile,
 )
 from .handlefit import (
+    _HandleContactFitError,
     handle_fit_failure_message,
     fit_handle,
+    lock_hands_to_handles,
     mirror_arm_with_log,
 )
 from .userpositioning import position_user
@@ -121,6 +124,17 @@ def _set_trajectory_coordinate_speeds(
                 coordinate.setSpeedValue(
                     state[member_index], float(speeds[state_index])
                 )
+
+
+def _palm_position_in_handle(user: User, equipment: Equipment, side: str) -> np.ndarray:
+    suffix = "r" if side == "right" else "l"
+    handle = equipment.getBodySet().get(f"{side}_handle")
+    handle_marker = equipment.getMarkerSet().get(f"{side}_handle")
+    palm_marker = user.getMarkerSet().get("RPALM" if suffix == "r" else "LPALM")
+    transform = body_transform_array(handle, equipment.state)
+    palm = marker_position_array(palm_marker, user.state)
+    center = marker_position_array(handle_marker, equipment.state)
+    return transform[:3, :3].T @ (palm - center)
 
 
 class ChestPress(Equipment, abc.ABC):
@@ -239,8 +253,8 @@ class ChestPress(Equipment, abc.ABC):
            wrist at each angle to find the reachable sweep.
         2. Return the right lever to zero and refit the arm and wrist,
            starting from the initial zero-lever fit.
-        3. Close the right fingers on the handle, then mirror all upper-limb
-           coordinates to the left side.
+        3. Close the right fingers, mirror the fitted upper-limb pose, and
+           close the left fingers without independently refitting the arm.
 
         The weights shared with :func:`fit_handle` are passed to each
         handle fit during the lever sweep and to the subsequent arm fit.
@@ -287,8 +301,8 @@ class ChestPress(Equipment, abc.ABC):
             ``grip["handle_fit_log"]`` contains one entry per handle fit,
             with its phase, lever angle in degrees and messages. The final
             entry also includes messages from mirroring the left arm.
-            ``grip["fingers"]["left"]`` is None: the mirrored left grasp is
-            not independently fitted or checked against the handle.
+            ``grip["fingers"]`` contains the independently fitted grasp report
+            for both hands.
 
         Raises
         ------
@@ -427,18 +441,32 @@ class ChestPress(Equipment, abc.ABC):
                 equipment.getBodySet().get("right_handle"),
                 equipment.handle_meshes("right"),
             ),
-            "left": None,
         }
+        fit_log.append(
+            {
+                "phase": "left-final",
+                "lever_angle_deg": math.degrees(zero_angle),
+                "messages": [],
+            }
+        )
         mirror_arm_with_log(user, fit_log)
-        for finger in FINGERS:
-            for joint in ("mcp", "pip", "dip"):
-                user.set_finger_coordinate_locked("left", finger, joint, "flexion", True)
-            user.set_finger_coordinate_locked("left", finger, "mcp", "abduction", True)
+        grasp["left"] = user.grasp_handle(
+            "left",
+            equipment.getBodySet().get("left_handle"),
+            equipment.handle_meshes("left"),
+        )
+        mirror_arm_with_log(user, fit_log)
+        left_elbow_flexion = elbow_flexion
+        left_palm_position = _palm_position_in_handle(
+            user, equipment, "left"
+        )
 
         report["grip"] = {
             "sweep_angle_deg": math.degrees(angle),
             "elbow_flexion_deg": elbow_flexion,
+            "left_elbow_flexion_deg": left_elbow_flexion,
             "palm_handle_position_m": fitted_palm_position,
+            "left_palm_handle_position_m": left_palm_position,
             "fingers": grasp,
             "handle_fit_log": fit_log,
         }
@@ -465,9 +493,9 @@ class ChestPress(Equipment, abc.ABC):
     ) -> tuple[Framework, list[dict[str, Any]]]:
         """Fit and record one outward-and-return press movement.
 
-        The user is fitted first. The right arm is refitted at successive
-        lever angles on the outward and return strokes, with the left arm
-        mirrored from the right. Every successful composite state is retained.
+        The user is fitted on the right, and the mirrored arm pose is used on
+        the left at every angle of both the outward and return strokes. Every
+        successful composite state is retained.
 
         Parameters
         ----------
@@ -509,7 +537,7 @@ class ChestPress(Equipment, abc.ABC):
             Framework containing synchronized trajectories and the handle-fit
             log, including the initial fit and each outward and return step.
             Each entry contains ``phase``, ``lever_angle_deg`` and ``messages``;
-            successful steps include messages from mirroring the left arm.
+            movement-step messages include the right-arm fit and its mirror.
 
         Raises
         ------
@@ -549,6 +577,10 @@ class ChestPress(Equipment, abc.ABC):
             wrist_flexion_weight=wrist_flexion_weight,
             palm_contact_weight=palm_contact_weight,
         )
+        fit_log = list(report["grip"]["handle_fit_log"])
+        lock_hands_to_handles(
+            framework, mirror_left_from_right=True, fit_log=fit_log
+        )
 
         right_lever_coord = framework.equipment.getCoordinateSet()
         right_lever_coord = right_lever_coord.get("right_lever-angle")
@@ -557,7 +589,6 @@ class ChestPress(Equipment, abc.ABC):
         left_lever_coord = framework.equipment.getCoordinateSet().get(
             "left_lever-angle"
         )
-        fit_log = list(report["grip"]["handle_fit_log"])
         step_rad = math.radians(step_deg)
         angle = lower
         states: list[tuple[osim.State, osim.State]] = []
@@ -611,7 +642,24 @@ class ChestPress(Equipment, abc.ABC):
                 )
                 break
 
-            mirror_arm_with_log(framework.user, fit_log)
+            try:
+                lock_hands_to_handles(
+                    framework, mirror_left_from_right=True, fit_log=fit_log
+                )
+            except _HandleContactFitError as error:
+                message = (
+                    f"Handle contact constraints could not be maintained at "
+                    f"{math.degrees(angle):.2f} degrees: {error}"
+                )
+                fit_log[-1]["messages"].append({"message": message})
+                warnings.warn(
+                    f"Stopping the concentric phase because handle contact "
+                    f"constraints could not be maintained at "
+                    f"{math.degrees(angle):.2f} degrees",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                break
             states.append(
                 (
                     osim.State(framework.user.state),
@@ -640,6 +688,8 @@ class ChestPress(Equipment, abc.ABC):
             angle = right_lever_coord.getValue(framework.equipment.state)
             while angle > lower:
                 angle = max(lower, angle - step_rad)
+                if math.isclose(angle, lower, rel_tol=0.0, abs_tol=1e-12):
+                    angle = lower
                 right_lever_coord.setValue(framework.equipment.state, angle, False)
                 left_lever_coord.setValue(framework.equipment.state, angle, False)
                 framework.equipment.realizePosition(framework.equipment.state)
@@ -680,7 +730,24 @@ class ChestPress(Equipment, abc.ABC):
                     )
                     break
 
-                mirror_arm_with_log(framework.user, fit_log)
+                try:
+                    lock_hands_to_handles(
+                        framework, mirror_left_from_right=True, fit_log=fit_log
+                    )
+                except _HandleContactFitError as error:
+                    message = (
+                        f"Handle contact constraints could not be maintained at "
+                        f"{math.degrees(angle):.2f} degrees: {error}"
+                    )
+                    fit_log[-1]["messages"].append({"message": message})
+                    warnings.warn(
+                        f"Stopping the eccentric phase because handle contact "
+                        f"constraints could not be maintained at "
+                        f"{math.degrees(angle):.2f} degrees",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+                    break
                 states.append(
                     (
                         osim.State(framework.user.state),

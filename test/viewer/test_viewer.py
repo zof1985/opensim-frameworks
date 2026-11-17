@@ -192,6 +192,7 @@ def test_from_osf_restores_models_and_synchronized_trajectories(tmp_path):
         coordinate.setValue(state, value, False)
         model.state = state
         framework.record_state(time)
+    coordinate.set_locked(True)
 
     destination = tmp_path / "animated.osf"
     assert framework.to_osf(destination) == destination
@@ -203,11 +204,22 @@ def test_from_osf_restores_models_and_synchronized_trajectories(tmp_path):
     assert loaded.states_trajectories["model"].getSize() == 3
     assert loaded.states_trajectory.getSize() == 3
     restored_coordinate = loaded["model"].getCoordinateSet().get("rotation")
+    assert restored_coordinate.get_locked()
     restored_values = [
         restored_coordinate.getValue(loaded.states_trajectories["model"].get(index))
         for index in range(3)
     ]
     assert restored_values == pytest.approx([0.0, 1.0, 0.0])
+    composite_coordinate_path = loaded.path_map[("model", "/jointset/root/rotation")]
+    composite_coordinate = opensim.Coordinate.safeDownCast(
+        loaded.composite.getComponent(composite_coordinate_path)
+    )
+    assert composite_coordinate is not None
+    composite_values = [
+        composite_coordinate.getValue(loaded.states_trajectory.get(index))
+        for index in range(3)
+    ]
+    assert composite_values == pytest.approx([0.0, 1.0, 0.0])
 
 
 def test_from_osf_rejects_archive_path_traversal(tmp_path):

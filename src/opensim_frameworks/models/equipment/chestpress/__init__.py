@@ -8,6 +8,7 @@ __all__ = [
     "ChestPress",
     "fit_handle",
     "handle_fit_failure_message",
+    "lock_hands_to_handles",
     "mirror_arm",
     "mirror_arm_with_log",
     "position_user",

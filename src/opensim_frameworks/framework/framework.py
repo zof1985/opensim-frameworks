@@ -120,6 +120,39 @@ def _unique_name(prefix: str, name: str, existing: set[str]) -> str:
     return candidate
 
 
+def _read_osf_trajectory(
+    model: opensim.Model, path: str | Path
+) -> opensim.StatesTrajectory:
+    """Read a trajectory without losing states for locked coordinates.
+
+    Parameters
+    ----------
+    model : opensim.Model
+        Model used to interpret the states document.
+    path : str or pathlib.Path
+        Path to the serialized states document.
+
+    Returns
+    -------
+    opensim.StatesTrajectory
+        Imported states, with the model's original coordinate locks restored.
+    """
+    coordinates = model.getCoordinateSet()
+    lock_states = []
+    for index in range(coordinates.getSize()):
+        coordinate = coordinates.get(index)
+        lock_states.append((coordinate, coordinate.get_locked()))
+    try:
+        for coordinate, locked in lock_states:
+            if locked:
+                coordinate.set_locked(False)
+        return opensim.StatesTrajectory.createFromStatesDocument(model, str(path))
+    finally:
+        for coordinate, locked in lock_states:
+            if locked:
+                coordinate.set_locked(True)
+
+
 def _patch_socket_paths(root: Any, renamed_paths: dict[str, str]) -> None:
     for component in (root, *root.getComponentsList()):
         for socket_name in component.getSocketNames():
@@ -598,9 +631,7 @@ class Framework(dict[str, Model]):
                         raise ValueError(
                             f"OSF trajectory file is missing: {trajectory_path!r}"
                         )
-                    trajectory = opensim.StatesTrajectory.createFromStatesDocument(
-                        framework[name], str(path)
-                    )
+                    trajectory = _read_osf_trajectory(framework[name], path)
                 framework._validate_osf_trajectory(
                     trajectory, state_times, f"member {name!r}"
                 )
@@ -615,8 +646,8 @@ class Framework(dict[str, Model]):
                     raise ValueError(
                         f"OSF composite trajectory is missing: {composite_path!r}"
                     )
-                composite_trajectory = opensim.StatesTrajectory.createFromStatesDocument(
-                    framework.composite, str(path)
+                composite_trajectory = _read_osf_trajectory(
+                    framework.composite, path
                 )
             framework._validate_osf_trajectory(
                 composite_trajectory, state_times, "composite"

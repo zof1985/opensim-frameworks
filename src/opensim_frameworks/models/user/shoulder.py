@@ -49,8 +49,8 @@ CLAVICLE_TO_BIACROMIAL_RATIO = 0.37
 
 # name -> (minimum, maximum), degrees, relative to the rest pose
 SHOULDER_GIRDLE_COORDINATES: dict[str, tuple[float, float]] = {
-    "sc_protraction": (-30.0, 25.0),
-    "sc_elevation": (-10.0, 35.0),
+    "sc_protraction": (-30.0, 30.0),
+    "sc_elevation": (-15.0, 35.0),
     "ac_protraction": (-25.0, 25.0),
     "ac_upward_rotation": (-15.0, 40.0),
     "ac_axial_rotation": (-35.0, 30.0),
