@@ -103,7 +103,7 @@ The objectives are continuous weighted penalties rather than hard acceptance
 thresholds. Geometric loss components are public functions exported by the
 `handlefit` module; scapular contact and collision residuals are computed by
 `User.scapular_fit_residuals`. The defaults keep the weights low (most are 1.0; the
-palm-contact weight is 10.0, knuckle alignment 5.0, endpoint limits 10.0,
+palm-contact weight is 20.0, knuckle alignment 10.0, endpoint limits 10.0,
 and wrist deviation 0.2). The weighted residuals and squared contributions
 are included in the fitting log, including when the optimizer reaches its
 iteration limit. The left arm and fingers are mirrored from the right; the

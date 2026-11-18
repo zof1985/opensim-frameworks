@@ -1052,8 +1052,10 @@ def test_fit_and_simulation_share_default_weights():
         if name.endswith("_weight")
     }
     assert fit_weights == simulation_weights
+    assert fit_weights["palm_contact_weight"] == 20.0
     assert fit_weights["knuckle_weight"] == 10.0
     assert fit_weights["shoulder_wrist_axis_distance_weight"] == 10.0
+    assert handle_fit.parameters["palm_contact_weight"].default == 20.0
     assert handle_fit.parameters["knuckle_weight"].default == 10.0
     assert handle_fit.parameters["shoulder_wrist_axis_distance_weight"].default == 10.0
 

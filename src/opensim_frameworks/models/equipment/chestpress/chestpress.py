@@ -434,7 +434,7 @@ class ChestPress(Equipment, abc.ABC):
         pro_sup_weight: float = 1.0,
         plane_distance_weight: float = 1.0,
         shoulder_wrist_axis_distance_weight: float = 10.0,
-        palm_contact_weight: float = 10.0,
+        palm_contact_weight: float = 20.0,
     ) -> tuple[Framework, dict[str, Any]]:
         """Fit a user on the machine.
 
@@ -475,7 +475,7 @@ class ChestPress(Equipment, abc.ABC):
         shoulder_wrist_axis_distance_weight : float, default=10.0
             Weight for minimizing the distance between the shoulder-wrist line
             and the handle axis.
-        palm_contact_weight : float, default=10.0
+        palm_contact_weight : float, default=20.0
             Weight for matching the palm-marker and middle MCP-to-axis distances
             to the cylinder radius.
         Returns
@@ -596,7 +596,7 @@ class ChestPress(Equipment, abc.ABC):
         pro_sup_weight: float = 1.0,
         plane_distance_weight: float = 1.0,
         shoulder_wrist_axis_distance_weight: float = 10.0,
-        palm_contact_weight: float = 10.0,
+        palm_contact_weight: float = 20.0,
     ) -> tuple[Framework, list[dict[str, Any]]]:
         """Fit and record one outward-and-return press movement.
 
@@ -643,7 +643,7 @@ class ChestPress(Equipment, abc.ABC):
         shoulder_wrist_axis_distance_weight : float, default=10.0
             Weight for minimizing the distance between the shoulder-wrist line
             and the handle axis.
-        palm_contact_weight : float, default=10.0
+        palm_contact_weight : float, default=20.0
             Weight for matching the palm-marker and middle MCP-to-axis distances
             to the cylinder radius.
         Returns
