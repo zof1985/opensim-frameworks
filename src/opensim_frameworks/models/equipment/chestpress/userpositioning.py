@@ -2,27 +2,19 @@
 
 from __future__ import annotations
 
-import itertools
 import math
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-import opensim as osim
-from scipy.optimize import least_squares
 
 from opensim_frameworks.utils.geometry import (
-    body_mass_center_array,
-    body_transform_array,
     get_mesh_vertices_in_ground,
-    numpy_to_vec3,
-    rotation_to_numpy,
     translate_model,
     vec3_to_numpy,
 )
-from opensim_frameworks import SHOULDER_GIRDLE_COORDINATES
 
-__all__ = ["position_user", "set_girdle_pose"]
+__all__ = ["position_user"]
 
 _PELVIS_AXES = {
     "pelvis_tx": (1.0, 0.0, 0.0),
@@ -67,14 +59,14 @@ def position_user(
         Positioning report with ``back``, ``seat``, ``hips``, and ``feet``
         entries.
     """
-    if not hasattr(user, 'getCoordinateSet'):
+    if not hasattr(user, "getCoordinateSet"):
         raise TypeError("user must be an opensim_frameworks.User")
-    if not hasattr(equipment, 'getMarkerSet'):
+    if not hasattr(equipment, "getMarkerSet"):
         raise TypeError("equipment must be an opensim_frameworks.Equipment")
     if not math.isfinite(backrest_angle_deg) or not 0.0 < backrest_angle_deg < 180.0:
         raise ValueError("backrest_angle_deg must be finite and between 0 and 180")
 
-    set_girdle_pose(user)
+    user.set_girdle_pose()
     coordinates = user.getCoordinateSet()
 
     def lock_trunk(locked: bool) -> None:
@@ -91,7 +83,7 @@ def position_user(
             coordinate.setLocked(user.state, locked)
 
     lock_trunk(False)
-    feet_reference = get_feet_reference(user)
+    feet_reference = user.feet_reference()
 
     back_report = align_user_to_backrest(user, equipment, backrest_angle_deg)
     lock_trunk(True)
@@ -100,7 +92,7 @@ def position_user(
     user.set_left_shoulder_rotation(90.0)
     user.set_right_forearm_pronation(90.0)
     user.set_left_forearm_pronation(90.0)
-    
+
     # Unlock finger coordinates for fitting
     finger_prefixes = ("index_", "middle_", "ring_", "little_", "thumb_")
     for i in range(coordinates.getSize()):
@@ -109,50 +101,15 @@ def position_user(
         if any(name.startswith(prefix) for prefix in finger_prefixes):
             coord.set_locked(False)
             coord.setLocked(user.state, False)
-    
+
     user.realizePosition(user.state)
+    seat_report = seat_to_pelvis(user, equipment, backrest_angle_deg)
     return {
         "back": back_report,
-        "seat": seat_to_pelvis(user, equipment, backrest_angle_deg),
+        "seat": seat_report,
         "hips": abduct_hips(user),
-        "feet": ground_feet(user, feet_reference),
+        "feet": user.ground_feet(feet_reference),
     }
-
-
-def set_girdle_pose(
-    user,
-) -> None:
-    """Apply the user's shoulder-girdle reference pose to both sides.
-
-    Parameters
-    ----------
-    user : opensim_frameworks.User
-        User whose reference pose is applied.
-
-    Returns
-    -------
-    None
-
-    Raises
-    ------
-    ValueError
-        If a reference angle is non-finite or outside its coordinate range.
-    """
-    pose = user.shoulder_girdle_reference_pose()
-    coordinates = user.getCoordinateSet()
-    for side in ("r", "l"):
-        for name in SHOULDER_GIRDLE_COORDINATES:
-            degrees = pose[name]
-            value = math.radians(degrees)
-            coordinate = coordinates.get(f"{name}_{side}")
-            if not math.isfinite(value) or not (
-                coordinate.getRangeMin() <= value <= coordinate.getRangeMax()
-            ):
-                raise ValueError(
-                    f"{name}_{side} reference pose is outside its coordinate range"
-                )
-            coordinate.setValue(user.state, value, False)
-    user.realizePosition(user.state)
 
 
 def align_user_to_backrest(
@@ -323,45 +280,6 @@ def align_user_to_backrest(
     }
 
 
-def get_feet_reference(user) -> dict[str, dict[str, float]]:
-    """Capture each foot's initial height, pitch, and roll.
-
-    Parameters
-    ----------
-    user : opensim_frameworks.User
-        User whose initial foot pose is recorded.
-
-    Returns
-    -------
-    dict
-        Per-side foot height, pitch, and roll references.
-    """
-    user.realizePosition(user.state)
-    directories = list(user.geometry_directories)
-    reference = {}
-    for side in ("r", "l"):
-        rotation = rotation_to_numpy(
-            user.getBodySet().get(f"calcn_{side}").getTransformInGround(user.state).R()
-        )
-        vertices = np.vstack(
-            [
-                get_mesh_vertices_in_ground(
-                    user,
-                    user.state,
-                    f"{kind}_{side}",
-                    directories,
-                )
-                for kind in ("calcn", "toes")
-            ]
-        )
-        reference[side] = {
-            "pitch": float(rotation[1, 0]),
-            "roll": float(rotation[1, 2]),
-            "height": float(vertices[:, 1].min()),
-        }
-    return reference
-
-
 def seat_to_pelvis(
     user,
     equipment,
@@ -491,6 +409,7 @@ def abduct_hips(user, degrees: float = 30.0) -> dict[str, Any]:
     RuntimeError
         If a coordinate is out of range or the knees do not separate.
     """
+
     def knee_separation() -> float:
         """Return the lateral distance between the knees.
 
@@ -523,176 +442,3 @@ def abduct_hips(user, degrees: float = 30.0) -> dict[str, Any]:
         },
         "knee_separation_m": float(after),
     }
-
-
-def synchronize_coupled_coordinates(user) -> None:
-    """Recompute dependent coordinates for all coordinate couplers.
-
-    Parameters
-    ----------
-    user : opensim_frameworks.User
-        User model whose dependent coordinates are synchronized.
-    """
-    coordinates = user.getCoordinateSet()
-    constraints = user.getConstraintSet()
-    for index in range(constraints.getSize()):
-        coupler = osim.CoordinateCouplerConstraint.safeDownCast(constraints.get(index))
-        if coupler is None:
-            continue
-        names = coupler.getIndependentCoordinateNames()
-        values = osim.Vector(names.getSize(), 0.0)
-        for index in range(names.getSize()):
-            values.set(index, coordinates.get(names.get(index)).getValue(user.state))
-        coordinates.get(coupler.getDependentCoordinateName()).setValue(
-            user.state, coupler.getFunction().calcValue(values), False
-        )
-    user.realizePosition(user.state)
-
-
-def ground_feet(
-    user,
-    reference: dict[str, dict[str, float]],
-    tolerance: float = 1e-6,
-) -> dict[str, Any]:
-    """Restore both feet to their initial ground height and orientation.
-
-    Parameters
-    ----------
-    user : opensim_frameworks.User
-        User whose feet are positioned.
-    reference : dict
-        Per-foot height, pitch, and roll values returned by
-        :func:`get_feet_reference`.
-    tolerance : float, default=1e-6
-        Maximum acceptable height, pitch, and roll residual.
-
-    Returns
-    -------
-    dict
-        Final leg coordinates and foot height and orientation errors.
-
-    Raises
-    ------
-    RuntimeError
-        If either foot cannot be placed within the specified tolerance.
-    """
-    coordinates = user.getCoordinateSet()
-    directories = list(user.geometry_directories)
-    report = {}
-    for side in ("r", "l"):
-        names = (
-            f"hip_flexion_{side}",
-            f"knee_angle_{side}",
-            f"hip_rotation_{side}",
-        )
-        targets = [coordinates.get(name) for name in names]
-        lower = np.array([coordinate.getRangeMin() for coordinate in targets])
-        upper = np.array([coordinate.getRangeMax() for coordinate in targets])
-
-        user.realizePosition(user.state)
-        local = {}
-        for kind in ("calcn", "toes"):
-            name = f"{kind}_{side}"
-            body = user.getBodySet().get(name)
-            transform = body.getTransformInGround(user.state)
-            rotation = rotation_to_numpy(transform.R())
-            position = vec3_to_numpy(transform.p())
-            ground = get_mesh_vertices_in_ground(
-                user,
-                user.state,
-                name,
-                directories,
-            )
-            local[name] = (body, (ground - position) @ rotation)
-
-        def pose(x: np.ndarray) -> tuple[float, float, float]:
-            """Set candidate leg angles and measure foot height and tilt.
-
-            Parameters
-            ----------
-            x : numpy.ndarray, shape (3,)
-                Hip flexion, knee flexion, and hip rotation in radians.
-
-            Returns
-            -------
-            tuple of float
-                Lowest foot height, pitch component, and roll component.
-            """
-            for coordinate, value in zip(targets, x):
-                coordinate.setValue(user.state, float(value), False)
-            user.realizePosition(user.state)
-            lowest = np.inf
-            pitch = roll = 0.0
-            for name, (body, vertices) in local.items():
-                transform = body.getTransformInGround(user.state)
-                rotation = rotation_to_numpy(transform.R())
-                position = vec3_to_numpy(transform.p())
-                lowest = min(
-                    lowest,
-                    float((vertices @ rotation.T + position)[:, 1].min()),
-                )
-                if name.startswith("calcn"):
-                    pitch = float(rotation[1, 0])
-                    roll = float(rotation[1, 2])
-            return lowest, pitch, roll
-
-        def residuals(x: np.ndarray) -> np.ndarray:
-            """Return foot-height, pitch, and roll errors.
-
-            Parameters
-            ----------
-            x : numpy.ndarray, shape (3,)
-                Candidate leg coordinates in radians.
-
-            Returns
-            -------
-            numpy.ndarray, shape (3,)
-                Residuals relative to the captured foot reference.
-            """
-            lowest, pitch, roll = pose(x)
-            return np.array(
-                [
-                    lowest - reference[side]["height"],
-                    pitch - reference[side]["pitch"],
-                    roll - reference[side]["roll"],
-                ]
-            )
-
-        best = None
-        for hip, knee, rotation in itertools.product(
-            (0.3, 0.8, 1.3),
-            (0.3, 0.8, 1.3),
-            (-0.4, 0.0, 0.4),
-        ):
-            result = least_squares(
-                residuals,
-                np.clip([hip, knee, rotation], lower, upper),
-                bounds=(lower, upper),
-                xtol=1e-12,
-                ftol=1e-12,
-                gtol=1e-12,
-            )
-            if best is None or result.cost < best.cost:
-                best = result
-        if best is None or np.abs(best.fun).max() > tolerance:
-            residual = None if best is None else best.fun
-            raise RuntimeError(
-                f"Could not place the {side} foot on the ground: "
-                f"residuals {residual}"
-            )
-        lowest, pitch, roll = pose(best.x)
-        calcn = user.getBodySet().get(f"calcn_{side}")
-        sole_up = rotation_to_numpy(calcn.getTransformInGround(user.state).R())[
-            1, 1
-        ]
-        report[side] = {
-            "hip_flexion_deg": math.degrees(best.x[0]),
-            "knee_angle_deg": math.degrees(best.x[1]),
-            "hip_rotation_deg": math.degrees(best.x[2]),
-            "height_error_m": lowest - reference[side]["height"],
-            "pitch_error": pitch - reference[side]["pitch"],
-            "roll_error": roll - reference[side]["roll"],
-            "sole_tilt_deg": math.degrees(math.acos(min(1.0, float(sole_up)))),
-        }
-    synchronize_coupled_coordinates(user)
-    return report

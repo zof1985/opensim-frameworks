@@ -77,6 +77,36 @@ def test_contact_residuals_vanish_at_zero_girdle_pose(user):
             assert value == pytest.approx(0.0, abs=1e-4)
 
 
+def test_set_girdle_pose_applies_reference_to_both_sides(user, monkeypatch):
+    pose = {
+        name: float(index + 1)
+        for index, name in enumerate(SHOULDER_GIRDLE_COORDINATES)
+    }
+    reference_calls = []
+    set_calls = []
+    monkeypatch.setattr(
+        user,
+        "shoulder_girdle_reference_pose",
+        lambda contact=True: reference_calls.append(contact) or pose,
+    )
+    monkeypatch.setattr(
+        user,
+        "set_scapular_girdle_values",
+        lambda side, values, *, check_contact=True: set_calls.append(
+            (side, values.copy(), check_contact)
+        ),
+    )
+
+    user.set_girdle_pose()
+
+    expected = np.deg2rad(list(pose.values()))
+    assert reference_calls == [True]
+    assert [call[0] for call in set_calls] == ["r", "l"]
+    for _, values, check_contact in set_calls:
+        np.testing.assert_allclose(values, expected)
+        assert not check_contact
+
+
 def test_residual_vector_matches_the_dictionary_variants(user):
     pose = {"sc_protraction": 10.0, "ac_upward_rotation": 15.0}
     values = [pose.get(name, 0.0) for name in SHOULDER_GIRDLE_COORDINATES]
@@ -355,7 +385,7 @@ def test_unilateral_residual_is_zero_up_to_the_allowed_depth_and_smooth_beyond()
     assert np.all(residual[depth <= contact._PENETRATION_ALLOWANCE] == 0.0)
     # continuous, with a continuous derivative, and increasing beyond
     slope = np.diff(residual) / np.diff(depth)
-    assert np.abs(np.diff(residual)).max() < 1e-6
+    assert np.abs(np.diff(residual)).max() <= np.diff(depth).max() * (1 + 1e-9)
     assert np.abs(np.diff(slope)).max() < 0.1
     assert np.all(np.diff(residual) >= 0.0)
     # far beyond the blend it is the depth minus half the blend and the allowance

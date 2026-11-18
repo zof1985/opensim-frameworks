@@ -190,6 +190,35 @@ def test_grounded_pose_is_preserved_in_a_new_opensim_system():
         assert tuple(position.get(i) for i in range(3)) == pytest.approx(expected[name])
 
 
+@requires_opensim
+@pytest.mark.filterwarnings("ignore:height=.*outside ANSUR range:UserWarning")
+def test_feet_reference_and_ground_feet_restore_the_reference_pose():
+    user = make_user(gender="M", height_cm=175)
+    reference = user.feet_reference()
+
+    assert set(reference) == {"r", "l"}
+    for side in ("r", "l"):
+        assert reference[side]["height"] == pytest.approx(
+            foot_mesh_minimum_height(user, side), abs=1e-8
+        )
+        for name in ("height", "pitch", "roll"):
+            assert math.isfinite(reference[side][name])
+
+        user.getCoordinateSet().get(f"hip_flexion_{side}").setValue(
+            user.state, math.radians(5.0), False
+        )
+        user.getCoordinateSet().get(f"knee_angle_{side}").setValue(
+            user.state, math.radians(10.0), False
+        )
+
+    report = user.ground_feet(reference)
+
+    for side in ("r", "l"):
+        assert report[side]["height_error_m"] == pytest.approx(0.0, abs=1e-6)
+        assert report[side]["pitch_error"] == pytest.approx(0.0, abs=1e-6)
+        assert report[side]["roll_error"] == pytest.approx(0.0, abs=1e-6)
+
+
 # ---------------------------------------------------------------------------
 # ANSUR data layer (no OpenSim binding required)
 # ---------------------------------------------------------------------------
@@ -444,14 +473,14 @@ def test_set_mass_kg_rejects_non_positive_or_non_finite_values(mass_kg):
 
 
 @requires_opensim
-def test_model_components_match_the_bundled_rajagopal_model():
+def test_model_components_include_articulated_shoulders_and_hands():
     user = make_user(gender="M", percentile=75.0)
 
-    assert user.getBodySet().getSize() == 24 + 2 * len(MOVING_HAND_SEGMENTS)
-    assert user.getJointSet().getSize() == 24 + 2 * len(MOVING_HAND_SEGMENTS)
+    assert user.getBodySet().getSize() == 28 + 2 * len(MOVING_HAND_SEGMENTS)
+    assert user.getJointSet().getSize() == 28 + 2 * len(MOVING_HAND_SEGMENTS)
     assert user.getMuscles().getSize() == 80
     assert user.getMarkerSet().getSize() == 70
-    assert user.getCoordinateSet().getSize() == 44 + 2 * 20
+    assert user.getCoordinateSet().getSize() == 54 + 2 * 20
 
 
 @requires_opensim

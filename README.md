@@ -57,36 +57,58 @@ modify the source models. `FrameworkViewer` is the public facade for models and
 frameworks; `VTKVisualizer` manages the VTK scene, and the interactive player
 provides playback controls.
 
-Chest-press `fit_user` includes `handle_fit_log` in its `grip` report.
-`simulate_kinematics` returns `(framework, handle_fit_log)`. Each log entry
-identifies the fitting phase and lever angle and contains the Python warnings
-and enabled logging records produced by that fit and subsequent arm mirroring,
-with their source location.
-Its `concentric_duration_s` and `eccentric_duration_s` parameters default to
-1.5 s and 2.5 s. State times follow a Beta(3, 5) concentric speed profile and
-a zero-endpoint Gaussian eccentric speed profile; generalized coordinate
-speeds are recorded with the fitted states. Accelerations are not separately
-stored.
-Warnings captured by a fit are returned rather than displayed. Native OpenSim
-output is not included. Direct `fit_handle` calls return
-`(elbow_flexion, palm_position, messages)`; exceptions raised by `fit_handle`
-expose messages collected so far as `handle_fit_log`.
-The right hand is fitted to its handle and all upper-limb coordinates are
-mirrored to the left, including the scapular and finger coordinates. The left
-hand is not independently fitted or checked for handle contact, and its
-`grip["fingers"]["left"]` report is `None`. The mirrored scapula is checked for
-thoracic intersections but is not independently fitted to the left shoulder map.
-The palm-contact weight (`1e7` by default) penalizes wrist-center-to-axis
-distance differing from the handle-cylinder radius plus half the distance from
-the wrist center to the palm marker. The shoulder-elbow-wrist plane is used for
-arm alignment. The fit does not penalize movement
-relative to a fixed palm position or penalize palm orientation. Unexpected palm
-orientation is still reported. Wrist flexion is penalized without a wrist-extension
-target. The index MCP center is penalized for deviations from a target
-distance to the fitted handle center equal to half the cylinder endpoint
-distance minus half the Euclidean distance between the index and little MCP
-joints. The little MCP is not constrained by this target and may coincide with
-a handle endpoint.
+### Chest-press fitting and simulation
+
+Chest-press `fit_user` positions the user, initially places the right palm above the
+handle centre at the enclosing-cylinder radius, fits the right arm, and closes
+the fingers around the handle. The arm is mirrored to the left. The right
+`RPALM` and left `LPALM` markers are then anchored to their respective handles
+in the handles' local frames.
+
+`simulate_kinematics` returns `(framework, handle_fit_log)`. Starting from the
+zero-angle fit, it advances the right lever by `step_deg` until the right elbow
+reaches 1 degree or less, then returns the lever to zero. At each step it fits
+the right arm, grasps the handle, attempts to retain the palm anchor, mirrors
+the arm to the left, and records the synchronized state. The default step is
+1 degree; `concentric_duration_s` and `eccentric_duration_s` default to 1.5 s
+and 2.5 s. State times follow a Beta(3, 5) concentric speed profile and a
+zero-endpoint Gaussian eccentric speed profile. Generalized coordinate speeds
+are recorded; accelerations are not.
+
+Palm anchoring is best-effort: when the optimizer cannot keep `RPALM` or
+`LPALM` at its original handle-relative point, the simulation continues and
+the fit log records the residual in millimetres, optimizer convergence status,
+and optimizer message. Contact residuals alone do not fail a simulation.
+A 1 mm residual tolerance controls the optimizer's early exit and whether the
+diagnostic is informational or a warning; it is not a hard acceptance limit.
+`handle_fit_log` also contains the Python warnings and enabled logging records
+from fitting and arm mirroring, with their source locations. Captured warnings
+are returned rather than displayed; native OpenSim output is not included.
+Failures unrelated to anchor residuals, such as a failed handle fit or the
+elbow not extending before the lever reaches its limit, still raise an
+exception carrying the accumulated log.
+
+`fit_handle` returns `(elbow_flexion, palm_position, messages)`; exceptions
+expose messages collected so far as `handle_fit_log`. Its loss combines
+weighted objectives for scapular retraction and depression, the
+shoulder-elbow-palm plane, neutral wrist deviation, forearm supination,
+upper-arm rotation, palm-to-axis distance, knuckle alignment, and MCP endpoint
+limits.
+Wrist flexion/extension has no preferred target.
+The knuckle alignment is directed: the vector from the little-finger MCP to
+the index MCP must point from handle endpoint 1 (lower Ground Z) toward
+endpoint 2 (higher Ground Z).
+The fit does not favor the palm being above or below the handle axis.
+The objectives are continuous weighted penalties rather than hard acceptance
+thresholds. Geometric loss components are public functions exported by the
+`handlefit` module; scapular contact and collision residuals are computed by
+`User.scapular_fit_residuals`. The defaults keep the weights low (most are 1.0; the
+palm-contact weight is 10.0, knuckle alignment 5.0, endpoint limits 10.0,
+and wrist deviation 0.2). The weighted residuals and squared contributions
+are included in the fitting log, including when the optimizer reaches its
+iteration limit. The left arm and fingers are mirrored from the right; the
+left palm anchor is then fitted with the mirrored contact coordinates, while
+left finger articulation is not separately re-grasped.
 
 ## Requirements and installation
 

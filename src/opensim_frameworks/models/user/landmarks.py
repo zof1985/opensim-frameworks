@@ -11,6 +11,17 @@ and its ground projection, and :meth:`User.set_position`.
 from __future__ import annotations
 
 import math
+import itertools
+
+import numpy as np
+import opensim as osim
+from scipy.optimize import least_squares
+
+from ...utils.geometry import (
+    get_mesh_vertices_in_ground,
+    rotation_to_numpy,
+    vec3_to_numpy,
+)
 
 from .joint_center_table import JOINT_CENTER_NAMES as _JOINT_CENTER_NAMES
 
@@ -314,3 +325,180 @@ class _LandmarkMixin:
                 False,
             )
         self.update_state()
+
+    def feet_reference(self) -> dict[str, dict[str, float]]:
+        """Capture each foot's initial ground height, pitch, and roll.
+
+        Returns
+        -------
+        dict
+            Per-side ground height and calcaneus orientation references.
+        """
+        self.realizePosition(self.state)
+        directories = list(self.geometry_directories)
+        reference = {}
+        for side in ("r", "l"):
+            rotation = rotation_to_numpy(
+                self.getBodySet()
+                .get(f"calcn_{side}")
+                .getTransformInGround(self.state)
+                .R()
+            )
+            vertices = np.vstack(
+                [
+                    get_mesh_vertices_in_ground(
+                        self,
+                        self.state,
+                        f"{kind}_{side}",
+                        directories,
+                    )
+                    for kind in ("calcn", "toes")
+                ]
+            )
+            reference[side] = {
+                "pitch": float(rotation[1, 0]),
+                "roll": float(rotation[1, 2]),
+                "height": float(vertices[:, 1].min()),
+            }
+        return reference
+
+    def ground_feet(
+        self,
+        reference: dict[str, dict[str, float]],
+        tolerance: float = 1e-6,
+    ) -> dict[str, dict[str, float]]:
+        """Restore both feet to their captured ground height and orientation.
+
+        Parameters
+        ----------
+        reference : dict
+            Per-foot height, pitch, and roll values from :meth:`feet_reference`.
+        tolerance : float, default=1e-6
+            Maximum acceptable residual for height, pitch, and roll.
+
+        Returns
+        -------
+        dict
+            Final leg coordinates and foot height and orientation errors.
+
+        Raises
+        ------
+        RuntimeError
+            If either foot cannot be placed within the specified tolerance.
+        """
+        coordinates = self.getCoordinateSet()
+        directories = list(self.geometry_directories)
+        report = {}
+        for side in ("r", "l"):
+            names = (
+                f"hip_flexion_{side}",
+                f"knee_angle_{side}",
+                f"hip_rotation_{side}",
+            )
+            targets = [coordinates.get(name) for name in names]
+            lower = np.array([coordinate.getRangeMin() for coordinate in targets])
+            upper = np.array([coordinate.getRangeMax() for coordinate in targets])
+
+            self.realizePosition(self.state)
+            local = {}
+            for kind in ("calcn", "toes"):
+                name = f"{kind}_{side}"
+                body = self.getBodySet().get(name)
+                transform = body.getTransformInGround(self.state)
+                rotation = rotation_to_numpy(transform.R())
+                position = vec3_to_numpy(transform.p())
+                ground = get_mesh_vertices_in_ground(
+                    self, self.state, name, directories
+                )
+                local[name] = (body, (ground - position) @ rotation)
+
+            def pose(x: np.ndarray) -> tuple[float, float, float]:
+                for coordinate, value in zip(targets, x, strict=True):
+                    coordinate.setValue(self.state, float(value), False)
+                self.realizePosition(self.state)
+                lowest = np.inf
+                pitch = roll = 0.0
+                for name, (body, vertices) in local.items():
+                    transform = body.getTransformInGround(self.state)
+                    rotation = rotation_to_numpy(transform.R())
+                    position = vec3_to_numpy(transform.p())
+                    lowest = min(
+                        lowest,
+                        float((vertices @ rotation.T + position)[:, 1].min()),
+                    )
+                    if name.startswith("calcn"):
+                        pitch = float(rotation[1, 0])
+                        roll = float(rotation[1, 2])
+                return lowest, pitch, roll
+
+            def residuals(x: np.ndarray) -> np.ndarray:
+                lowest, pitch, roll = pose(x)
+                return np.array(
+                    [
+                        lowest - reference[side]["height"],
+                        pitch - reference[side]["pitch"],
+                        roll - reference[side]["roll"],
+                    ]
+                )
+
+            best = None
+            for hip, knee, rotation in itertools.product(
+                (0.3, 0.8, 1.3),
+                (0.3, 0.8, 1.3),
+                (-0.4, 0.0, 0.4),
+            ):
+                result = least_squares(
+                    residuals,
+                    np.clip([hip, knee, rotation], lower, upper),
+                    bounds=(lower, upper),
+                    xtol=1e-12,
+                    ftol=1e-12,
+                    gtol=1e-12,
+                )
+                if best is None or result.cost < best.cost:
+                    best = result
+            if best is None or np.abs(best.fun).max() > tolerance:
+                residual = None if best is None else best.fun
+                raise RuntimeError(
+                    f"Could not place the {side} foot on the ground: "
+                    f"residuals {residual}"
+                )
+            lowest, pitch, roll = pose(best.x)
+            calcn = self.getBodySet().get(f"calcn_{side}")
+            sole_up = rotation_to_numpy(
+                calcn.getTransformInGround(self.state).R()
+            )[1, 1]
+            report[side] = {
+                "hip_flexion_deg": math.degrees(best.x[0]),
+                "knee_angle_deg": math.degrees(best.x[1]),
+                "hip_rotation_deg": math.degrees(best.x[2]),
+                "height_error_m": lowest - reference[side]["height"],
+                "pitch_error": pitch - reference[side]["pitch"],
+                "roll_error": roll - reference[side]["roll"],
+                "sole_tilt_deg": math.degrees(
+                    math.acos(min(1.0, float(sole_up)))
+                ),
+            }
+        self._synchronize_coupled_coordinates()
+        return report
+
+    def _synchronize_coupled_coordinates(self) -> None:
+        coordinates = self.getCoordinateSet()
+        constraints = self.getConstraintSet()
+        for index in range(constraints.getSize()):
+            coupler = osim.CoordinateCouplerConstraint.safeDownCast(
+                constraints.get(index)
+            )
+            if coupler is None:
+                continue
+            names = coupler.getIndependentCoordinateNames()
+            values = osim.Vector(names.getSize(), 0.0)
+            for index in range(names.getSize()):
+                values.set(
+                    index,
+                    coordinates.get(names.get(index)).getValue(self.state),
+                )
+            coordinates.get(coupler.getDependentCoordinateName()).setValue(
+                self.state, coupler.getFunction().calcValue(values), False
+            )
+        self.realizePosition(self.state)

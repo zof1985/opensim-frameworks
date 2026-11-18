@@ -1001,3 +1001,19 @@ class _ScapulothoracicMixin:
             solution = least_squares(objective, reference, bounds=(lower, upper))
             setup.contact_pose = dict(zip(_GIRDLE_NAMES, solution.x.tolist()))
         return dict(setup.contact_pose)
+
+    def set_girdle_pose(self, contact: bool = True) -> None:
+        """Set both shoulder girdles to the user's reference pose.
+
+        Parameters
+        ----------
+        contact : bool, default=True
+            Use the contact-consistent reference pose when true; otherwise
+            apply the raw reference pose.
+        """
+        pose = self.shoulder_girdle_reference_pose(contact=contact)
+        values = np.deg2rad([pose[name] for name in _GIRDLE_NAMES])
+        for side in ("r", "l"):
+            self.set_scapular_girdle_values(
+                side, values, check_contact=False
+            )
