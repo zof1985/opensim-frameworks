@@ -62,6 +62,8 @@ _MIRRORED_CONTACT_COORDINATE_PREFIXES = (
     "wrist_",
 )
 _PALM_POSITION_TOLERANCE_M = 0.001
+_POSITION_TOLERANCE_M = 0.001
+_ANGLE_TOLERANCE_RAD = math.radians(1.0)
 _P = ParamSpec("_P")
 _FIT_LOG_LOCK = threading.RLock()
 _FitMessage = dict[str, str | int | None]
@@ -105,34 +107,48 @@ def palm_axis_distance_penalty(
     delta = palm_local - np.asarray(axis_origin)
     direction = np.asarray(axis_direction)
     radial = delta - np.dot(delta, direction) * direction
-    return weight * (float(np.linalg.norm(radial)) - radius_m)
+    return (
+        math.sqrt(weight)
+        * (float(np.linalg.norm(radial)) - radius_m)
+        / _POSITION_TOLERANCE_M
+    )
 
 
 def wrist_deviation_penalty(wrist_deviation_rad: float, weight: float) -> float:
     """Return the weighted residual for neutral wrist radial/ulnar deviation."""
-    return weight * wrist_deviation_rad
+    return math.sqrt(weight) * wrist_deviation_rad / _ANGLE_TOLERANCE_RAD
 
 
 def forearm_supination_penalty(pro_supination_rad: float, weight: float) -> float:
     """Return the weighted residual for forearm supination near 90 degrees."""
-    return weight * abs(pro_supination_rad - math.radians(90.0))
+    return (
+        math.sqrt(weight)
+        * (pro_supination_rad - math.radians(90.0))
+        / math.radians(5.0)
+    )
 
 
 def external_shoulder_rotation_penalty(
     shoulder_rotation_rad: float, weight: float
 ) -> float:
     """Return the one-sided weighted residual for external shoulder rotation."""
-    return weight * abs(shoulder_rotation_rad - math.radians(-90.0))
+    return (
+        math.sqrt(weight)
+        * min(shoulder_rotation_rad, 0.0)
+        / math.radians(5.0)
+    )
 
 
-def scapular_retraction_penalty(protraction_rad: float, weight: float) -> float:
+def scapular_retraction_penalty(
+    protraction_rad: float, minimum_rad: float, weight: float
+) -> float:
     """Return the weighted residual for scapular retraction."""
-    return weight * protraction_rad
+    return math.sqrt(weight) * (protraction_rad - minimum_rad)
 
 
 def scapular_depression_penalty(elevation_rad: float, weight: float) -> float:
     """Return the one-sided weighted residual for positive scapular elevation."""
-    return weight * elevation_rad
+    return math.sqrt(weight) * max(elevation_rad, 0.0)
 
 
 def knuckle_alignment_penalty(
@@ -167,10 +183,15 @@ def knuckle_alignment_penalty(
     else:
         direction = np.zeros(3)
     handle_axis = np.asarray(handle_axis_ground, dtype=float)
-    return weight * np.concatenate(
+    return np.concatenate(
         (
-            np.cross(direction, handle_axis),
-            np.array([1.0 - float(np.dot(direction, handle_axis))]),
+            math.sqrt(weight)
+            * np.cross(direction, handle_axis)
+            / math.sin(_ANGLE_TOLERANCE_RAD),
+            np.array([
+                math.sqrt(weight)
+                * (1.0 - float(np.dot(direction, handle_axis)))
+            ]),
         )
     )
 
@@ -179,14 +200,22 @@ def index_knuckle_endpoint_penalty(
     projection_distance_m: float, endpoint_limit_m: float, weight: float
 ) -> float:
     """Return the one-sided weighted index MCP endpoint residual."""
-    return weight * max(projection_distance_m - endpoint_limit_m, 0.0)
+    return (
+        math.sqrt(weight)
+        * max(projection_distance_m - endpoint_limit_m, 0.0)
+        / _POSITION_TOLERANCE_M
+    )
 
 
 def little_knuckle_endpoint_penalty(
     projection_distance_m: float, endpoint_limit_m: float, weight: float
 ) -> float:
     """Return the one-sided weighted little MCP endpoint residual."""
-    return weight * max(projection_distance_m - endpoint_limit_m, 0.0)
+    return (
+        math.sqrt(weight)
+        * max(projection_distance_m - endpoint_limit_m, 0.0)
+        / _POSITION_TOLERANCE_M
+    )
 
 
 def shoulder_palm_plane_penalty(
@@ -226,7 +255,7 @@ def shoulder_palm_plane_penalty(
         deviation = float(np.dot(plane_normal, axis) / normal_length)
     else:
         deviation = 0.0
-    return weight * deviation
+    return math.sqrt(weight) * deviation / math.sin(_ANGLE_TOLERANCE_RAD)
 
 
 def lock_hands_to_handles(
@@ -909,6 +938,7 @@ def fit_handle(
             [
                 scapular_retraction_penalty(
                     protraction.getValue(user.state),
+                    protraction.getRangeMin(),
                     protraction_weight,
                 ),
                 scapular_depression_penalty(
@@ -962,17 +992,10 @@ def fit_handle(
 
         return np.asarray(residuals)
 
-    initial_girdle = np.array(
-        [
-            coordinates.get(f"{name}_{suffix}").getValue(user.state)
-            for name in SHOULDER_GIRDLE_COORDINATES
-        ]
-    )
     fit_coordinate_names = arm_names + shoulder_names if fit_shoulder else arm_names
     x0 = np.array(
         [coordinates.get(name).getValue(user.state) for name in fit_coordinate_names]
     )
-    initial_x0 = x0.copy()
     bounds = (
         [coordinates.get(name).getRangeMin() for name in fit_coordinate_names],
         [coordinates.get(name).getRangeMax() for name in fit_coordinate_names],
@@ -1021,18 +1044,14 @@ def fit_handle(
             stacklevel=2,
         )
 
+    report_loss(result.x)
     if not result.success:
-        for coord_name, value in zip(arm_names, initial_x0[: len(arm_names)]):
-            coordinates.get(coord_name).setValue(user.state, float(value), False)
-        user.set_scapular_girdle_values(suffix, initial_girdle, check_contact=False)
-        user.realizePosition(user.state)
         warnings.warn(
             f"{side} handle fit did not converge: {result.message}; nfev={result.nfev}, "
             f"cost={result.cost:.6g}, optimality={result.optimality:.6g}",
             RuntimeWarning,
             stacklevel=2,
         )
-    report_loss(result.x)
     user.scapula_contact_report(suffix)
     elbow_flex_deg = math.degrees(
         coordinates.get(f"elbow_flex_{suffix}").getValue(user.state)

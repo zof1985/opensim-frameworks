@@ -983,17 +983,13 @@ def test_fit_user_returns_messages_for_each_fit(monkeypatch):
     )
     monkeypatch.setattr(
         chestpress,
-        "position_palm_above_handle",
-        lambda *args, **kwargs: calls.append("palm placement"),
-    )
-    monkeypatch.setattr(
-        chestpress,
         "_palm_position_in_handle",
         lambda *args, **kwargs: np.zeros(3),
     )
     lock_options = []
 
-    def lock_hands(_framework, **kwargs):
+    def lock_hands(**kwargs):
+        assert kwargs.pop("framework") is framework
         calls.append("lock")
         lock_options.append(kwargs)
 
@@ -1007,7 +1003,7 @@ def test_fit_user_returns_messages_for_each_fit(monkeypatch):
         equipment, user, palm_contact_weight=2345.0
     )
     assert result is framework
-    assert calls == ["position", "palm placement", "fit", "lock"]
+    assert calls == ["position", "fit", "lock"]
     assert user.grasp_calls == ["right"]
     assert lock_options == [{"mirror_left_from_right": True, "fit_log": report["grip"]["handle_fit_log"]}]
     assert report["grip"]["fingers"] == {
@@ -1025,7 +1021,6 @@ def test_fit_user_returns_messages_for_each_fit(monkeypatch):
     monkeypatch.setattr(
         chestpress, "fit_handle", lambda **kwargs: (None, None, [{"message": "failed"}])
     )
-    monkeypatch.setattr(chestpress, "position_palm_above_handle", lambda *args, **kwargs: None)
     with pytest.raises(RuntimeError, match="initial right arm fit") as raised:
         ChestPress.fit_user(equipment, user)
     assert raised.value.handle_fit_log == [
@@ -1720,7 +1715,7 @@ def test_simulation_rejects_fewer_than_two_states(monkeypatch):
     assert framework.states_trajectory.getSize() == 0
 
 
-def test_failed_solver_restores_initial_coordinates(fit_setup, monkeypatch):
+def test_failed_solver_keeps_best_coordinates_and_warns(fit_setup, monkeypatch):
     user, equipment, coordinates, _ = fit_setup
     coordinates.get("sc_protraction_r").value = 0.2
     coordinates.get("ac_protraction_r").value = 0.4
@@ -1734,13 +1729,14 @@ def test_failed_solver_restores_initial_coordinates(fit_setup, monkeypatch):
 
     monkeypatch.setattr(handlefit, "least_squares", failed_solve)
     elbow, palm, messages = handlefit.fit_handle(user, equipment, "right_handle", "right")
-    assert elbow is None and palm is None
+    assert elbow == pytest.approx(np.rad2deg(0.1))
+    assert palm is not None
     assert any(
         "evaluation limit exceeded; nfev=1000, cost=42, optimality=3" in m["message"]
         for m in messages
     )
-    assert coordinates.get("sc_protraction_r").value == pytest.approx(0.2)
-    assert coordinates.get("ac_protraction_r").value == pytest.approx(0.4)
+    assert coordinates.get("sc_protraction_r").value == pytest.approx(0.3)
+    assert coordinates.get("ac_protraction_r").value == pytest.approx(0.03)
 
 
 def test_fit_can_keep_scapula_fixed(fit_setup, monkeypatch):

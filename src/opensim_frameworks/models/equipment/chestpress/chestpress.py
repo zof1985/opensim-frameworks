@@ -237,9 +237,8 @@ class ChestPress(Equipment, abc.ABC):
         The user is first positioned by :func:`position_user`: the shoulder
         girdle and trunk are aligned, the pelvis is seated, the hips are
         abducted, the feet are returned to ground contact, and both shoulders
-        and forearms are rotated by 90 degrees. The right palm is then placed
-        above the handle centre at the enclosing-cylinder radius, fitted with
-        :func:`fit_handle`, and closed around the handle. The right arm is
+        and forearms are rotated by 90 degrees. The right arm is fitted against
+        the handle with :func:`fit_handle` and the hand is closed around it. The right arm is
         mirrored to the left; the right and left palm markers are anchored in
         their respective moving handle frames on a best-effort basis.
 
@@ -286,9 +285,8 @@ class ChestPress(Equipment, abc.ABC):
         TypeError
             If ``user`` is not an ``opensim_frameworks.User`` instance.
         RuntimeError
-            If a lever's range does not include zero degrees, the palm cannot
-            be placed above the handle, or the initial arm fit does not
-            converge.
+            If a lever's range does not include zero degrees or the initial
+            arm fit does not converge.
 
         Notes
         -----
