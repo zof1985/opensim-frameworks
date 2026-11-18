@@ -210,6 +210,7 @@ def run_fit(
         "knuckle_weight": 0.0,
         "knuckle_end_weight": 0.0,
         "plane_distance_weight": 0.0,
+        "shoulder_wrist_axis_distance_weight": 0.0,
         "pro_sup_weight": 0.0,
         "wrist_flex_weight": 0.0,
         "wrist_dev_weight": 0.0,
@@ -235,6 +236,7 @@ def test_loss_penalties_are_public_and_exported():
         "index_knuckle_endpoint_penalty",
         "little_knuckle_endpoint_penalty",
         "shoulder_palm_plane_penalty",
+        "shoulder_wrist_axis_distance_penalty",
     )
 
     for name in names:
@@ -286,6 +288,27 @@ def test_public_loss_penalties_return_their_expected_residuals():
         [np.cos(one_degree), 0, np.sin(one_degree)],
         4.0,
     ) == pytest.approx(2.0)
+    assert handlefit.shoulder_wrist_axis_distance_penalty(
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.5, -1.0, 0.0],
+        [0.0, 1.0, 0.0],
+        1.0,
+    ) == pytest.approx(0.0)
+    assert handlefit.shoulder_wrist_axis_distance_penalty(
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.5, -1.0, 0.002],
+        [0.0, 1.0, 0.0],
+        4.0,
+    ) == pytest.approx(4.0)
+    assert handlefit.shoulder_wrist_axis_distance_penalty(
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, 0.002],
+        [1.0, 0.0, 0.0],
+        4.0,
+    ) == pytest.approx(4.0)
 
 
 def test_scapular_fit_residuals_are_added_directly_to_the_objective(
@@ -765,7 +788,7 @@ def test_fit_loss_report_contains_each_component(fit_setup, monkeypatch):
     assert "palm_axis_distance" in warning
     assert "index_endpoint_projection" in warning
     assert "little_endpoint_projection" in warning
-    assert "shoulder_palm_plane" in warning
+    assert "shoulder_wrist_plane" in warning
 
 
 @pytest.mark.parametrize("weight", [-1.0, np.nan, np.inf])
@@ -828,10 +851,11 @@ def test_fit_optimizes_shoulder_angles_and_user_derives_scapula(fit_setup, monke
 
 def test_plane_and_knuckle_alignment_use_joint_geometry(fit_setup, monkeypatch):
     user, equipment, _, palm_ground = fit_setup
-    palm_ground[:] = [1.0, 0.0, 0.0]
+    palm_ground[:] = [1.0, 0.0, 1.0]
     points = {
         "acromial_r": np.array([0.0, 0.0, 0.0]),
         "elbow_r": np.array([0.5, 0.5, 0.0]),
+        "radius_hand_r": np.array([1.0, 0.0, 0.0]),
         **{
             f"{finger}_mcp_r": np.array([0.3, 0.36 - 0.02 * index, 0.55])
             for index, finger in enumerate(("index", "middle", "ring", "little"))
@@ -847,7 +871,7 @@ def test_plane_and_knuckle_alignment_use_joint_geometry(fit_setup, monkeypatch):
     _, displaced = run_fit(
         monkeypatch, user, equipment, probes=[{}], plane_distance_weight=1.0
     )
-    plane_normal = np.cross(points["elbow_r"], palm_ground)
+    plane_normal = np.cross(points["elbow_r"], points["radius_hand_r"])
     expected_deviation = abs(np.dot(plane_normal, [0.0, 1.0, 0.0])) / np.linalg.norm(
         plane_normal
     )
@@ -863,6 +887,40 @@ def test_plane_and_knuckle_alignment_use_joint_geometry(fit_setup, monkeypatch):
         monkeypatch, user, equipment, probes=[{}], knuckle_weight=1.0
     )
     assert crossed[0] == pytest.approx(4.0, abs=1e-8)
+
+
+def test_fit_penalizes_distance_between_shoulder_wrist_and_handle_axis_lines(
+    fit_setup, monkeypatch
+):
+    user, equipment, _, palm_ground = fit_setup
+    palm_ground[:] = [0.32, 0.4, 0.5]
+    points = {
+        "acromial_r": np.array([0.0, 0.0, 0.0]),
+        "elbow_r": np.array([0.0, 0.5, 0.0]),
+        "radius_hand_r": np.array([1.0, 0.0, 0.0]),
+    }
+    original_joint_center = user.joint_center
+    user.joint_center = lambda name: points.get(name, original_joint_center(name))
+    monkeypatch.setattr(
+        handlefit,
+        "enclosing_cylinder",
+        lambda vertices: (
+            np.array([0.5, 0.0, 0.002, 0.0, 1.0, 0.0]),
+            0.02,
+            np.array([0.5, -0.5, 0.002]),
+            np.array([0.5, 0.5, 0.002]),
+        ),
+    )
+
+    _, costs = run_fit(
+        monkeypatch,
+        user,
+        equipment,
+        probes=[{}],
+        shoulder_wrist_axis_distance_weight=2.0,
+    )
+
+    assert costs[0] == pytest.approx(8.0, abs=1e-8)
 
 
 def test_handle_bodies_must_have_registered_meshes(fit_setup):
@@ -972,16 +1030,19 @@ def test_simulation_passes_fitting_weights_to_initial_fit():
             equipment, user=object(), protraction_weight=42.0,
             scapular_elevation_weight=23.0,
             knuckle_end_weight=12345.0, palm_contact_weight=2345.0,
+            shoulder_wrist_axis_distance_weight=4321.0,
         )
     assert captured["protraction_weight"] == 42.0
     assert captured["scapular_elevation_weight"] == 23.0
     assert captured["knuckle_end_weight"] == 12345.0
     assert captured["palm_contact_weight"] == 2345.0
+    assert captured["shoulder_wrist_axis_distance_weight"] == 4321.0
 
 
 def test_fit_and_simulation_share_default_weights():
     fit = inspect.signature(ChestPress.fit_user)
     simulation = inspect.signature(ChestPress.simulate_kinematics)
+    handle_fit = inspect.signature(handlefit.fit_handle)
     fit_weights = {
         name: parameter.default for name, parameter in fit.parameters.items()
         if name.endswith("_weight")
@@ -991,6 +1052,10 @@ def test_fit_and_simulation_share_default_weights():
         if name.endswith("_weight")
     }
     assert fit_weights == simulation_weights
+    assert fit_weights["knuckle_weight"] == 10.0
+    assert fit_weights["shoulder_wrist_axis_distance_weight"] == 10.0
+    assert handle_fit.parameters["knuckle_weight"].default == 10.0
+    assert handle_fit.parameters["shoulder_wrist_axis_distance_weight"].default == 10.0
 
 
 def test_kinematic_simulation_uses_only_new_public_name():
@@ -1052,17 +1117,24 @@ def test_fit_user_returns_messages_for_each_fit(monkeypatch):
         lock_options.append(kwargs)
         return True
 
+    fitting_distance_weights = []
+
     def fit_handle(**kwargs):
         calls.append("fit")
+        fitting_distance_weights.append(kwargs["shoulder_wrist_axis_distance_weight"])
         return 20.0, np.zeros(3), [{"message": "fit message"}]
 
     monkeypatch.setattr(chestpress, "lock_hands_to_handles", lock_hands)
     monkeypatch.setattr(chestpress, "fit_handle", fit_handle)
     result, report = ChestPress.fit_user(
-        equipment, user, palm_contact_weight=2345.0
+        equipment,
+        user,
+        palm_contact_weight=2345.0,
+        shoulder_wrist_axis_distance_weight=4321.0,
     )
     assert result is framework
     assert calls == ["position", "fit", "lock"]
+    assert fitting_distance_weights == [4321.0]
     assert user.grasp_calls == ["right"]
     assert lock_options == [{"mirror_left_from_right": True, "fit_log": report["grip"]["handle_fit_log"]}]
     assert report["grip"]["fingers"] == {
@@ -1728,10 +1800,12 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
 
     monkeypatch.setattr(chestpress, "lock_hands_to_handles", lock_hands)
     fitting_weights = []
+    fitting_distance_weights = []
     fitted_sides = []
 
     def fit_handle(**kwargs):
         fitting_weights.append(kwargs["palm_contact_weight"])
+        fitting_distance_weights.append(kwargs["shoulder_wrist_axis_distance_weight"])
         fitted_sides.append(kwargs["side"])
         assert "palm_position_handle" not in kwargs
         assert "palm_position_weight" not in kwargs
@@ -1765,6 +1839,7 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
                 wrapper, user, step_deg=1.0,
                 concentric_duration_s=1.5, eccentric_duration_s=2.5,
                 palm_contact_weight=4321.0,
+                shoulder_wrist_axis_distance_weight=5432.0,
             )
         fit_log = raised.value.handle_fit_log
         assert "evaluation limit exceeded" in str(raised.value)
@@ -1790,6 +1865,9 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
         }]
         assert framework.states_trajectory.getSize() == 0
         assert fitting_weights and all(weight == 4321.0 for weight in fitting_weights)
+        assert fitting_distance_weights and all(
+            weight == 5432.0 for weight in fitting_distance_weights
+        )
         assert fitted_sides and set(fitted_sides) == {"right"}
         assert lock_modes and all(lock_modes)
         return
@@ -1798,9 +1876,13 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
         wrapper, user, step_deg=1.0,
         concentric_duration_s=1.5, eccentric_duration_s=2.5,
         palm_contact_weight=4321.0,
+        shoulder_wrist_axis_distance_weight=5432.0,
     )
     expected_degrees = [0, 1, 2, 1, 0]
     assert fitting_weights and all(weight == 4321.0 for weight in fitting_weights)
+    assert fitting_distance_weights and all(
+        weight == 5432.0 for weight in fitting_distance_weights
+    )
     assert fitted_sides and set(fitted_sides) == {"right"}
     assert lock_modes and all(lock_modes)
     assert [entry["phase"] for entry in fit_log] == [
@@ -2281,3 +2363,21 @@ def test_fit_signature_describes_the_returned_log():
         get_type_hints(handlefit.fit_handle)["return"]
     )
     assert len(inspect.signature(handlefit.fit_handle).return_annotation.__args__) == 3
+    assert (
+        inspect.signature(handlefit.fit_handle)
+        .parameters["wrist_flex_weight"]
+        .default
+        == 10.0
+    )
+    assert (
+        inspect.signature(ChestPress.fit_user)
+        .parameters["wrist_flex_weight"]
+        .default
+        == 10.0
+    )
+    assert (
+        inspect.signature(ChestPress.simulate_kinematics)
+        .parameters["wrist_flex_weight"]
+        .default
+        == 10.0
+    )

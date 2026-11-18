@@ -154,8 +154,7 @@ def _filter_upper_limb_trajectories(
         return
 
     sample_count = max(
-        int(math.ceil((times[-1] - times[0]) * _TRAJECTORY_FILTER_SAMPLE_RATE_HZ))
-        + 1,
+        int(math.ceil((times[-1] - times[0]) * _TRAJECTORY_FILTER_SAMPLE_RATE_HZ)) + 1,
         2,
     )
     uniform_times = np.linspace(times[0], times[-1], sample_count)
@@ -171,10 +170,7 @@ def _filter_upper_limb_trajectories(
 
     positions = np.asarray(
         [
-            [
-                coordinate.getValue(user_state)
-                for coordinate in upper_limb_coordinates
-            ]
+            [coordinate.getValue(user_state) for coordinate in upper_limb_coordinates]
             for user_state, _ in states
         ],
         dtype=float,
@@ -294,14 +290,16 @@ def _restore_filtered_palm_contact(
                 mirror_left_from_right=True,
                 fit_log=fallback_log,
             )
-            sample["messages"].append({
-                "kind": "post_filter_contact_fallback",
-                "level": "WARNING",
-                "message": (
-                    "restored original upper-limb coordinates after filtered "
-                    "palm-anchor fitting failed"
-                ),
-            })
+            sample["messages"].append(
+                {
+                    "kind": "post_filter_contact_fallback",
+                    "level": "WARNING",
+                    "message": (
+                        "restored original upper-limb coordinates after filtered "
+                        "palm-anchor fitting failed"
+                    ),
+                }
+            )
             sample["messages"].extend(fallback_log[0]["messages"])
             sample["fallback"] = "unfiltered_upper_limb_pose"
             if not isinstance(contact_maintained, bool):
@@ -425,15 +423,16 @@ class ChestPress(Equipment, abc.ABC):
         self,
         user: User,
         *,
-        wrist_flex_weight: float = 1.0,
+        wrist_flex_weight: float = 10.0,
         wrist_dev_weight: float = 0.2,
-        knuckle_weight: float = 5.0,
+        knuckle_weight: float = 10.0,
         knuckle_end_weight: float = 10.0,
         protraction_weight: float = 1.0,
         scapular_elevation_weight: float = 1.0,
         arm_weight: float = 1.0,
         pro_sup_weight: float = 1.0,
         plane_distance_weight: float = 1.0,
+        shoulder_wrist_axis_distance_weight: float = 10.0,
         palm_contact_weight: float = 10.0,
     ) -> tuple[Framework, dict[str, Any]]:
         """Fit a user on the machine.
@@ -450,11 +449,11 @@ class ChestPress(Equipment, abc.ABC):
         ----------
         user : opensim_frameworks.User
             Scaled user whose feet are initially in contact with ground.
-        wrist_flex_weight : float, default=1.0
+        wrist_flex_weight : float, default=10.0
             Weight favoring at least 30 degrees of wrist extension.
         wrist_dev_weight : float, default=0.2
             Weight for neutral radial/ulnar deviation.
-        knuckle_weight : float, default=5.0
+        knuckle_weight : float, default=10.0
             Weight for directed alignment of the index-to-little MCP vector
             with the handle axis.
         knuckle_end_weight : float, default=10.0
@@ -471,7 +470,10 @@ class ChestPress(Equipment, abc.ABC):
             Weight favoring forearm supination near 90 degrees.
         plane_distance_weight : float, default=1.0
             Weight for keeping the handle axis in the plane defined by the
-            shoulder, elbow and palm marker.
+            shoulder, elbow and wrist joint centre.
+        shoulder_wrist_axis_distance_weight : float, default=10.0
+            Weight for minimizing the distance between the shoulder-wrist line
+            and the handle axis.
         palm_contact_weight : float, default=10.0
             Weight for matching the palm-marker and middle MCP-to-axis distances
             to the cylinder radius.
@@ -531,6 +533,7 @@ class ChestPress(Equipment, abc.ABC):
             knuckle_weight=knuckle_weight,
             knuckle_end_weight=knuckle_end_weight,
             plane_distance_weight=plane_distance_weight,
+            shoulder_wrist_axis_distance_weight=shoulder_wrist_axis_distance_weight,
             pro_sup_weight=pro_sup_weight,
             wrist_flex_weight=wrist_flex_weight,
             wrist_dev_weight=wrist_dev_weight,
@@ -581,15 +584,16 @@ class ChestPress(Equipment, abc.ABC):
         concentric_duration_s: float = 1.5,
         eccentric_duration_s: float = 2.5,
         *,
-        wrist_flex_weight: float = 1.0,
+        wrist_flex_weight: float = 10.0,
         wrist_dev_weight: float = 0.2,
-        knuckle_weight: float = 5.0,
+        knuckle_weight: float = 10.0,
         knuckle_end_weight: float = 10.0,
         protraction_weight: float = 1.0,
         scapular_elevation_weight: float = 1.0,
         arm_weight: float = 1.0,
         pro_sup_weight: float = 1.0,
         plane_distance_weight: float = 1.0,
+        shoulder_wrist_axis_distance_weight: float = 10.0,
         palm_contact_weight: float = 10.0,
     ) -> tuple[Framework, list[dict[str, Any]]]:
         """Fit and record one outward-and-return press movement.
@@ -614,11 +618,11 @@ class ChestPress(Equipment, abc.ABC):
             Duration of the concentric press phase, in seconds.
         eccentric_duration_s : float, default=2.5
             Duration of the eccentric return phase, in seconds.
-        wrist_flex_weight : float, default=1.0
+        wrist_flex_weight : float, default=10.0
             Weight favoring at least 30 degrees of wrist extension.
         wrist_dev_weight : float, default=0.2
             Weight for neutral radial/ulnar deviation.
-        knuckle_weight : float, default=5.0
+        knuckle_weight : float, default=10.0
             Weight for directed index-to-little MCP alignment with the handle.
         knuckle_end_weight : float, default=10.0
             Weight for keeping both MCP projections within their endpoint limits.
@@ -633,7 +637,10 @@ class ChestPress(Equipment, abc.ABC):
             Weight favoring forearm supination near 90 degrees.
         plane_distance_weight : float, default=1.0
             Weight for keeping the handle axis in the plane defined by the
-            shoulder, elbow and palm marker.
+            shoulder, elbow and wrist joint centre.
+        shoulder_wrist_axis_distance_weight : float, default=10.0
+            Weight for minimizing the distance between the shoulder-wrist line
+            and the handle axis.
         palm_contact_weight : float, default=10.0
             Weight for matching the palm-marker and middle MCP-to-axis distances
             to the cylinder radius.
@@ -690,6 +697,7 @@ class ChestPress(Equipment, abc.ABC):
             arm_weight=arm_weight,
             pro_sup_weight=pro_sup_weight,
             plane_distance_weight=plane_distance_weight,
+            shoulder_wrist_axis_distance_weight=shoulder_wrist_axis_distance_weight,
             palm_contact_weight=palm_contact_weight,
             wrist_flex_weight=wrist_flex_weight,
         )
@@ -699,6 +707,7 @@ class ChestPress(Equipment, abc.ABC):
             "knuckle_weight": knuckle_weight,
             "knuckle_end_weight": knuckle_end_weight,
             "plane_distance_weight": plane_distance_weight,
+            "shoulder_wrist_axis_distance_weight": shoulder_wrist_axis_distance_weight,
             "pro_sup_weight": pro_sup_weight,
             "wrist_flex_weight": wrist_flex_weight,
             "wrist_dev_weight": wrist_dev_weight,

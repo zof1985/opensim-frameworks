@@ -43,6 +43,7 @@ __all__ = [
     "index_knuckle_endpoint_penalty",
     "little_knuckle_endpoint_penalty",
     "shoulder_palm_plane_penalty",
+    "shoulder_wrist_axis_distance_penalty",
 ]
 
 _ARM_COORDINATE_PREFIXES = (
@@ -160,11 +161,7 @@ def external_shoulder_rotation_penalty(
     shoulder_rotation_rad: float, weight: float
 ) -> float:
     """Return the one-sided weighted residual for external shoulder rotation."""
-    return (
-        math.sqrt(weight)
-        * min(shoulder_rotation_rad, 0.0)
-        / math.radians(5.0)
-    )
+    return math.sqrt(weight) * min(shoulder_rotation_rad, 0.0) / math.radians(5.0)
 
 
 def scapular_retraction_penalty(
@@ -216,10 +213,9 @@ def knuckle_alignment_penalty(
             math.sqrt(weight)
             * np.cross(direction, handle_axis)
             / math.sin(_ANGLE_TOLERANCE_RAD),
-            np.array([
-                math.sqrt(weight)
-                * (1.0 - float(np.dot(direction, handle_axis)))
-            ]),
+            np.array(
+                [math.sqrt(weight) * (1.0 - float(np.dot(direction, handle_axis)))]
+            ),
         )
     )
 
@@ -255,13 +251,16 @@ def shoulder_palm_plane_penalty(
 ) -> float:
     """Return the weighted sine of the handle axis's angle from the plane.
 
-    The plane is defined by the shoulder, elbow, and palm marker. A zero
-    residual means the handle axis lies in that plane.
+    The plane is defined by the shoulder, elbow, and third point. The legacy
+    function name and ``palm`` parameter are retained for compatibility; the
+    chest-press fit supplies the wrist joint centre as the third point.
+    A zero residual means the handle axis lies in that plane.
 
     Parameters
     ----------
     shoulder, elbow, palm : array-like
-        Points in Ground coordinates, in metres.
+        Points in Ground coordinates, in metres. In the chest-press fit, the
+        third point is the wrist joint centre.
     handle_axis_ground : array-like
         Unit vector from handle endpoint 1 to endpoint 2 in Ground coordinates.
     weight : float
@@ -275,15 +274,71 @@ def shoulder_palm_plane_penalty(
     """
     shoulder_point = np.asarray(shoulder, dtype=float)
     elbow_point = np.asarray(elbow, dtype=float)
-    palm_point = np.asarray(palm, dtype=float)
+    third_point = np.asarray(palm, dtype=float)
     axis = np.asarray(handle_axis_ground, dtype=float)
-    plane_normal = np.cross(elbow_point - shoulder_point, palm_point - shoulder_point)
+    plane_normal = np.cross(elbow_point - shoulder_point, third_point - shoulder_point)
     normal_length = float(np.linalg.norm(plane_normal))
     if normal_length > 1e-12:
         deviation = float(np.dot(plane_normal, axis) / normal_length)
     else:
         deviation = 0.0
     return math.sqrt(weight) * deviation / math.sin(_ANGLE_TOLERANCE_RAD)
+
+
+def shoulder_wrist_axis_distance_penalty(
+    shoulder: npt.ArrayLike,
+    wrist: npt.ArrayLike,
+    axis_origin: npt.ArrayLike,
+    axis_direction: npt.ArrayLike,
+    weight: float,
+) -> float:
+    """Return the weighted distance between shoulder-wrist and handle-axis lines.
+
+    The lines are infinite. A degenerate shoulder-wrist segment is treated as
+    a point, and the distance is measured from that point to the handle axis.
+
+    Parameters
+    ----------
+    shoulder, wrist : array-like
+        Endpoints defining the shoulder-wrist line in Ground coordinates.
+    axis_origin : array-like
+        A point on the handle axis in Ground coordinates.
+    axis_direction : array-like
+        Handle-axis direction in Ground coordinates.
+    weight : float
+        Nonnegative loss weight.
+
+    Returns
+    -------
+    float
+        Minimum line distance normalized by the position tolerance and
+        multiplied by the square root of ``weight``.
+    """
+    shoulder_point = np.asarray(shoulder, dtype=float)
+    wrist_point = np.asarray(wrist, dtype=float)
+    origin = np.asarray(axis_origin, dtype=float)
+    handle_direction = np.asarray(axis_direction, dtype=float)
+    handle_length = float(np.linalg.norm(handle_direction))
+    if handle_length <= 1e-12:
+        raise ValueError("axis_direction must be nonzero")
+    handle_direction = handle_direction / handle_length
+
+    shoulder_wrist_direction = wrist_point - shoulder_point
+    line_length = float(np.linalg.norm(shoulder_wrist_direction))
+    offset = origin - shoulder_point
+    if line_length <= 1e-12:
+        radial = offset - np.dot(offset, handle_direction) * handle_direction
+        distance = float(np.linalg.norm(radial))
+    else:
+        shoulder_wrist_direction /= line_length
+        common_normal = np.cross(shoulder_wrist_direction, handle_direction)
+        normal_length = float(np.linalg.norm(common_normal))
+        if normal_length <= 1e-12:
+            distance = float(np.linalg.norm(np.cross(offset, handle_direction)))
+        else:
+            distance = abs(float(np.dot(offset, common_normal))) / normal_length
+
+    return math.sqrt(weight) * distance / _POSITION_TOLERANCE_M
 
 
 def lock_hands_to_handles(
@@ -410,14 +465,12 @@ def lock_hands_to_handles(
         _report_palm_anchor_residual("left", error, converged, message, fit_log)
 
     contact_maintained = all(
-        residual <= _PALM_POSITION_TOLERANCE_M
-        for residual in residuals.values()
+        residual <= _PALM_POSITION_TOLERANCE_M for residual in residuals.values()
     )
     if contact_maintained and hasattr(user, "getCoordinateSet"):
         coordinates = user.getCoordinateSet()
         coordinate_names = {
-            coordinates.get(index).getName()
-            for index in range(coordinates.getSize())
+            coordinates.get(index).getName() for index in range(coordinates.getSize())
         }
         safe_coordinates.clear()
         for side, suffix in (("right", "r"), ("left", "l")):
@@ -551,9 +604,11 @@ def _fit_palm_marker_to_handle(
 
     initial_values = np.asarray(
         [
-            starting_values.get(name, coordinates.get(name).getValue(user.state))
-            if starting_values is not None
-            else coordinates.get(name).getValue(user.state)
+            (
+                starting_values.get(name, coordinates.get(name).getValue(user.state))
+                if starting_values is not None
+                else coordinates.get(name).getValue(user.state)
+            )
             for name in variable_names
         ],
         dtype=float,
@@ -576,9 +631,11 @@ def _fit_palm_marker_to_handle(
             user.set_scapular_girdle_values(
                 suffix,
                 [
-                    float(values_by_name[name])
-                    if name in values_by_name
-                    else coordinates.get(name).getValue(user.state)
+                    (
+                        float(values_by_name[name])
+                        if name in values_by_name
+                        else coordinates.get(name).getValue(user.state)
+                    )
                     for name in girdle_names
                 ],
                 check_contact=False,
@@ -814,11 +871,12 @@ def fit_handle(
     side: Literal["left", "right"],
     *,
     palm_contact_weight: float = 10.0,
-    knuckle_weight: float = 5.0,
+    knuckle_weight: float = 10.0,
     knuckle_end_weight: float = 10.0,
     plane_distance_weight: float = 1.0,
+    shoulder_wrist_axis_distance_weight: float = 10.0,
     pro_sup_weight: float = 1.0,
-    wrist_flex_weight: float = 1.0,
+    wrist_flex_weight: float = 10.0,
     wrist_dev_weight: float = 0.2,
     protraction_weight: float = 1.0,
     scapular_elevation_weight: float = 1.0,
@@ -833,7 +891,8 @@ def fit_handle(
     the shoulder angles. The handle meshes are approximated by an enclosing
     cylinder.
     Retraction, low shoulder elevation, palm and middle MCP-to-axis distances,
-    arm-plane alignment and knuckle-line alignment are weighted objectives.
+    arm-plane alignment, shoulder-wrist/handle-axis distance and knuckle-line
+    alignment are weighted objectives.
     Forearm rotation is encouraged toward 90 degrees and external upper-arm
     rotation is penalized. Wrist extension is encouraged to at least 30
     degrees. The palm and middle MCP-to-axis distance targets are the
@@ -877,7 +936,7 @@ def fit_handle(
     palm_contact_weight : float, default=10.0
         Weight for matching the palm-marker and middle MCP-to-axis distances to
         the cylinder radius.
-    knuckle_weight : float, default=5.0
+    knuckle_weight : float, default=10.0
         Weight for aligning the directed vector from little to index MCP with
         the directed handle axis.
     knuckle_end_weight : float, default=10.0
@@ -885,10 +944,13 @@ def fit_handle(
         specified endpoint limits.
     plane_distance_weight : float, default=1.0
         Weight for keeping the handle axis in the plane defined by the
-        shoulder, elbow and palm marker.
+        shoulder, elbow and wrist joint centre.
+    shoulder_wrist_axis_distance_weight : float, default=10.0
+        Weight for minimizing the distance between the shoulder-wrist line and
+        the handle axis.
     pro_sup_weight : float, default=1.0
         Weight penalizing forearm rotation away from 90 degrees.
-    wrist_flex_weight : float, default=1.0
+    wrist_flex_weight : float, default=10.0
         Weight favoring at least 30 degrees of wrist extension.
     wrist_dev_weight : float, default=0.2
         Weight for neutral wrist radial/ulnar deviation.
@@ -1088,13 +1150,24 @@ def fit_handle(
             ]
         )
 
+        wrist = np.asarray(user.joint_center(f"radius_hand_{suffix}"))
         residuals.append(
             shoulder_palm_plane_penalty(
                 shoulder,
                 elbow,
-                palm_marker_pos,
+                wrist,
                 handle_axis_ground,
                 plane_distance_weight,
+            )
+        )
+        axis_origin_ground = rotation @ axis_origin + handle_frame[:3, 3]
+        residuals.append(
+            shoulder_wrist_axis_distance_penalty(
+                shoulder,
+                wrist,
+                axis_origin_ground,
+                handle_axis_ground,
+                shoulder_wrist_axis_distance_weight,
             )
         )
 
@@ -1138,7 +1211,8 @@ def fit_handle(
         "knuckle_alignment_direction",
         "index_endpoint_projection",
         "little_endpoint_projection",
-        "shoulder_palm_plane",
+        "shoulder_wrist_plane",
+        "shoulder_wrist_axis_distance",
     )
 
     def report_loss(values: npt.ArrayLike) -> None:

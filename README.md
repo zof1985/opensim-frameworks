@@ -91,9 +91,9 @@ exception carrying the accumulated log.
 `fit_handle` returns `(elbow_flexion, palm_position, messages)`; exceptions
 expose messages collected so far as `handle_fit_log`. Its loss combines
 weighted objectives for scapular retraction and depression, the
-shoulder-elbow-palm plane, neutral wrist deviation, forearm supination,
-upper-arm rotation, palm-to-axis distance, knuckle alignment, and MCP endpoint
-limits.
+shoulder-elbow-wrist plane, neutral wrist deviation, forearm supination,
+upper-arm rotation, palm-to-axis distance, shoulder-wrist/handle-axis distance,
+knuckle alignment, and MCP endpoint limits.
 Wrist extension is encouraged to at least 30 degrees.
 The knuckle alignment is directed: the vector from the little-finger MCP to
 the index MCP must point from handle endpoint 1 (lower Ground Z) toward

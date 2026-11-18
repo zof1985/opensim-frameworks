@@ -23,4 +23,5 @@ __all__ = [
     "index_knuckle_endpoint_penalty",
     "little_knuckle_endpoint_penalty",
     "shoulder_palm_plane_penalty",
+    "shoulder_wrist_axis_distance_penalty",
 ]
