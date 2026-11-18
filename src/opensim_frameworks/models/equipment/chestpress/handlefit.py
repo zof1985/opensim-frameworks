@@ -65,6 +65,7 @@ _MIRRORED_CONTACT_COORDINATE_PREFIXES = (
 _PALM_POSITION_TOLERANCE_M = 0.001
 _POSITION_TOLERANCE_M = 0.001
 _ANGLE_TOLERANCE_RAD = math.radians(1.0)
+_MIN_WRIST_EXTENSION_RAD = math.radians(30.0)
 _P = ParamSpec("_P")
 _FIT_LOG_LOCK = threading.RLock()
 _FitMessage = dict[str, str | int | None]
@@ -134,10 +135,14 @@ def wrist_deviation_penalty(wrist_deviation_rad: float, weight: float) -> float:
 
 
 def wrist_flexion_penalty(wrist_flexion_rad: float, weight: float) -> float:
-    """Return a one-sided residual penalizing palmar wrist flexion only."""
+    """Favor at least 30 degrees of wrist extension.
+
+    Positive coordinate values represent palmar flexion and negative values
+    represent extension. Values at or below -30 degrees have no penalty.
+    """
     return (
         math.sqrt(weight)
-        * max(wrist_flexion_rad, 0.0)
+        * max(wrist_flexion_rad + _MIN_WRIST_EXTENSION_RAD, 0.0)
         / _ANGLE_TOLERANCE_RAD
     )
 
@@ -827,11 +832,11 @@ def fit_handle(
     coordinates are left unchanged. User derives the scapular coordinates from
     the shoulder angles. The handle meshes are approximated by an enclosing
     cylinder.
-    Retraction, low shoulder elevation, palm and second-knuckle-to-axis
-    distances, arm-plane alignment and knuckle-line alignment are weighted
-    objectives. Forearm rotation is encouraged toward 90 degrees and external
-    upper-arm rotation is penalized. Wrist flexion or extension has no
-    preferred target. The palm and PIP-to-axis distance targets are the
+    Retraction, low shoulder elevation, palm and middle MCP-to-axis distances,
+    arm-plane alignment and knuckle-line alignment are weighted objectives.
+    Forearm rotation is encouraged toward 90 degrees and external upper-arm
+    rotation is penalized. Wrist extension is encouraged to at least 30
+    degrees. The palm and middle MCP-to-axis distance targets are the
     enclosing-cylinder radius. The
     little-to-index MCP vector is aligned in the same direction as endpoint 1
     (lower Ground Z) to endpoint 2 (higher Ground Z). The index MCP
@@ -839,8 +844,9 @@ def fit_handle(
     endpoint minus half the MCP span; the little MCP projection is limited by
     the distance from the centre to the first endpoint. Palm orientation is
     reported, not optimized; palm height relative to the axis has no preferred
-    target. Wrist flexion is penalized only for palmar flexion, while wrist
-    radial/ulnar deviation has a separate zero-deviation objective. Scapular
+    target. Wrist flexion/extension is penalized when extension is less than
+    30 degrees, while wrist radial/ulnar deviation has a separate
+    zero-deviation objective. Scapular
     proximity is optimized at three
     costal-surface points against the rib mesh, and a soft penalty uses
     collision risk interpolated from the shoulder map. The post-fit contact
@@ -869,8 +875,8 @@ def fit_handle(
     side : {'left', 'right'}
         Side being fitted (for the arm and shoulder prefix matching).
     palm_contact_weight : float, default=10.0
-        Weight for matching the palm-marker and second-knuckle (PIP)-to-axis
-        distances to the cylinder radius.
+        Weight for matching the palm-marker and middle MCP-to-axis distances to
+        the cylinder radius.
     knuckle_weight : float, default=5.0
         Weight for aligning the directed vector from little to index MCP with
         the directed handle axis.
@@ -883,8 +889,7 @@ def fit_handle(
     pro_sup_weight : float, default=1.0
         Weight penalizing forearm rotation away from 90 degrees.
     wrist_flex_weight : float, default=1.0
-        Weight penalizing palmar wrist flexion; wrist extension is not
-        penalized.
+        Weight favoring at least 30 degrees of wrist extension.
     wrist_dev_weight : float, default=0.2
         Weight for neutral wrist radial/ulnar deviation.
     protraction_weight : float, default=1.0
@@ -1012,20 +1017,16 @@ def fit_handle(
                 palm_contact_weight,
             ),
         ]
-        pip_knuckles = [
-            np.asarray(user.joint_center(f"{finger}_pip_{suffix}"))
-            for finger in ("index", "middle", "ring", "little")
-        ]
-        residuals.extend(
+        middle_knuckle = np.asarray(user.joint_center(f"middle_mcp_{suffix}"))
+        residuals.append(
             _point_axis_distance_penalty(
-                knuckle,
+                middle_knuckle,
                 handle_frame,
                 axis_origin,
                 axis_direction,
                 cylinder_radius,
                 palm_contact_weight,
             )
-            for knuckle in pip_knuckles
         )
         wrist_dev = coordinates.get(f"wrist_dev_{suffix}").getValue(user.state)
         residuals.append(wrist_deviation_penalty(wrist_dev, wrist_dev_weight))
@@ -1120,10 +1121,7 @@ def fit_handle(
     )
     loss_component_names = (
         "palm_axis_distance",
-        "index_pip_axis_distance",
-        "middle_pip_axis_distance",
-        "ring_pip_axis_distance",
-        "little_pip_axis_distance",
+        "middle_mcp_axis_distance",
         "wrist_deviation",
         "wrist_flexion",
         "forearm_supination",

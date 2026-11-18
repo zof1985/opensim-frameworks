@@ -118,11 +118,11 @@ def fit_setup(tmp_path, monkeypatch):
         "elbow_r": np.array([0.0, 0.5, 0.4]),
         "radius_hand_r": np.array([0.25, 0.33, 0.55]),
         **{
-            f"{finger}_mcp_r": np.array([0.3, 0.30 + 0.02 * index, 0.55])
-            for index, finger in enumerate(("index", "middle", "ring", "little"))
-        },
-        **{
-            f"{finger}_pip_r": np.array([0.32, 0.30 + 0.02 * index, 0.5])
+            f"{finger}_mcp_r": (
+                np.array([0.32, 0.30 + 0.02 * index, 0.5])
+                if finger == "middle"
+                else np.array([0.3, 0.30 + 0.02 * index, 0.55])
+            )
             for index, finger in enumerate(("index", "middle", "ring", "little"))
         },
     }
@@ -260,9 +260,11 @@ def test_public_loss_penalties_return_their_expected_residuals():
         [0.025, 0.0, 0.0], frame, origin, [0.0, 1.0, 0.0], 0.02, 4.0
     ) == pytest.approx(10.0)
     assert handlefit.wrist_deviation_penalty(np.deg2rad(2.0), 1.0) == pytest.approx(2.0)
-    assert handlefit.wrist_flexion_penalty(np.deg2rad(5.0), 4.0) == pytest.approx(10.0)
-    assert handlefit.wrist_flexion_penalty(0.0, 4.0) == 0.0
-    assert handlefit.wrist_flexion_penalty(np.deg2rad(-5.0), 4.0) == 0.0
+    assert handlefit.wrist_flexion_penalty(np.deg2rad(5.0), 4.0) == pytest.approx(70.0)
+    assert handlefit.wrist_flexion_penalty(0.0, 4.0) == pytest.approx(60.0)
+    assert handlefit.wrist_flexion_penalty(np.deg2rad(-5.0), 4.0) == pytest.approx(50.0)
+    assert handlefit.wrist_flexion_penalty(np.deg2rad(-30.0), 1.0) == 0.0
+    assert handlefit.wrist_flexion_penalty(np.deg2rad(-40.0), 1.0) == 0.0
     assert handlefit.forearm_supination_penalty(np.deg2rad(85.0), 1.0) == pytest.approx(-1.0)
     assert handlefit.external_shoulder_rotation_penalty(np.deg2rad(-5.0), 1.0) == pytest.approx(-1.0)
     assert handlefit.scapular_retraction_penalty(2.0, 1.0, 4.0) == pytest.approx(2.0)
@@ -335,7 +337,7 @@ def test_palm_contact_targets_the_actual_cylinder_radius(fit_setup, monkeypatch,
     original_joint_center = user.joint_center
     user.joint_center = lambda name: (
         np.array([0.3 + radius, 0.4, 0.5])
-        if name.endswith("_pip_r")
+        if name == "middle_mcp_r"
         else original_joint_center(name)
     )
     _, costs = run_fit(monkeypatch, user, equipment, probes=[{}], palm_contact_weight=2.0)
@@ -371,7 +373,7 @@ def test_palm_axis_target_is_independent_of_wrist_position(
     )
 
 
-def test_second_knuckles_target_the_handle_radius(fit_setup, monkeypatch):
+def test_middle_knuckle_targets_the_handle_radius(fit_setup, monkeypatch):
     user, equipment, _, palm_ground = fit_setup
     palm_ground[:] = [0.32, 0.4, 0.5]
     monkeypatch.setattr(
@@ -384,10 +386,7 @@ def test_second_knuckles_target_the_handle_radius(fit_setup, monkeypatch):
             np.array([0.3, 0.52, 0.5]),
         ),
     )
-    points = {
-        f"{finger}_pip_r": np.array([0.33, 0.30 + 0.02 * index, 0.5])
-        for index, finger in enumerate(("index", "middle", "ring", "little"))
-    }
+    points = {"middle_mcp_r": np.array([0.33, 0.4, 0.5])}
     original_joint_center = user.joint_center
     user.joint_center = lambda name: points.get(name, original_joint_center(name))
 
@@ -399,7 +398,7 @@ def test_second_knuckles_target_the_handle_radius(fit_setup, monkeypatch):
         palm_contact_weight=2.0,
     )
 
-    assert costs[0] == pytest.approx(800.0, abs=1e-8)
+    assert costs[0] == pytest.approx(200.0, abs=1e-8)
 
 
 @pytest.mark.parametrize("angle", [0.0, 0.7])
@@ -537,19 +536,21 @@ def test_forearm_rotation_is_fitted_toward_90_degrees(fit_setup, monkeypatch):
     )
 
 
-def test_fit_handle_penalizes_wrist_flexion_but_not_extension(fit_setup, monkeypatch):
+def test_fit_handle_favors_at_least_30_degrees_of_wrist_extension(
+    fit_setup, monkeypatch
+):
     user, equipment, _, palm_ground = fit_setup
     palm_ground[:] = [0.325, 0.4, 0.5]
     _, costs = run_fit(
         monkeypatch, user, equipment,
         probes=[
-            {"wrist_flex_r": angle} for angle in (-0.8, 0.0, 0.8)
+            {"wrist_flex_r": np.deg2rad(angle)} for angle in (-40.0, -30.0, -20.0, 0.0)
         ],
         wrist_flex_weight=1.0,
     )
     np.testing.assert_allclose(
         costs,
-        [0.0, 0.0, (0.8 / np.deg2rad(1.0)) ** 2],
+        [0.0, 0.0, 10.0**2, 30.0**2],
         atol=1e-12,
     )
     assert "wrist_extension_penalty" not in handlefit.__all__
@@ -588,7 +589,7 @@ def test_palm_height_has_no_preferred_side_of_the_handle_axis(fit_setup, monkeyp
     original_joint_center = user.joint_center
     user.joint_center = lambda name: (
         np.array([0.32, 0.4, 0.5])
-        if name.endswith("_pip_r")
+        if name == "middle_mcp_r"
         else original_joint_center(name)
     )
     axis = np.array([0.3, 0.4, 0.5, 1.0, 0.0, 0.0])
@@ -833,10 +834,6 @@ def test_plane_and_knuckle_alignment_use_joint_geometry(fit_setup, monkeypatch):
         "elbow_r": np.array([0.5, 0.5, 0.0]),
         **{
             f"{finger}_mcp_r": np.array([0.3, 0.36 - 0.02 * index, 0.55])
-            for index, finger in enumerate(("index", "middle", "ring", "little"))
-        },
-        **{
-            f"{finger}_pip_r": np.array([0.32, 0.36 - 0.02 * index, 0.5])
             for index, finger in enumerate(("index", "middle", "ring", "little"))
         },
     }

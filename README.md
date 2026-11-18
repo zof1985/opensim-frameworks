@@ -94,7 +94,7 @@ weighted objectives for scapular retraction and depression, the
 shoulder-elbow-palm plane, neutral wrist deviation, forearm supination,
 upper-arm rotation, palm-to-axis distance, knuckle alignment, and MCP endpoint
 limits.
-Wrist flexion/extension has no preferred target.
+Wrist extension is encouraged to at least 30 degrees.
 The knuckle alignment is directed: the vector from the little-finger MCP to
 the index MCP must point from handle endpoint 1 (lower Ground Z) toward
 endpoint 2 (higher Ground Z).
