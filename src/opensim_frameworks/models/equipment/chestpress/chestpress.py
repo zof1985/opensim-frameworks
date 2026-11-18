@@ -490,12 +490,14 @@ class ChestPress(Equipment, abc.ABC):
         """Fit and record one outward-and-return press movement.
 
         Starting from the fitted zero-angle pose, the right lever advances by
-        ``step_deg`` until right elbow flexion is at most 1 degree. At each
-        angle the right arm is refitted, the fingers grasp the handle, and the
-        palm anchor is fit to the moving handle frame on a best-effort basis
-        before the arm is mirrored left. The same fitting and grasping sequence
-        is repeated on return to zero. Every state is retained. An unreachable
-        palm anchor is reported with its residual and does not stop simulation.
+        ``step_deg`` while both palm anchors remain within 1 mm of their
+        positions on the moving handles. The first step that exceeds this
+        tolerance ends the concentric phase; that detached state is not
+        recorded, and the eccentric phase returns from the last attached
+        position. At each angle the right arm is refitted, the fingers grasp
+        the handle, and the palm anchors are fit before the arm is mirrored
+        left. The same fitting and grasping sequence is repeated on return to
+        zero.
 
         Parameters
         ----------
@@ -542,14 +544,15 @@ class ChestPress(Equipment, abc.ABC):
             If a numeric parameter is invalid, a simulated right-lever angle
             is outside the left lever's range.
         RuntimeError
-            If the elbow does not reach 1 degree before the lever range ends
-            or a handle fit fails.
+            If no positive attached stroke is possible, contact is lost during
+            the eccentric phase, or a handle fit fails.
 
         Notes
         -----
         Concentric state times follow the inverse CDF of a Beta(3, 5) speed
         profile; eccentric state times follow the inverse CDF of a normalized
-        Gaussian speed profile with zero endpoint speed. Coordinate speeds are
+        Gaussian speed profile with zero endpoint speed. Contact fitting uses
+        the previous attached pose as its initial guess. Coordinate speeds are
         derived from the fitted coordinate positions and lever-angle profile.
         Before trajectory recording, shoulder-girdle, arm, wrist, and finger
         coordinates are resampled at 30 Hz and filtered with a fourth-order,
@@ -648,13 +651,15 @@ class ChestPress(Equipment, abc.ABC):
         state_angles: list[float] = [lower]
         state_phases: list[str] = ["concentric"]
 
-        def fit_grasp_and_save(angle: float, phase: str) -> float:
+        def fit_grasp_and_save(angle: float, phase: str) -> bool:
             if (
                 not left_lever_coord.getRangeMin()
                 <= angle
                 <= left_lever_coord.getRangeMax()
             ):
                 raise ValueError("simulated angle is outside the left lever range")
+            framework.user.state = osim.State(states[-1][0])
+            framework.equipment.state = osim.State(states[-1][1])
             right_lever_coord.setValue(framework.equipment.state, angle, False)
             left_lever_coord.setValue(framework.equipment.state, angle, False)
             framework.equipment.realizePosition(framework.equipment.state)
@@ -679,14 +684,13 @@ class ChestPress(Equipment, abc.ABC):
                 framework.equipment.getBodySet().get("right_handle"),
                 framework.equipment.handle_meshes("right"),
             )
-            lock_hands_to_handles(
+            contact_maintained = lock_hands_to_handles(
                 framework, mirror_left_from_right=True, fit_log=fit_log
             )
-            elbow_after_contact = math.degrees(
-                framework.user.getCoordinateSet()
-                .get("elbow_flex_r")
-                .getValue(framework.user.state)
-            )
+            if not isinstance(contact_maintained, bool):
+                raise RuntimeError("palm-anchor fitting did not report contact status")
+            if not contact_maintained:
+                return False
             states.append(
                 (
                     osim.State(framework.user.state),
@@ -695,35 +699,42 @@ class ChestPress(Equipment, abc.ABC):
             )
             state_angles.append(angle)
             state_phases.append(phase)
-            return elbow_after_contact
+            return True
 
         angle = lower
         while True:
             next_angle = min(angle + step_rad, upper)
             if next_angle <= angle:
                 error = RuntimeError(
-                    "The right lever reached its upper limit before the elbow "
-                    "extended to 1 degree"
+                    "The right lever range does not allow a positive attached stroke"
                 )
                 setattr(error, "handle_fit_log", fit_log)
                 raise error
             angle = next_angle
-            elbow_flexion = fit_grasp_and_save(angle, "concentric")
-            if elbow_flexion <= 1.0:
+            if not fit_grasp_and_save(angle, "concentric"):
+                angle = state_angles[-1]
+                if angle <= lower:
+                    error = RuntimeError(
+                        "Palm contact was lost before a positive concentric "
+                        "stroke was recorded"
+                    )
+                    setattr(error, "handle_fit_log", fit_log)
+                    raise error
                 break
             if angle >= upper:
-                error = RuntimeError(
-                    f"The right lever reached {math.degrees(angle):.2f} degrees "
-                    f"with the elbow still flexed by {elbow_flexion:.2f} degrees"
-                )
-                setattr(error, "handle_fit_log", fit_log)
-                raise error
+                break
 
         while angle > lower:
             angle = max(lower, angle - step_rad)
             if math.isclose(angle, lower, rel_tol=0.0, abs_tol=1e-12):
                 angle = lower
-            fit_grasp_and_save(angle, "eccentric")
+            if not fit_grasp_and_save(angle, "eccentric"):
+                error = RuntimeError(
+                    "Palm contact was lost during the eccentric phase at "
+                    f"{math.degrees(angle):.2f} degrees"
+                )
+                setattr(error, "handle_fit_log", fit_log)
+                raise error
 
         state_times, angular_speeds = _phase_times_and_speeds(
             state_angles,

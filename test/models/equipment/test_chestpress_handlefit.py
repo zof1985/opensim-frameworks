@@ -992,6 +992,7 @@ def test_fit_user_returns_messages_for_each_fit(monkeypatch):
         assert kwargs.pop("framework") is framework
         calls.append("lock")
         lock_options.append(kwargs)
+        return True
 
     def fit_handle(**kwargs):
         calls.append("fit")
@@ -1083,6 +1084,121 @@ def _simulation_model(names):
         model.addJoint(joint)
     model.state = model.initSystem()
     return model
+
+
+def test_palm_anchor_fit_applies_scapular_optimizer_values(monkeypatch):
+    class Coordinate:
+        def __init__(self, name, maximum):
+            self.name = name
+            self.value = 0.0
+            self.maximum = maximum
+
+        def getName(self):
+            return self.name
+
+        def getLocked(self, _state):
+            return False
+
+        def getRangeMin(self):
+            return 0.0
+
+        def getRangeMax(self):
+            return self.maximum
+
+        def getValue(self, _state):
+            return self.value
+
+        def setValue(self, _state, value, _enforce_constraints):
+            self.value = value
+
+    girdle_names = [
+        f"{name}_r" for name in handlefit.SHOULDER_GIRDLE_COORDINATES
+    ]
+    active_names = {
+        "sc_protraction_r",
+        "sc_elevation_r",
+        "ac_protraction_r",
+    }
+    coordinates = {
+        name: Coordinate(name, 1.0 if name in active_names else 0.0)
+        for name in girdle_names
+    }
+
+    class CoordinateSet:
+        def getSize(self):
+            return len(coordinates)
+
+        def get(self, index_or_name):
+            if isinstance(index_or_name, int):
+                return list(coordinates.values())[index_or_name]
+            return coordinates[index_or_name]
+
+    class MarkerSet:
+        def getIndex(self, _name):
+            return 0
+
+        def get(self, name):
+            return name
+
+    user = SimpleNamespace(state=object())
+    user.getCoordinateSet = lambda: CoordinateSet()
+    user.getMarkerSet = lambda: MarkerSet()
+    user.realizePosition = lambda _state: None
+
+    def set_girdle_values(suffix, values, *, check_contact):
+        assert suffix == "r"
+        assert not check_contact
+        for name, value in zip(girdle_names, values, strict=True):
+            coordinates[name].value = value
+
+    user.set_scapular_girdle_values = set_girdle_values
+    equipment = SimpleNamespace(state=object())
+    target = np.array([0.2, 0.3, 0.4])
+
+    def least_squares(residual, initial_values, **_kwargs):
+        assert initial_values.shape == (3,)
+        values = np.array([0.4, 0.3, 0.2])
+        return SimpleNamespace(
+            x=values,
+            success=True,
+            message="test solution",
+        )
+
+    monkeypatch.setattr(
+        handlefit,
+        "body_transform_array",
+        lambda _body, _state: np.eye(4),
+    )
+    monkeypatch.setattr(handlefit, "least_squares", least_squares)
+    monkeypatch.setattr(
+        handlefit,
+        "marker_position_array",
+        lambda _marker, _state: np.array(
+            [
+                coordinates["sc_protraction_r"].value,
+                coordinates["sc_elevation_r"].value,
+                coordinates["ac_protraction_r"].value,
+            ]
+        ),
+    )
+
+    error, converged, message = handlefit._fit_palm_marker_to_handle(
+        user,
+        equipment,
+        object(),
+        "right",
+        tuple(target),
+    )
+
+    assert [
+        coordinates[name].value
+        for name in ("sc_protraction_r", "sc_elevation_r", "ac_protraction_r")
+    ] == pytest.approx(target), [
+        message,
+        [(name, coordinates[name].value) for name in girdle_names],
+    ]
+    assert converged
+    assert error <= handlefit._PALM_POSITION_TOLERANCE_M
 
 
 def test_lock_palm_to_handles_leaves_other_motion_free(monkeypatch):
@@ -1304,6 +1420,7 @@ def test_symmetric_handle_lock_fits_right_and_mirrors_left(monkeypatch):
         side,
         palm,
         coordinate_prefixes=handlefit._FIT_COORDINATE_PREFIXES,
+        starting_values=None,
     ):
         fits.append((side, coordinate_prefixes))
         return 0.0234, False, "maximum evaluations reached"
@@ -1315,10 +1432,11 @@ def test_symmetric_handle_lock_fits_right_and_mirrors_left(monkeypatch):
     monkeypatch.setattr(handlefit, "_fit_palm_marker_to_handle", fit)
     monkeypatch.setattr(handlefit, "mirror_arm", mirror)
     fit_log = [{"messages": []}]
-    handlefit.lock_hands_to_handles(
+    contact_maintained = handlefit.lock_hands_to_handles(
         framework, mirror_left_from_right=True, fit_log=fit_log
     )
 
+    assert not contact_maintained
     assert fits == [
         ("right", handlefit._FIT_COORDINATE_PREFIXES),
         ("left", handlefit._MIRRORED_CONTACT_COORDINATE_PREFIXES),
@@ -1412,6 +1530,7 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
         user.getCoordinateSet().get("arm_l").setValue(
             user.state, user.getCoordinateSet().get("arm_r").getValue(user.state), False
         )
+        return True
 
     monkeypatch.setattr(chestpress, "lock_hands_to_handles", lock_hands)
     fitting_weights = []
@@ -1590,7 +1709,7 @@ def test_return_phase_clamps_floating_point_lower_endpoint(monkeypatch):
         )
     )
     monkeypatch.setattr(
-        chestpress, "lock_hands_to_handles", lambda *args, **kwargs: None
+        chestpress, "lock_hands_to_handles", lambda *args, **kwargs: True
     )
 
     def fit_handle(**kwargs):
@@ -1613,15 +1732,15 @@ def test_return_phase_clamps_floating_point_lower_endpoint(monkeypatch):
         concentric_duration_s=1.5, eccentric_duration_s=2.5,
     )
 
-    assert result.states_trajectory.getSize() == 39
+    assert result.states_trajectory.getSize() == 41
     assert np.all(np.diff(result.state_times) > 0.0)
-    final_equipment_state = result.states_trajectories["equipment"].get(38)
+    final_equipment_state = result.states_trajectories["equipment"].get(40)
     assert equipment.getCoordinateSet().get(
         "right_lever-angle"
     ).getValue(final_equipment_state) == pytest.approx(0.0)
 
 
-def test_simulation_checks_elbow_flexion_after_contact_restoration(monkeypatch):
+def test_simulation_starts_eccentric_phase_when_palm_contact_breaks(monkeypatch):
     user = _simulation_model(["arm_r", "arm_l", "elbow_flex_r"])
     equipment = _simulation_model(["right_lever-angle", "left_lever-angle"])
     framework = Framework(user=user, equipment=equipment)
@@ -1647,6 +1766,8 @@ def test_simulation_checks_elbow_flexion_after_contact_restoration(monkeypatch):
             user.getCoordinateSet().get("elbow_flex_r").setValue(
                 user.state, np.deg2rad(10.0), False
             )
+            return True
+        return angle != pytest.approx(np.deg2rad(2.0))
 
     def fit_handle(**kwargs):
         angle = equipment.getCoordinateSet().get("right_lever-angle").getValue(
@@ -1678,10 +1799,15 @@ def test_simulation_checks_elbow_flexion_after_contact_restoration(monkeypatch):
     assert np.rad2deg(elbow.getValue(user_states.get(0))) == pytest.approx(0.0)
     assert np.rad2deg(elbow.getValue(user_states.get(1))) == pytest.approx(10.0)
     assert np.rad2deg(elbow.getValue(user_states.get(2))) == pytest.approx(0.5)
-    assert sum(entry["phase"] == "concentric" for entry in fit_log) == 2
+    assert [entry["phase"] for entry in fit_log] == [
+        "concentric", "concentric", "eccentric"
+    ]
+    assert [entry["lever_angle_deg"] for entry in fit_log] == pytest.approx(
+        [1.0, 2.0, 0.0]
+    )
 
 
-def test_simulation_records_unreachable_palm_residual_and_continues(monkeypatch):
+def test_simulation_reverses_at_first_unreachable_palm_residual(monkeypatch):
     user = _simulation_model(["arm_r", "arm_l", "elbow_flex_r"])
     equipment = _simulation_model(["right_lever-angle", "left_lever-angle"])
     framework = Framework(user=user, equipment=equipment)
@@ -1702,7 +1828,7 @@ def test_simulation_records_unreachable_palm_residual_and_continues(monkeypatch)
         nonlocal lock_attempts
         lock_attempts += 1
         lock_logs.append(kwargs["fit_log"])
-        if lock_attempts == 3:
+        if lock_attempts == 2:
             kwargs["fit_log"][-1]["messages"].append(
                 {
                     "kind": "contact_fit",
@@ -1710,6 +1836,8 @@ def test_simulation_records_unreachable_palm_residual_and_continues(monkeypatch)
                     "message": "right RPALM handle-anchor residual=23.400 mm",
                 }
             )
+            return False
+        return True
 
     def fit_handle(**kwargs):
         angle = equipment.getCoordinateSet().get("right_lever-angle").getValue(
@@ -1739,18 +1867,23 @@ def test_simulation_records_unreachable_palm_residual_and_continues(monkeypatch)
         wrapper, user, step_deg=1.0
     )
     assert trajectory is framework
-    assert trajectory.states_trajectory.getSize() == 5
-    assert lock_attempts == 4
+    assert trajectory.states_trajectory.getSize() == 3
+    assert lock_attempts == 3
+    recorded_angles = [
+        equipment.getCoordinateSet().get("right_lever-angle").getValue(
+            trajectory.states_trajectories["equipment"].get(index)
+        )
+        for index in range(trajectory.states_trajectory.getSize())
+    ]
+    assert np.rad2deg(recorded_angles) == pytest.approx([0.0, 1.0, 0.0])
     assert any(
         "residual=23.400 mm" in message["message"]
-        for entry in lock_logs[2]
+        for entry in lock_logs[1]
         for message in entry["messages"]
     )
-    assert any(
-        "residual=23.400 mm" in message["message"]
-        for entry in simulation_log
-        for message in entry["messages"]
-    )
+    assert [entry["phase"] for entry in simulation_log] == [
+        "concentric", "concentric", "eccentric"
+    ]
 
 
 def test_simulation_rejects_fewer_than_two_states(monkeypatch):

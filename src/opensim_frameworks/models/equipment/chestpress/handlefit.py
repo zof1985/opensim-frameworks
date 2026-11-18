@@ -263,7 +263,7 @@ def lock_hands_to_handles(
     *,
     mirror_left_from_right: bool = False,
     fit_log: list[dict[str, Any]] | None = None,
-) -> None:
+) -> bool:
     """Keep palm markers at their fitted points on the handles best-effort.
 
     The first call records each palm marker in its handle frame. Subsequent
@@ -282,6 +282,11 @@ def lock_hands_to_handles(
         fitting each side independently.
     fit_log : list of dict, optional
         Log to which anchor residuals and mirrored-arm warnings are appended.
+
+    Returns
+    -------
+    bool
+        ``True`` if both palm anchors remain within the 1 mm tolerance.
     """
     user = framework.user
     equipment = framework.equipment
@@ -293,6 +298,17 @@ def lock_hands_to_handles(
         object.__setattr__(
             framework, "_chestpress_palm_handle_targets", target_locations
         )
+    safe_coordinates = getattr(
+        framework, "_chestpress_safe_palm_contact_coordinates", None
+    )
+    if safe_coordinates is None:
+        safe_coordinates = {}
+        object.__setattr__(
+            framework,
+            "_chestpress_safe_palm_contact_coordinates",
+            safe_coordinates,
+        )
+    residuals: dict[str, float] = {}
 
     for side in ("right", "left"):
         handle = equipment.getBodySet().get(f"{side}_handle")
@@ -324,7 +340,9 @@ def lock_hands_to_handles(
             handle,
             side,
             handle_location["palm"],
+            starting_values=safe_coordinates.get(side),
         )
+        residuals[side] = error
         _report_palm_anchor_residual(side, error, converged, message, fit_log)
 
     if mirror_left_from_right:
@@ -358,8 +376,38 @@ def lock_hands_to_handles(
             "left",
             handle_location["palm"],
             coordinate_prefixes=_MIRRORED_CONTACT_COORDINATE_PREFIXES,
+            starting_values=safe_coordinates.get("left"),
         )
+        residuals["left"] = error
         _report_palm_anchor_residual("left", error, converged, message, fit_log)
+
+    contact_maintained = all(
+        residual <= _PALM_POSITION_TOLERANCE_M
+        for residual in residuals.values()
+    )
+    if contact_maintained and hasattr(user, "getCoordinateSet"):
+        coordinates = user.getCoordinateSet()
+        coordinate_names = {
+            coordinates.get(index).getName()
+            for index in range(coordinates.getSize())
+        }
+        safe_coordinates.clear()
+        for side, suffix in (("right", "r"), ("left", "l")):
+            side_names = {
+                name
+                for name in coordinate_names
+                if name.endswith(f"_{suffix}")
+                and name.startswith(_FIT_COORDINATE_PREFIXES)
+            }
+            side_names.update(
+                f"{name}_{suffix}" for name in SHOULDER_GIRDLE_COORDINATES
+            )
+            safe_coordinates[side] = {
+                name: float(coordinates.get(name).getValue(user.state))
+                for name in side_names
+                if name in coordinate_names
+            }
+    return contact_maintained
 
 
 def _report_palm_anchor_residual(
@@ -429,6 +477,7 @@ def _fit_palm_marker_to_handle(
     side: str,
     handle_location: tuple[float, float, float],
     coordinate_prefixes: tuple[str, ...] = _FIT_COORDINATE_PREFIXES,
+    starting_values: dict[str, float] | None = None,
 ) -> tuple[float, bool, str]:
     suffix = "r" if side == "right" else "l"
     marker_name = "RPALM" if side == "right" else "LPALM"
@@ -473,7 +522,12 @@ def _fit_palm_marker_to_handle(
         )
 
     initial_values = np.asarray(
-        [coordinates.get(name).getValue(user.state) for name in variable_names],
+        [
+            starting_values.get(name, coordinates.get(name).getValue(user.state))
+            if starting_values is not None
+            else coordinates.get(name).getValue(user.state)
+            for name in variable_names
+        ],
         dtype=float,
     )
     lower_bounds = np.asarray(
@@ -486,13 +540,19 @@ def _fit_palm_marker_to_handle(
     )
 
     def apply_values(values: npt.ArrayLike) -> None:
+        values_by_name = dict(zip(variable_names, values, strict=True))
         for name, value in zip(variable_names, values, strict=True):
             if not has_girdle_coordinates or name not in girdle_names:
                 coordinates.get(name).setValue(user.state, float(value), False)
         if has_girdle_coordinates:
             user.set_scapular_girdle_values(
                 suffix,
-                [coordinates.get(name).getValue(user.state) for name in girdle_names],
+                [
+                    float(values_by_name[name])
+                    if name in values_by_name
+                    else coordinates.get(name).getValue(user.state)
+                    for name in girdle_names
+                ],
                 check_contact=False,
             )
         else:
