@@ -1344,6 +1344,54 @@ def test_symmetric_handle_lock_fits_right_and_mirrors_left(monkeypatch):
     )
 
 
+def test_upper_limb_trajectory_filter_suppresses_high_frequency_motion():
+    upper_limb_names = [
+        "arm_r",
+        "elbow_flex_r",
+        "wrist_flex_r",
+        "index_mcp_flexion_r",
+        "sc_protraction_r",
+    ]
+    user = _simulation_model([*upper_limb_names, "pelvis_tilt"])
+    normalized_times = np.linspace(0.0, 1.0, 121)
+    times = 4.0 * normalized_times**1.05
+    low_frequency_motion = 0.017 + 0.005 * np.sin(2.0 * np.pi * 0.25 * times)
+    high_frequency_motion = 0.004 * np.sin(2.0 * np.pi * 8.0 * times)
+    raw_motion = low_frequency_motion + high_frequency_motion
+    states = []
+    for value in raw_motion:
+        for name in upper_limb_names:
+            user.getCoordinateSet().get(name).setValue(user.state, value, False)
+        user.getCoordinateSet().get("pelvis_tilt").setValue(
+            user.state, 0.01, False
+        )
+        states.append((osim.State(user.state), osim.State(user.state)))
+
+    chestpress._filter_upper_limb_trajectories(user, states, times)
+
+    interior = slice(15, -15)
+    filtered_arm = np.asarray([
+        user.getCoordinateSet().get("arm_r").getValue(user_state)
+        for user_state, _ in states
+    ])
+    raw_error = np.sqrt(np.mean(high_frequency_motion[interior] ** 2))
+    filtered_error = np.sqrt(
+        np.mean((filtered_arm[interior] - low_frequency_motion[interior]) ** 2)
+    )
+    assert filtered_error < raw_error * 0.25
+    for name in upper_limb_names:
+        filtered_values = np.asarray([
+            user.getCoordinateSet().get(name).getValue(user_state)
+            for user_state, _ in states
+        ])
+        assert np.allclose(filtered_values, filtered_arm)
+    assert all(
+        user.getCoordinateSet().get("pelvis_tilt").getValue(user_state)
+        == pytest.approx(0.01)
+        for user_state, _ in states
+    )
+
+
 @pytest.mark.parametrize("fail_at_end", [False, True])
 def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_end):
     user = _simulation_model(["arm_r", "arm_l", "elbow_flex_r"])
@@ -1461,6 +1509,18 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
     assert result.state_times == pytest.approx(expected_times)
     assert result.states_trajectory.getSize() == len(expected_degrees)
     assert all(t.getSize() == len(expected_degrees) for t in result.states_trajectories.values())
+    raw_arm_values = np.deg2rad(expected_degrees) * 0.5
+    filtered_arm_values = np.asarray([
+        user.getCoordinateSet().get("arm_r").getValue(
+            result.states_trajectories["user"].get(index)
+        )
+        for index in range(len(expected_degrees))
+    ])
+    assert np.all(np.isfinite(filtered_arm_values))
+    assert not np.allclose(filtered_arm_values, raw_arm_values)
+    assert np.sum(np.diff(filtered_arm_values, n=2) ** 2) < np.sum(
+        np.diff(raw_arm_values, n=2) ** 2
+    )
     for index, degrees in enumerate(expected_degrees):
         angle = np.deg2rad(degrees)
         equipment_state = result.states_trajectories["equipment"].get(index)
@@ -1470,7 +1530,9 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
             assert coordinate.getValue(equipment_state) == pytest.approx(angle)
         for side in ("l", "r"):
             coordinate = user.getCoordinateSet().get(f"arm_{side}")
-            assert coordinate.getValue(user_state) == pytest.approx(angle * 0.5)
+            assert coordinate.getValue(user_state) == pytest.approx(
+                filtered_arm_values[index]
+            )
         if index == 1:
             phase_time = beta_time_for_position(0.5)
             expected_speed = (
@@ -1488,16 +1550,16 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
         assert equipment.getCoordinateSet().get(
             "right_lever-angle"
         ).getSpeedValue(equipment_state) == pytest.approx(expected_speed)
-        assert user.getCoordinateSet().get("arm_r").getSpeedValue(
-            user_state
-        ) == pytest.approx(expected_speed * 0.5)
+        assert np.isfinite(
+            user.getCoordinateSet().get("arm_r").getSpeedValue(user_state)
+        )
         composite_state = result.states_trajectory.get(index)
         assert composite_state.getTime() == pytest.approx(result.state_times[index])
         for member, model, name, value in (
             ("equipment", equipment, "right_lever-angle", angle),
             ("equipment", equipment, "left_lever-angle", angle),
-            ("user", user, "arm_r", angle * 0.5),
-            ("user", user, "arm_l", angle * 0.5),
+            ("user", user, "arm_r", filtered_arm_values[index]),
+            ("user", user, "arm_l", filtered_arm_values[index]),
         ):
             coordinate = model.getCoordinateSet().get(name)
             path = result.path_map[(member, coordinate.getAbsolutePathString())]
@@ -1600,6 +1662,9 @@ def test_simulation_checks_elbow_flexion_after_contact_restoration(monkeypatch):
 
     monkeypatch.setattr(chestpress, "lock_hands_to_handles", lock_hands)
     monkeypatch.setattr(chestpress, "fit_handle", fit_handle)
+    monkeypatch.setattr(
+        chestpress, "_filter_upper_limb_trajectories", lambda *args: None
+    )
     result, fit_log = ChestPress.simulate_kinematics(
         wrapper,
         user,

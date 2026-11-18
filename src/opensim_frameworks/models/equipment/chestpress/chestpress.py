@@ -9,8 +9,9 @@ from typing import Any
 import numpy as np
 import opensim as osim
 from scipy.interpolate import CubicSpline
+from scipy.signal import butter, sosfiltfilt
 
-from opensim_frameworks import Equipment
+from opensim_frameworks import Equipment, SHOULDER_GIRDLE_COORDINATES
 from opensim_frameworks.framework.framework import Framework
 from opensim_frameworks.models.user.user import User
 from opensim_frameworks.utils.geometry import body_transform_array
@@ -29,6 +30,21 @@ from .handlefit import (
 from .userpositioning import position_user
 
 __all__ = ["ChestPress"]
+
+_TRAJECTORY_FILTER_ORDER = 4
+_TRAJECTORY_FILTER_CUTOFF_HZ = 1.0
+_TRAJECTORY_FILTER_SAMPLE_RATE_HZ = 30.0
+_UPPER_LIMB_COORDINATE_PREFIXES = (
+    "arm_",
+    "elbow_",
+    "pro_sup_",
+    "wrist_",
+    "index_",
+    "middle_",
+    "ring_",
+    "little_",
+    "thumb_",
+)
 
 
 def _phase_times_and_speeds(
@@ -116,6 +132,93 @@ def _set_trajectory_coordinate_speeds(
                 coordinate.setSpeedValue(
                     state[member_index], float(speeds[state_index])
                 )
+
+
+def _filter_upper_limb_trajectories(
+    user: User,
+    states: list[tuple[osim.State, osim.State]],
+    state_times: np.ndarray,
+) -> None:
+    times = np.asarray(state_times, dtype=float)
+    if (
+        times.ndim != 1
+        or times.size != len(states)
+        or times.size < 2
+        or not np.all(np.isfinite(times))
+        or np.any(np.diff(times) <= 0.0)
+    ):
+        raise ValueError("state_times must be finite, increasing, and match states")
+
+    coordinates = user.getCoordinateSet()
+    upper_limb_coordinates = []
+    for index in range(coordinates.getSize()):
+        coordinate = coordinates.get(index)
+        name = coordinate.getName()
+        girdle_name = name.rsplit("_", 1)[0]
+        if (
+            name.startswith(_UPPER_LIMB_COORDINATE_PREFIXES)
+            or girdle_name in SHOULDER_GIRDLE_COORDINATES
+        ):
+            upper_limb_coordinates.append(coordinate)
+    if not upper_limb_coordinates:
+        return
+
+    sample_count = max(
+        int(math.ceil((times[-1] - times[0]) * _TRAJECTORY_FILTER_SAMPLE_RATE_HZ))
+        + 1,
+        2,
+    )
+    uniform_times = np.linspace(times[0], times[-1], sample_count)
+    sample_rate_hz = (sample_count - 1) / (times[-1] - times[0])
+    sos = butter(
+        _TRAJECTORY_FILTER_ORDER,
+        _TRAJECTORY_FILTER_CUTOFF_HZ,
+        btype="lowpass",
+        fs=sample_rate_hz,
+        output="sos",
+    )
+    padlen = min(3 * (2 * len(sos) + 1), sample_count - 1)
+
+    positions = np.asarray(
+        [
+            [
+                coordinate.getValue(user_state)
+                for coordinate in upper_limb_coordinates
+            ]
+            for user_state, _ in states
+        ],
+        dtype=float,
+    )
+    uniform_positions = np.column_stack(
+        [
+            np.interp(uniform_times, times, positions[:, index])
+            for index in range(positions.shape[1])
+        ]
+    )
+    filtered_uniform_positions = sosfiltfilt(
+        sos, uniform_positions, axis=0, padlen=padlen
+    )
+    filtered_positions = np.column_stack(
+        [
+            np.interp(times, uniform_times, filtered_uniform_positions[:, index])
+            for index in range(filtered_uniform_positions.shape[1])
+        ]
+    )
+
+    for index, coordinate in enumerate(upper_limb_coordinates):
+        filtered_positions[:, index] = np.clip(
+            filtered_positions[:, index],
+            coordinate.getRangeMin(),
+            coordinate.getRangeMax(),
+        )
+    for state_index, (user_state, _) in enumerate(states):
+        for coordinate_index, coordinate in enumerate(upper_limb_coordinates):
+            coordinate.setValue(
+                user_state,
+                float(filtered_positions[state_index, coordinate_index]),
+                False,
+            )
+        user.realizePosition(user_state)
 
 
 def _palm_position_in_handle(user: User, equipment: Equipment, side: str) -> np.ndarray:
@@ -448,12 +551,16 @@ class ChestPress(Equipment, abc.ABC):
         profile; eccentric state times follow the inverse CDF of a normalized
         Gaussian speed profile with zero endpoint speed. Coordinate speeds are
         derived from the fitted coordinate positions and lever-angle profile.
-        Accelerations are not separately recorded. Sampling for playback is
-        handled separately by the framework viewer. Simulation failures raise
-        an exception with the accumulated ``handle_fit_log``. Palm-anchor
-        residuals are recorded in millimetres with the optimizer's convergence
-        status; residuals do not cause failure by themselves, so the recorded
-        palm-to-handle offset can vary when the anchor is unreachable.
+        Before trajectory recording, shoulder-girdle, arm, wrist, and finger
+        coordinates are resampled at 30 Hz and filtered with a fourth-order,
+        1 Hz zero-phase Butterworth low-pass filter. The trajectories retain
+        their original sample times. Accelerations are not separately
+        recorded. Sampling for playback is handled separately by the framework
+        viewer. Simulation failures raise an exception with the accumulated
+        ``handle_fit_log``. Palm-anchor residuals are recorded in millimetres
+        with the optimizer's convergence status; residuals do not cause failure
+        by themselves, so the recorded palm-to-handle offset can vary when the
+        anchor is unreachable.
         """
         if not math.isfinite(step_deg) or step_deg <= 0.0:
             raise ValueError("step_deg must be finite and positive")
@@ -624,6 +731,11 @@ class ChestPress(Equipment, abc.ABC):
             lower,
             concentric_duration_s,
             eccentric_duration_s,
+        )
+        _filter_upper_limb_trajectories(
+            framework.user,
+            states,
+            state_times,
         )
         _set_trajectory_coordinate_speeds(
             framework,
