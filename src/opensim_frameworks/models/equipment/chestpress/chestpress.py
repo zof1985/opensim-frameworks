@@ -474,8 +474,8 @@ class ChestPress(Equipment, abc.ABC):
             Weight for keeping the handle axis in the plane defined by the
             shoulder, elbow and palm marker.
         palm_contact_weight : float, default=10.0
-            Weight for matching the palm-marker-to-axis distance to the
-            cylinder radius.
+            Weight for matching the palm-marker and second-knuckle (PIP)-to-axis
+            distances to the cylinder radius.
         Returns
         -------
         tuple of (opensim_frameworks.Framework, dict)
@@ -637,8 +637,8 @@ class ChestPress(Equipment, abc.ABC):
             Weight for keeping the handle axis in the plane defined by the
             shoulder, elbow and palm marker.
         palm_contact_weight : float, default=10.0
-            Weight for matching the palm-marker-to-axis distance to the
-            cylinder radius.
+            Weight for matching the palm-marker and second-knuckle (PIP)-to-axis
+            distances to the cylinder radius.
         Returns
         -------
         tuple of (opensim_frameworks.Framework, list of dict)

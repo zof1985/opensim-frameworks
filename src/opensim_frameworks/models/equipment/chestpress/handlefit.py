@@ -102,10 +102,23 @@ def palm_axis_distance_penalty(
     float
         Normalized weighted difference between palm-axis distance and radius.
     """
-    palm_local = handle_frame[:3, :3].T @ (
-        np.asarray(palm_ground) - handle_frame[:3, 3]
+    return _point_axis_distance_penalty(
+        palm_ground, handle_frame, axis_origin, axis_direction, radius_m, weight
     )
-    delta = palm_local - np.asarray(axis_origin)
+
+
+def _point_axis_distance_penalty(
+    point_ground: npt.ArrayLike,
+    handle_frame: npt.NDArray[np.float64],
+    axis_origin: npt.ArrayLike,
+    axis_direction: npt.ArrayLike,
+    radius_m: float,
+    weight: float,
+) -> float:
+    point_local = handle_frame[:3, :3].T @ (
+        np.asarray(point_ground) - handle_frame[:3, 3]
+    )
+    delta = point_local - np.asarray(axis_origin)
     direction = np.asarray(axis_direction)
     radial = delta - np.dot(delta, direction) * direction
     return (
@@ -814,11 +827,12 @@ def fit_handle(
     coordinates are left unchanged. User derives the scapular coordinates from
     the shoulder angles. The handle meshes are approximated by an enclosing
     cylinder.
-    Retraction, low shoulder elevation, palm-to-axis distance, arm-plane
-    alignment and knuckle-line alignment are weighted objectives. Forearm
-    rotation is encouraged toward 90 degrees and external upper-arm rotation
-    is penalized. Wrist flexion or extension has no preferred target. The
-    palm-to-axis distance target is the enclosing-cylinder radius. The
+    Retraction, low shoulder elevation, palm and second-knuckle-to-axis
+    distances, arm-plane alignment and knuckle-line alignment are weighted
+    objectives. Forearm rotation is encouraged toward 90 degrees and external
+    upper-arm rotation is penalized. Wrist flexion or extension has no
+    preferred target. The palm and PIP-to-axis distance targets are the
+    enclosing-cylinder radius. The
     little-to-index MCP vector is aligned in the same direction as endpoint 1
     (lower Ground Z) to endpoint 2 (higher Ground Z). The index MCP
     projection is limited by the distance from the handle centre to the second
@@ -855,8 +869,8 @@ def fit_handle(
     side : {'left', 'right'}
         Side being fitted (for the arm and shoulder prefix matching).
     palm_contact_weight : float, default=10.0
-        Weight for matching the palm-marker-to-axis distance to the cylinder
-        radius.
+        Weight for matching the palm-marker and second-knuckle (PIP)-to-axis
+        distances to the cylinder radius.
     knuckle_weight : float, default=5.0
         Weight for aligning the directed vector from little to index MCP with
         the directed handle axis.
@@ -998,6 +1012,21 @@ def fit_handle(
                 palm_contact_weight,
             ),
         ]
+        pip_knuckles = [
+            np.asarray(user.joint_center(f"{finger}_pip_{suffix}"))
+            for finger in ("index", "middle", "ring", "little")
+        ]
+        residuals.extend(
+            _point_axis_distance_penalty(
+                knuckle,
+                handle_frame,
+                axis_origin,
+                axis_direction,
+                cylinder_radius,
+                palm_contact_weight,
+            )
+            for knuckle in pip_knuckles
+        )
         wrist_dev = coordinates.get(f"wrist_dev_{suffix}").getValue(user.state)
         residuals.append(wrist_deviation_penalty(wrist_dev, wrist_dev_weight))
 
@@ -1091,6 +1120,10 @@ def fit_handle(
     )
     loss_component_names = (
         "palm_axis_distance",
+        "index_pip_axis_distance",
+        "middle_pip_axis_distance",
+        "ring_pip_axis_distance",
+        "little_pip_axis_distance",
         "wrist_deviation",
         "wrist_flexion",
         "forearm_supination",
