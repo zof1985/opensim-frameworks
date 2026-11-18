@@ -25,7 +25,6 @@ from .handlefit import (
     handle_fit_failure_message,
     fit_handle,
     lock_hands_to_handles,
-    position_palm_above_handle,
 )
 from .userpositioning import position_user
 
@@ -55,9 +54,7 @@ def _phase_times_and_speeds(
         time_fraction = float(beta_time_for_position(progress))
         times[index] = concentric_duration_s * time_fraction
         angular_speeds[index] = (
-            travel
-            / concentric_duration_s
-            * float(beta_velocity_profile(time_fraction))
+            travel / concentric_duration_s * float(beta_velocity_profile(time_fraction))
         )
 
     for index in eccentric_indices:
@@ -92,10 +89,7 @@ def _set_trajectory_coordinate_speeds(
         for coordinate_index in range(coordinates.getSize()):
             coordinate = coordinates.get(coordinate_index)
             positions = np.asarray(
-                [
-                    coordinate.getValue(state[member_index])
-                    for state in states
-                ],
+                [coordinate.getValue(state[member_index]) for state in states],
                 dtype=float,
             )
             speeds = np.zeros(len(states), dtype=float)
@@ -324,9 +318,6 @@ class ChestPress(Equipment, abc.ABC):
             equipment,
             backrest_angle_deg=self._backrest_angle_deg,
         )
-        position_palm_above_handle(
-            user, equipment, "right_handle", side="right"
-        )
         elbow_flexion, fitted_palm_position, messages = fit_handle(
             user=user,
             equipment=equipment,
@@ -342,11 +333,13 @@ class ChestPress(Equipment, abc.ABC):
             scapular_elevation_weight=scapular_elevation_weight,
             arm_weight=arm_weight,
         )
-        fit_log = [{
-            "phase": "initial",
-            "lever_angle_deg": 0.0,
-            "messages": messages,
-        }]
+        fit_log = [
+            {
+                "phase": "initial",
+                "lever_angle_deg": 0.0,
+                "messages": messages,
+            }
+        ]
         if elbow_flexion is None or fitted_palm_position is None:
             error = RuntimeError("The initial right arm fit did not converge")
             setattr(error, "handle_fit_log", fit_log)
@@ -358,7 +351,9 @@ class ChestPress(Equipment, abc.ABC):
             equipment.handle_meshes("right"),
         )
         lock_hands_to_handles(
-            framework, mirror_left_from_right=True, fit_log=fit_log
+            framework=framework,
+            mirror_left_from_right=True,
+            fit_log=fit_log,
         )
         report["grip"] = {
             "elbow_flexion_deg": elbow_flexion,
@@ -512,11 +507,15 @@ class ChestPress(Equipment, abc.ABC):
                 fit_shoulder_girdle=False,
                 **fit_options,
             )
-            return retry[0], retry[1], [
-                *result[2],
-                {"message": "retried with the previous safe shoulder-girdle pose"},
-                *retry[2],
-            ]
+            return (
+                retry[0],
+                retry[1],
+                [
+                    *result[2],
+                    {"message": "retried with the previous safe shoulder-girdle pose"},
+                    *retry[2],
+                ],
+            )
 
         right_lever_coord = framework.equipment.getCoordinateSet().get(
             "right_lever-angle"
@@ -528,7 +527,11 @@ class ChestPress(Equipment, abc.ABC):
         upper = right_lever_coord.getRangeMax()
         if not right_lever_coord.getRangeMin() <= lower <= upper:
             raise RuntimeError("The right lever range does not include zero degrees")
-        if not left_lever_coord.getRangeMin() <= lower <= left_lever_coord.getRangeMax():
+        if (
+            not left_lever_coord.getRangeMin()
+            <= lower
+            <= left_lever_coord.getRangeMax()
+        ):
             raise RuntimeError("The left lever range does not include zero degrees")
         step_rad = math.radians(step_deg)
         states: list[tuple[osim.State, osim.State]] = [

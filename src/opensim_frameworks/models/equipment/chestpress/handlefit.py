@@ -28,7 +28,6 @@ from opensim_frameworks import SHOULDER_GIRDLE_COORDINATES
 
 __all__ = [
     "lock_hands_to_handles",
-    "position_palm_above_handle",
     "fit_handle",
     "handle_fit_failure_message",
     "mirror_arm",
@@ -63,8 +62,6 @@ _MIRRORED_CONTACT_COORDINATE_PREFIXES = (
     "wrist_",
 )
 _PALM_POSITION_TOLERANCE_M = 0.001
-_POSITION_TOLERANCE_M = 0.001
-_ANGLE_TOLERANCE_RAD = math.radians(1.0)
 _P = ParamSpec("_P")
 _FIT_LOG_LOCK = threading.RLock()
 _FitMessage = dict[str, str | int | None]
@@ -108,52 +105,34 @@ def palm_axis_distance_penalty(
     delta = palm_local - np.asarray(axis_origin)
     direction = np.asarray(axis_direction)
     radial = delta - np.dot(delta, direction) * direction
-    return (
-        math.sqrt(weight)
-        * (float(np.linalg.norm(radial)) - radius_m)
-        / _POSITION_TOLERANCE_M
-    )
+    return weight * (float(np.linalg.norm(radial)) - radius_m)
 
 
 def wrist_deviation_penalty(wrist_deviation_rad: float, weight: float) -> float:
     """Return the weighted residual for neutral wrist radial/ulnar deviation."""
-    return (
-        math.sqrt(weight) * wrist_deviation_rad / _ANGLE_TOLERANCE_RAD
-    )
+    return weight * wrist_deviation_rad
 
 
-def forearm_supination_penalty(
-    pro_supination_rad: float, weight: float
-) -> float:
+def forearm_supination_penalty(pro_supination_rad: float, weight: float) -> float:
     """Return the weighted residual for forearm supination near 90 degrees."""
-    return (
-        math.sqrt(weight)
-        * (pro_supination_rad - math.radians(90.0))
-        / math.radians(5.0)
-    )
+    return weight * abs(pro_supination_rad - math.radians(90.0))
 
 
 def external_shoulder_rotation_penalty(
     shoulder_rotation_rad: float, weight: float
 ) -> float:
     """Return the one-sided weighted residual for external shoulder rotation."""
-    return (
-        math.sqrt(weight)
-        * min(shoulder_rotation_rad, 0.0)
-        / math.radians(5.0)
-    )
+    return weight * abs(shoulder_rotation_rad - math.radians(-90.0))
 
 
-def scapular_retraction_penalty(
-    protraction_rad: float, minimum_rad: float, weight: float
-) -> float:
+def scapular_retraction_penalty(protraction_rad: float, weight: float) -> float:
     """Return the weighted residual for scapular retraction."""
-    return math.sqrt(weight) * (protraction_rad - minimum_rad)
+    return weight * protraction_rad
 
 
 def scapular_depression_penalty(elevation_rad: float, weight: float) -> float:
     """Return the one-sided weighted residual for positive scapular elevation."""
-    return math.sqrt(weight) * max(elevation_rad, 0.0)
+    return weight * elevation_rad
 
 
 def knuckle_alignment_penalty(
@@ -188,15 +167,10 @@ def knuckle_alignment_penalty(
     else:
         direction = np.zeros(3)
     handle_axis = np.asarray(handle_axis_ground, dtype=float)
-    return np.concatenate(
+    return weight * np.concatenate(
         (
-            math.sqrt(weight)
-            * np.cross(direction, handle_axis)
-            / math.sin(_ANGLE_TOLERANCE_RAD),
-            np.array([
-                math.sqrt(weight)
-                * (1.0 - float(np.dot(direction, handle_axis)))
-            ]),
+            np.cross(direction, handle_axis),
+            np.array([1.0 - float(np.dot(direction, handle_axis))]),
         )
     )
 
@@ -205,22 +179,14 @@ def index_knuckle_endpoint_penalty(
     projection_distance_m: float, endpoint_limit_m: float, weight: float
 ) -> float:
     """Return the one-sided weighted index MCP endpoint residual."""
-    return (
-        math.sqrt(weight)
-        * max(projection_distance_m - endpoint_limit_m, 0.0)
-        / _POSITION_TOLERANCE_M
-    )
+    return weight * max(projection_distance_m - endpoint_limit_m, 0.0)
 
 
 def little_knuckle_endpoint_penalty(
     projection_distance_m: float, endpoint_limit_m: float, weight: float
 ) -> float:
     """Return the one-sided weighted little MCP endpoint residual."""
-    return (
-        math.sqrt(weight)
-        * max(projection_distance_m - endpoint_limit_m, 0.0)
-        / _POSITION_TOLERANCE_M
-    )
+    return weight * max(projection_distance_m - endpoint_limit_m, 0.0)
 
 
 def shoulder_palm_plane_penalty(
@@ -254,15 +220,13 @@ def shoulder_palm_plane_penalty(
     elbow_point = np.asarray(elbow, dtype=float)
     palm_point = np.asarray(palm, dtype=float)
     axis = np.asarray(handle_axis_ground, dtype=float)
-    plane_normal = np.cross(
-        elbow_point - shoulder_point, palm_point - shoulder_point
-    )
+    plane_normal = np.cross(elbow_point - shoulder_point, palm_point - shoulder_point)
     normal_length = float(np.linalg.norm(plane_normal))
     if normal_length > 1e-12:
         deviation = float(np.dot(plane_normal, axis) / normal_length)
     else:
         deviation = 0.0
-    return math.sqrt(weight) * deviation / math.sin(_ANGLE_TOLERANCE_RAD)
+    return weight * deviation
 
 
 def lock_hands_to_handles(
@@ -377,11 +341,7 @@ def _report_palm_anchor_residual(
     fit_log: list[dict[str, Any]] | None,
 ) -> None:
     marker_name = "RPALM" if side == "right" else "LPALM"
-    level = (
-        "INFO"
-        if converged and error <= _PALM_POSITION_TOLERANCE_M
-        else "WARNING"
-    )
+    level = "INFO" if converged and error <= _PALM_POSITION_TOLERANCE_M else "WARNING"
     message = (
         f"{side} {marker_name} handle-anchor residual={error * 1000:.3f} mm; "
         f"optimizer_converged={converged}; {optimizer_message}"
@@ -433,87 +393,6 @@ def _handle_cylinder_geometry(equipment: Any, handle_name: str):
     return handle, handle_marker, frame, origin, direction, radius, first, second
 
 
-def position_palm_above_handle(
-    user: Any, equipment: Any, handle_name: str, side: Literal["left", "right"]
-) -> np.ndarray:
-    """Place a palm marker above the handle centre before fitting the arm.
-
-    The palm target is vertically above the handle centre by the enclosing
-    cylinder radius. A bounded inverse-kinematics fit moves only the selected
-    upper limb and shoulder girdle.
-    """
-    if side not in ("left", "right"):
-        raise ValueError("side must be 'left' or 'right'")
-    _, handle_marker, _, _, _, radius, _, _ = _handle_cylinder_geometry(
-        equipment, handle_name
-    )
-    suffix = "r" if side == "right" else "l"
-    marker_name = "RPALM" if side == "right" else "LPALM"
-    markers = user.getMarkerSet()
-    if markers.getIndex(marker_name) < 0:
-        raise ValueError(f"Marker {marker_name} not found in user model")
-    marker = markers.get(marker_name)
-    center = marker_position_array(handle_marker, equipment.state)
-    target = center + np.array([0.0, radius, 0.0])
-
-    coordinates = user.getCoordinateSet()
-    names = {
-        coordinates.get(index).getName()
-        for index in range(coordinates.getSize())
-    }
-    variable_names = sorted(
-        name
-        for name in names
-        if name.endswith(f"_{suffix}")
-        and (
-            name.startswith(_FIT_COORDINATE_PREFIXES)
-            or name in {
-                f"{girdle_name}_{suffix}"
-                for girdle_name in SHOULDER_GIRDLE_COORDINATES
-            }
-        )
-    )
-    if not variable_names:
-        raise ValueError(f"No {side} arm coordinates found in user model")
-    initial = np.asarray(
-        [coordinates.get(name).getValue(user.state) for name in variable_names],
-        dtype=float,
-    )
-    bounds = (
-        [coordinates.get(name).getRangeMin() for name in variable_names],
-        [coordinates.get(name).getRangeMax() for name in variable_names],
-    )
-
-    def residual(values: npt.ArrayLike) -> np.ndarray:
-        for name, value in zip(variable_names, values, strict=True):
-            coordinates.get(name).setValue(user.state, float(value), False)
-        user.realizePosition(user.state)
-        return (
-            marker_position_array(marker, user.state) - target
-        ) / _POSITION_TOLERANCE_M
-
-    result = least_squares(
-        residual,
-        initial,
-        bounds=bounds,
-        max_nfev=1000,
-        x_scale="jac",
-        ftol=1e-8,
-        xtol=1e-8,
-        gtol=1e-8,
-    )
-    for name, value in zip(variable_names, result.x, strict=True):
-        coordinates.get(name).setValue(user.state, float(value), False)
-    user.realizePosition(user.state)
-    error = float(np.linalg.norm(marker_position_array(marker, user.state) - target))
-    if not result.success or error > _POSITION_TOLERANCE_M:
-        raise _PalmPositionFitError(
-            f"could not place the {side} palm above the handle centre: "
-            f"position error {error:.6g} m; {result.message}"
-        )
-    return target
-
-
 def _fit_palm_marker_to_handle(
     user: Any,
     equipment: Any,
@@ -530,8 +409,7 @@ def _fit_palm_marker_to_handle(
     marker = markers.get(marker_name)
     handle_transform = body_transform_array(handle, equipment.state)
     target_position = (
-        handle_transform[:3, :3] @ np.asarray(handle_location)
-        + handle_transform[:3, 3]
+        handle_transform[:3, :3] @ np.asarray(handle_location) + handle_transform[:3, 3]
     )
     position_error = float(
         np.linalg.norm(marker_position_array(marker, user.state) - target_position)
@@ -541,30 +419,22 @@ def _fit_palm_marker_to_handle(
 
     coordinates = user.getCoordinateSet()
     coordinate_names = {
-        coordinates.get(index).getName()
-        for index in range(coordinates.getSize())
+        coordinates.get(index).getName() for index in range(coordinates.getSize())
     }
     arm_names = sorted(
         name
         for name in coordinate_names
-        if name.endswith(f"_{suffix}")
-        and name.startswith(coordinate_prefixes)
+        if name.endswith(f"_{suffix}") and name.startswith(coordinate_prefixes)
     )
-    girdle_names = tuple(
-        f"{name}_{suffix}" for name in SHOULDER_GIRDLE_COORDINATES
-    )
-    has_girdle_coordinates = all(
-        name in coordinate_names for name in girdle_names
-    )
+    girdle_names = tuple(f"{name}_{suffix}" for name in SHOULDER_GIRDLE_COORDINATES)
+    has_girdle_coordinates = all(name in coordinate_names for name in girdle_names)
     variable_names = [
         name
         for name in sorted(
-            arm_names
-            + (list(girdle_names) if has_girdle_coordinates else [])
+            arm_names + (list(girdle_names) if has_girdle_coordinates else [])
         )
         if not coordinates.get(name).getLocked(user.state)
-        and coordinates.get(name).getRangeMin()
-        < coordinates.get(name).getRangeMax()
+        and coordinates.get(name).getRangeMin() < coordinates.get(name).getRangeMax()
     ]
     if not variable_names:
         return (
@@ -593,10 +463,7 @@ def _fit_palm_marker_to_handle(
         if has_girdle_coordinates:
             user.set_scapular_girdle_values(
                 suffix,
-                [
-                    coordinates.get(name).getValue(user.state)
-                    for name in girdle_names
-                ],
+                [coordinates.get(name).getValue(user.state) for name in girdle_names],
                 check_contact=False,
             )
         else:
@@ -621,9 +488,7 @@ def _fit_palm_marker_to_handle(
     )
     apply_values(result.x)
     position_error = float(
-        np.linalg.norm(
-            marker_position_array(marker, user.state) - target_position
-        )
+        np.linalg.norm(marker_position_array(marker, user.state) - target_position)
     )
     return position_error, bool(result.success), str(result.message)
 
@@ -663,9 +528,13 @@ def _capture_messages() -> Generator[list[_FitMessage]]:
             frame = inspect.currentframe()
             try:
                 frame = frame.f_back if frame is not None else None
-                while frame is not None and frame.f_globals.get("__name__") == "warnings":
+                while (
+                    frame is not None and frame.f_globals.get("__name__") == "warnings"
+                ):
                     frame = frame.f_back
-                source_file = frame.f_code.co_filename if frame is not None else filename
+                source_file = (
+                    frame.f_code.co_filename if frame is not None else filename
+                )
                 source_line = frame.f_lineno if frame is not None else lineno
                 messages.append(
                     {
@@ -735,8 +604,7 @@ def handle_fit_failure_message(
         None,
     )
     summary = (
-        f"Handle fit failed during the {phase} phase at "
-        f"{angle_deg:.2f} degrees"
+        f"Handle fit failed during the {phase} phase at " f"{angle_deg:.2f} degrees"
     )
     if diagnostic is None:
         return f"{summary}; optimizer failure details are missing from the fit log"
@@ -988,14 +856,9 @@ def fit_handle(
         shoulder_values = (
             values[len(arm_names) :]
             if fit_shoulder
-            else [
-                coordinates.get(name).getValue(user.state)
-                for name in shoulder_names
-            ]
+            else [coordinates.get(name).getValue(user.state) for name in shoulder_names]
         )
-        user.set_shoulder_girdle(
-            suffix, *shoulder_values, check_contact=False
-        )
+        user.set_shoulder_girdle(suffix, *shoulder_values, check_contact=False)
 
     def _knuckle_endpoint_distances(
         knuckles_ground: np.ndarray, frame: np.ndarray
@@ -1003,9 +866,7 @@ def fit_handle(
         knuckles_local = (knuckles_ground - frame[:3, 3]) @ frame[:3, :3]
         center = 0.5 * (end_min + end_max)
         projections = (knuckles_local - center) @ axis_direction
-        knuckle_span = float(
-            np.linalg.norm(knuckles_ground[0] - knuckles_ground[-1])
-        )
+        knuckle_span = float(np.linalg.norm(knuckles_ground[0] - knuckles_ground[-1]))
         half_length = 0.5 * float(np.linalg.norm(end_max - end_min))
         return (
             float(abs(projections[0])),
@@ -1034,19 +895,13 @@ def fit_handle(
             ),
         ]
         wrist_dev = coordinates.get(f"wrist_dev_{suffix}").getValue(user.state)
-        residuals.append(
-            wrist_deviation_penalty(wrist_dev, wrist_dev_weight)
-        )
+        residuals.append(wrist_deviation_penalty(wrist_dev, wrist_dev_weight))
 
         pro_sup = coordinates.get(f"pro_sup_{suffix}").getValue(user.state)
-        residuals.append(
-            forearm_supination_penalty(pro_sup, pro_sup_weight)
-        )
+        residuals.append(forearm_supination_penalty(pro_sup, pro_sup_weight))
 
         arm_rot = coordinates.get(f"arm_rot_{suffix}").getValue(user.state)
-        residuals.append(
-            external_shoulder_rotation_penalty(arm_rot, arm_weight)
-        )
+        residuals.append(external_shoulder_rotation_penalty(arm_rot, arm_weight))
 
         protraction = coordinates.get(f"sc_protraction_{suffix}")
         elevation = coordinates.get(f"sc_elevation_{suffix}")
@@ -1054,7 +909,6 @@ def fit_handle(
             [
                 scapular_retraction_penalty(
                     protraction.getValue(user.state),
-                    protraction.getRangeMin(),
                     protraction_weight,
                 ),
                 scapular_depression_penalty(
@@ -1116,10 +970,7 @@ def fit_handle(
     )
     fit_coordinate_names = arm_names + shoulder_names if fit_shoulder else arm_names
     x0 = np.array(
-        [
-            coordinates.get(name).getValue(user.state)
-            for name in fit_coordinate_names
-        ]
+        [coordinates.get(name).getValue(user.state) for name in fit_coordinate_names]
     )
     initial_x0 = x0.copy()
     bounds = (
@@ -1170,30 +1021,27 @@ def fit_handle(
             stacklevel=2,
         )
 
-    if result.success:
-        report_loss(result.x)
-        user.scapula_contact_report(suffix)
-        elbow_flex_deg = math.degrees(
-            coordinates.get(f"elbow_flex_{suffix}").getValue(user.state)
+    if not result.success:
+        for coord_name, value in zip(arm_names, initial_x0[: len(arm_names)]):
+            coordinates.get(coord_name).setValue(user.state, float(value), False)
+        user.set_scapular_girdle_values(suffix, initial_girdle, check_contact=False)
+        user.realizePosition(user.state)
+        warnings.warn(
+            f"{side} handle fit did not converge: {result.message}; nfev={result.nfev}, "
+            f"cost={result.cost:.6g}, optimality={result.optimality:.6g}",
+            RuntimeWarning,
+            stacklevel=2,
         )
-
-        equipment.realizePosition(equipment.state)
-        palm_marker_pos = marker_position_array(user_marker, user.state)
-        handle_frame = body_transform_array(handle, equipment.state)
-        center = marker_position_array(handle_marker, equipment.state)
-        palm_in_handle = handle_frame[:3, :3].T @ (palm_marker_pos - center)
-
-        return elbow_flex_deg, palm_in_handle
-
     report_loss(result.x)
-    for coord_name, value in zip(arm_names, initial_x0[: len(arm_names)]):
-        coordinates.get(coord_name).setValue(user.state, float(value), False)
-    user.set_scapular_girdle_values(suffix, initial_girdle, check_contact=False)
-    user.realizePosition(user.state)
-    warnings.warn(
-        f"{side} handle fit did not converge: {result.message}; nfev={result.nfev}, "
-        f"cost={result.cost:.6g}, optimality={result.optimality:.6g}",
-        RuntimeWarning,
-        stacklevel=2,
+    user.scapula_contact_report(suffix)
+    elbow_flex_deg = math.degrees(
+        coordinates.get(f"elbow_flex_{suffix}").getValue(user.state)
     )
-    return None, None
+
+    equipment.realizePosition(equipment.state)
+    palm_marker_pos = marker_position_array(user_marker, user.state)
+    handle_frame = body_transform_array(handle, equipment.state)
+    center = marker_position_array(handle_marker, equipment.state)
+    palm_in_handle = handle_frame[:3, :3].T @ (palm_marker_pos - center)
+
+    return elbow_flex_deg, palm_in_handle
