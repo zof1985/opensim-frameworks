@@ -33,6 +33,7 @@ __all__ = [
     "mirror_arm",
     "mirror_arm_with_log",
     "palm_axis_distance_penalty",
+    "wrist_flexion_penalty",
     "wrist_deviation_penalty",
     "forearm_supination_penalty",
     "external_shoulder_rotation_penalty",
@@ -117,6 +118,15 @@ def palm_axis_distance_penalty(
 def wrist_deviation_penalty(wrist_deviation_rad: float, weight: float) -> float:
     """Return the weighted residual for neutral wrist radial/ulnar deviation."""
     return math.sqrt(weight) * wrist_deviation_rad / _ANGLE_TOLERANCE_RAD
+
+
+def wrist_flexion_penalty(wrist_flexion_rad: float, weight: float) -> float:
+    """Return a one-sided residual penalizing palmar wrist flexion only."""
+    return (
+        math.sqrt(weight)
+        * max(wrist_flexion_rad, 0.0)
+        / _ANGLE_TOLERANCE_RAD
+    )
 
 
 def forearm_supination_penalty(pro_supination_rad: float, weight: float) -> float:
@@ -790,6 +800,7 @@ def fit_handle(
     knuckle_end_weight: float = 10.0,
     plane_distance_weight: float = 1.0,
     pro_sup_weight: float = 1.0,
+    wrist_flex_weight: float = 1.0,
     wrist_dev_weight: float = 0.2,
     protraction_weight: float = 1.0,
     scapular_elevation_weight: float = 1.0,
@@ -814,8 +825,9 @@ def fit_handle(
     endpoint minus half the MCP span; the little MCP projection is limited by
     the distance from the centre to the first endpoint. Palm orientation is
     reported, not optimized; palm height relative to the axis has no preferred
-    target. Wrist radial/ulnar deviation has a separate zero-deviation
-    objective. Scapular proximity is optimized at three
+    target. Wrist flexion is penalized only for palmar flexion, while wrist
+    radial/ulnar deviation has a separate zero-deviation objective. Scapular
+    proximity is optimized at three
     costal-surface points against the rib mesh, and a soft penalty uses
     collision risk interpolated from the shoulder map. The post-fit contact
     report is diagnostic and does not reject the fitted pose.
@@ -856,6 +868,9 @@ def fit_handle(
         shoulder, elbow and palm marker.
     pro_sup_weight : float, default=1.0
         Weight penalizing forearm rotation away from 90 degrees.
+    wrist_flex_weight : float, default=1.0
+        Weight penalizing palmar wrist flexion; wrist extension is not
+        penalized.
     wrist_dev_weight : float, default=0.2
         Weight for neutral wrist radial/ulnar deviation.
     protraction_weight : float, default=1.0
@@ -986,6 +1001,9 @@ def fit_handle(
         wrist_dev = coordinates.get(f"wrist_dev_{suffix}").getValue(user.state)
         residuals.append(wrist_deviation_penalty(wrist_dev, wrist_dev_weight))
 
+        wrist_flex = coordinates.get(f"wrist_flex_{suffix}").getValue(user.state)
+        residuals.append(wrist_flexion_penalty(wrist_flex, wrist_flex_weight))
+
         pro_sup = coordinates.get(f"pro_sup_{suffix}").getValue(user.state)
         residuals.append(forearm_supination_penalty(pro_sup, pro_sup_weight))
 
@@ -1074,6 +1092,7 @@ def fit_handle(
     loss_component_names = (
         "palm_axis_distance",
         "wrist_deviation",
+        "wrist_flexion",
         "forearm_supination",
         "external_shoulder_rotation",
         "scapular_protraction",

@@ -207,6 +207,7 @@ def run_fit(
         "knuckle_end_weight": 0.0,
         "plane_distance_weight": 0.0,
         "pro_sup_weight": 0.0,
+        "wrist_flex_weight": 0.0,
         "wrist_dev_weight": 0.0,
         "protraction_weight": 0.0,
         "scapular_elevation_weight": 0.0,
@@ -220,6 +221,7 @@ def run_fit(
 def test_loss_penalties_are_public_and_exported():
     names = (
         "palm_axis_distance_penalty",
+        "wrist_flexion_penalty",
         "wrist_deviation_penalty",
         "forearm_supination_penalty",
         "external_shoulder_rotation_penalty",
@@ -254,6 +256,9 @@ def test_public_loss_penalties_return_their_expected_residuals():
         [0.025, 0.0, 0.0], frame, origin, [0.0, 1.0, 0.0], 0.02, 4.0
     ) == pytest.approx(10.0)
     assert handlefit.wrist_deviation_penalty(np.deg2rad(2.0), 1.0) == pytest.approx(2.0)
+    assert handlefit.wrist_flexion_penalty(np.deg2rad(5.0), 4.0) == pytest.approx(10.0)
+    assert handlefit.wrist_flexion_penalty(0.0, 4.0) == 0.0
+    assert handlefit.wrist_flexion_penalty(np.deg2rad(-5.0), 4.0) == 0.0
     assert handlefit.forearm_supination_penalty(np.deg2rad(85.0), 1.0) == pytest.approx(-1.0)
     assert handlefit.external_shoulder_rotation_penalty(np.deg2rad(-5.0), 1.0) == pytest.approx(-1.0)
     assert handlefit.scapular_retraction_penalty(2.0, 1.0, 4.0) == pytest.approx(2.0)
@@ -491,7 +496,7 @@ def test_forearm_rotation_is_fitted_toward_90_degrees(fit_setup, monkeypatch):
     )
 
 
-def test_wrist_flexion_has_no_preferred_target_in_fit_handle(fit_setup, monkeypatch):
+def test_fit_handle_penalizes_wrist_flexion_but_not_extension(fit_setup, monkeypatch):
     user, equipment, _, palm_ground = fit_setup
     palm_ground[:] = [0.325, 0.4, 0.5]
     _, costs = run_fit(
@@ -499,8 +504,13 @@ def test_wrist_flexion_has_no_preferred_target_in_fit_handle(fit_setup, monkeypa
         probes=[
             {"wrist_flex_r": angle} for angle in (-0.8, 0.0, 0.8)
         ],
+        wrist_flex_weight=1.0,
     )
-    np.testing.assert_allclose(costs, [0.0, 0.0, 0.0], atol=1e-12)
+    np.testing.assert_allclose(
+        costs,
+        [0.0, 0.0, (0.8 / np.deg2rad(1.0)) ** 2],
+        atol=1e-12,
+    )
     assert "wrist_extension_penalty" not in handlefit.__all__
     assert not hasattr(handlefit, "wrist_extension_penalty")
 
@@ -1510,6 +1520,142 @@ def test_upper_limb_trajectory_filter_suppresses_high_frequency_motion():
     )
 
 
+def test_filtered_palm_contact_is_refitted_for_every_recorded_state(monkeypatch):
+    framework = SimpleNamespace(
+        user=SimpleNamespace(state=None),
+        equipment=SimpleNamespace(state=None),
+    )
+    states = [
+        ({"arm": -1.0}, {"angle": 0.0}),
+        ({"arm": -1.0}, {"angle": 1.0}),
+        ({"arm": -1.0}, {"angle": 0.0}),
+    ]
+    calls = []
+
+    def lock_hands(_framework, *, mirror_left_from_right, fit_log):
+        assert mirror_left_from_right
+        angle = framework.equipment.state["angle"]
+        framework.user.state["arm"] = angle
+        calls.append(angle)
+        fit_log[-1]["messages"].append(
+            {"kind": "contact_fit", "message": f"angle={angle}"}
+        )
+        return True
+
+    monkeypatch.setattr(chestpress, "lock_hands_to_handles", lock_hands)
+    fit_log = []
+
+    chestpress._restore_filtered_palm_contact(
+        framework,
+        states,
+        [0.0, 1.0, 0.0],
+        ["concentric", "concentric", "eccentric"],
+        [{"arm": -1.0}, {"arm": -1.0}, {"arm": -1.0}],
+        fit_log,
+    )
+
+    assert calls == [0.0, 1.0, 0.0]
+    assert [user_state["arm"] for user_state, _ in states] == [0.0, 1.0, 0.0]
+    assert fit_log[0]["phase"] == "post_filter_contact"
+    assert [sample["lever_angle_deg"] for sample in fit_log[0]["samples"]] == [
+        0.0, pytest.approx(np.rad2deg(1.0)), 0.0
+    ]
+    assert all(sample["messages"] for sample in fit_log[0]["samples"])
+
+
+def test_filtered_palm_contact_failure_is_reported(monkeypatch):
+    coordinates = SimpleNamespace(
+        get=lambda name: SimpleNamespace(
+            setValue=lambda state, value, _preserve_velocity: state.__setitem__(
+                name, value
+            )
+        )
+    )
+    framework = SimpleNamespace(
+        user=SimpleNamespace(
+            state=None,
+            getCoordinateSet=lambda: coordinates,
+            realizePosition=lambda _state: None,
+        ),
+        equipment=SimpleNamespace(state=None),
+    )
+
+    def lose_contact(_framework, *, mirror_left_from_right, fit_log):
+        fit_log[-1]["messages"].append(
+            {"kind": "contact_fit", "level": "WARNING", "message": "residual=2 mm"}
+        )
+        return False
+
+    monkeypatch.setattr(chestpress, "lock_hands_to_handles", lose_contact)
+    fit_log = []
+
+    with pytest.raises(RuntimeError, match="could not be restored after filtering") as raised:
+        chestpress._restore_filtered_palm_contact(
+            framework,
+            [({"arm": 0.0}, {"angle": 1.0})],
+            [np.deg2rad(1.0)],
+            ["concentric"],
+            [{"arm": 0.0}],
+            fit_log,
+        )
+
+    assert raised.value.handle_fit_log is fit_log
+    assert fit_log[-1]["samples"][0]["messages"][0]["message"] == "residual=2 mm"
+
+
+def test_filtered_contact_falls_back_to_original_pose(monkeypatch):
+    coordinates = SimpleNamespace(
+        get=lambda name: SimpleNamespace(
+            setValue=lambda state, value, _preserve_velocity: state.__setitem__(
+                name, value
+            )
+        )
+    )
+    framework = SimpleNamespace(
+        user=SimpleNamespace(
+            state=None,
+            getCoordinateSet=lambda: coordinates,
+            realizePosition=lambda _state: None,
+        ),
+        equipment=SimpleNamespace(state=None),
+    )
+    attempts = 0
+
+    def lock_with_filtered_failure(_framework, *, mirror_left_from_right, fit_log):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            framework.user.state["arm"] = -10.0
+            return False
+        assert framework.user.state["arm"] == pytest.approx(0.25)
+        fit_log[-1]["messages"].append(
+            {"kind": "contact_fit", "message": "restored contact"}
+        )
+        return True
+
+    monkeypatch.setattr(
+        chestpress, "lock_hands_to_handles", lock_with_filtered_failure
+    )
+    fit_log = []
+    states = [({"arm": 0.25}, {"angle": 0.0})]
+
+    chestpress._restore_filtered_palm_contact(
+        framework,
+        states,
+        [0.0],
+        ["concentric"],
+        [{"arm": 0.25}],
+        fit_log,
+    )
+
+    assert attempts == 2
+    assert states[0][0]["arm"] == pytest.approx(0.25)
+    sample = fit_log[0]["samples"][0]
+    assert sample["fallback"] == "unfiltered_upper_limb_pose"
+    assert sample["messages"][0]["level"] == "WARNING"
+    assert sample["messages"][1]["message"] == "restored contact"
+
+
 @pytest.mark.parametrize("fail_at_end", [False, True])
 def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_end):
     user = _simulation_model(["arm_r", "arm_l", "elbow_flex_r"])
@@ -1610,13 +1756,19 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
     assert fitted_sides and set(fitted_sides) == {"right"}
     assert lock_modes and all(lock_modes)
     assert [entry["phase"] for entry in fit_log] == [
-        "final", "concentric", "concentric", "eccentric", "eccentric"
+        "final", "concentric", "concentric", "eccentric", "eccentric",
+        "post_filter_contact",
     ]
-    assert [entry["lever_angle_deg"] for entry in fit_log] == pytest.approx(
+    assert [entry["lever_angle_deg"] for entry in fit_log[:-1]] == pytest.approx(
         [0, 1, 2, 1, 0]
     )
-    for entry in fit_log[1:]:
+    for entry in fit_log[1:-1]:
         assert entry["messages"] == []
+    assert [
+        sample["lever_angle_deg"]
+        for sample in fit_log[-1]["samples"]
+    ] == pytest.approx(expected_degrees)
+    assert lock_modes == [True] * (len(expected_degrees) * 2 - 1)
     assert result is framework
     expected_times = [
         0.0,
@@ -1800,11 +1952,14 @@ def test_simulation_starts_eccentric_phase_when_palm_contact_breaks(monkeypatch)
     assert np.rad2deg(elbow.getValue(user_states.get(1))) == pytest.approx(10.0)
     assert np.rad2deg(elbow.getValue(user_states.get(2))) == pytest.approx(0.5)
     assert [entry["phase"] for entry in fit_log] == [
-        "concentric", "concentric", "eccentric"
+        "concentric", "concentric", "eccentric", "post_filter_contact"
     ]
-    assert [entry["lever_angle_deg"] for entry in fit_log] == pytest.approx(
+    assert [entry["lever_angle_deg"] for entry in fit_log[:-1]] == pytest.approx(
         [1.0, 2.0, 0.0]
     )
+    assert [
+        sample["lever_angle_deg"] for sample in fit_log[-1]["samples"]
+    ] == pytest.approx([0.0, 1.0, 0.0])
 
 
 def test_simulation_reverses_at_first_unreachable_palm_residual(monkeypatch):
@@ -1868,7 +2023,7 @@ def test_simulation_reverses_at_first_unreachable_palm_residual(monkeypatch):
     )
     assert trajectory is framework
     assert trajectory.states_trajectory.getSize() == 3
-    assert lock_attempts == 3
+    assert lock_attempts == 6
     recorded_angles = [
         equipment.getCoordinateSet().get("right_lever-angle").getValue(
             trajectory.states_trajectories["equipment"].get(index)
@@ -1882,7 +2037,7 @@ def test_simulation_reverses_at_first_unreachable_palm_residual(monkeypatch):
         for message in entry["messages"]
     )
     assert [entry["phase"] for entry in simulation_log] == [
-        "concentric", "concentric", "eccentric"
+        "concentric", "concentric", "eccentric", "post_filter_contact"
     ]
 
 

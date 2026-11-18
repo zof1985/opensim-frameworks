@@ -14,6 +14,7 @@ __all__ = [
     "position_user",
     "palm_axis_distance_penalty",
     "wrist_deviation_penalty",
+    "wrist_flexion_penalty",
     "forearm_supination_penalty",
     "external_shoulder_rotation_penalty",
     "scapular_retraction_penalty",

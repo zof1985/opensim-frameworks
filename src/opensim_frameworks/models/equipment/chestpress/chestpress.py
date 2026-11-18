@@ -149,17 +149,7 @@ def _filter_upper_limb_trajectories(
     ):
         raise ValueError("state_times must be finite, increasing, and match states")
 
-    coordinates = user.getCoordinateSet()
-    upper_limb_coordinates = []
-    for index in range(coordinates.getSize()):
-        coordinate = coordinates.get(index)
-        name = coordinate.getName()
-        girdle_name = name.rsplit("_", 1)[0]
-        if (
-            name.startswith(_UPPER_LIMB_COORDINATE_PREFIXES)
-            or girdle_name in SHOULDER_GIRDLE_COORDINATES
-        ):
-            upper_limb_coordinates.append(coordinate)
+    upper_limb_coordinates = _upper_limb_coordinates(user)
     if not upper_limb_coordinates:
         return
 
@@ -219,6 +209,116 @@ def _filter_upper_limb_trajectories(
                 False,
             )
         user.realizePosition(user_state)
+
+
+def _upper_limb_coordinates(user: User) -> list[Any]:
+    coordinates = user.getCoordinateSet()
+    result = []
+    for index in range(coordinates.getSize()):
+        coordinate = coordinates.get(index)
+        name = coordinate.getName()
+        if (
+            name.startswith(_UPPER_LIMB_COORDINATE_PREFIXES)
+            or name.rsplit("_", 1)[0] in SHOULDER_GIRDLE_COORDINATES
+        ):
+            result.append(coordinate)
+    return result
+
+
+def _restore_filtered_palm_contact(
+    framework: Framework,
+    states: list[tuple[osim.State, osim.State]],
+    state_angles: list[float],
+    state_phases: list[str],
+    unfiltered_coordinates: list[dict[str, float]],
+    fit_log: list[dict[str, Any]],
+) -> None:
+    """Refit both palms to their handle anchors after trajectory filtering.
+
+    Parameters
+    ----------
+    framework : opensim_frameworks.Framework
+        Framework containing the user, equipment, and fitted palm anchors.
+    states : list of (opensim.State, opensim.State)
+        User and equipment states to correct, in trajectory order.
+    state_angles : list of float
+        Matching lever angles in radians.
+    state_phases : list of str
+        Matching movement phases.
+    unfiltered_coordinates : list of dict
+        Original upper-limb coordinate values, used only if filtered contact
+        cannot be restored.
+    fit_log : list of dict
+        Simulation log to extend with post-filter contact diagnostics.
+
+    Raises
+    ------
+    RuntimeError
+        If contact cannot be restored for any recorded state.
+    """
+    contact_report: dict[str, Any] = {
+        "phase": "post_filter_contact",
+        "samples": [],
+    }
+    fit_log.append(contact_report)
+    for (user_state, equipment_state), angle, phase, original_coordinates in zip(
+        states, state_angles, state_phases, unfiltered_coordinates, strict=True
+    ):
+        framework.user.state = user_state
+        framework.equipment.state = equipment_state
+        sample_log = [{"messages": []}]
+        contact_maintained = lock_hands_to_handles(
+            framework,
+            mirror_left_from_right=True,
+            fit_log=sample_log,
+        )
+        sample = {
+            "phase": phase,
+            "lever_angle_deg": math.degrees(angle),
+            "messages": sample_log[0]["messages"],
+        }
+        if not isinstance(contact_maintained, bool):
+            error = RuntimeError(
+                "post-filter palm-anchor fitting did not report contact status"
+            )
+            setattr(error, "handle_fit_log", fit_log)
+            raise error
+        if not contact_maintained:
+            coordinates = framework.user.getCoordinateSet()
+            for name, value in original_coordinates.items():
+                coordinates.get(name).setValue(user_state, value, False)
+            framework.user.realizePosition(user_state)
+            fallback_log = [{"messages": []}]
+            contact_maintained = lock_hands_to_handles(
+                framework,
+                mirror_left_from_right=True,
+                fit_log=fallback_log,
+            )
+            sample["messages"].append({
+                "kind": "post_filter_contact_fallback",
+                "level": "WARNING",
+                "message": (
+                    "restored original upper-limb coordinates after filtered "
+                    "palm-anchor fitting failed"
+                ),
+            })
+            sample["messages"].extend(fallback_log[0]["messages"])
+            sample["fallback"] = "unfiltered_upper_limb_pose"
+            if not isinstance(contact_maintained, bool):
+                error = RuntimeError(
+                    "palm-anchor fitting did not report contact status after "
+                    "restoring original coordinates"
+                )
+                setattr(error, "handle_fit_log", fit_log)
+                raise error
+        contact_report["samples"].append(sample)
+        if not contact_maintained:
+            error = RuntimeError(
+                "Palm contact could not be restored after filtering at "
+                f"{math.degrees(angle):.2f} degrees during the {phase} phase"
+            )
+            setattr(error, "handle_fit_log", fit_log)
+            raise error
 
 
 def _palm_position_in_handle(user: User, equipment: Equipment, side: str) -> np.ndarray:
@@ -325,6 +425,7 @@ class ChestPress(Equipment, abc.ABC):
         self,
         user: User,
         *,
+        wrist_flex_weight: float = 1.0,
         wrist_dev_weight: float = 0.2,
         knuckle_weight: float = 5.0,
         knuckle_end_weight: float = 10.0,
@@ -349,6 +450,9 @@ class ChestPress(Equipment, abc.ABC):
         ----------
         user : opensim_frameworks.User
             Scaled user whose feet are initially in contact with ground.
+        wrist_flex_weight : float, default=1.0
+            Weight penalizing palmar wrist flexion only; wrist extension is
+            unpenalized.
         wrist_dev_weight : float, default=0.2
             Weight for neutral radial/ulnar deviation.
         knuckle_weight : float, default=5.0
@@ -429,6 +533,7 @@ class ChestPress(Equipment, abc.ABC):
             knuckle_end_weight=knuckle_end_weight,
             plane_distance_weight=plane_distance_weight,
             pro_sup_weight=pro_sup_weight,
+            wrist_flex_weight=wrist_flex_weight,
             wrist_dev_weight=wrist_dev_weight,
             protraction_weight=protraction_weight,
             scapular_elevation_weight=scapular_elevation_weight,
@@ -477,6 +582,7 @@ class ChestPress(Equipment, abc.ABC):
         concentric_duration_s: float = 1.5,
         eccentric_duration_s: float = 2.5,
         *,
+        wrist_flex_weight: float = 1.0,
         wrist_dev_weight: float = 0.2,
         knuckle_weight: float = 5.0,
         knuckle_end_weight: float = 10.0,
@@ -509,6 +615,9 @@ class ChestPress(Equipment, abc.ABC):
             Duration of the concentric press phase, in seconds.
         eccentric_duration_s : float, default=2.5
             Duration of the eccentric return phase, in seconds.
+        wrist_flex_weight : float, default=1.0
+            Weight penalizing palmar wrist flexion only; wrist extension is
+            unpenalized.
         wrist_dev_weight : float, default=0.2
             Weight for neutral radial/ulnar deviation.
         knuckle_weight : float, default=5.0
@@ -556,14 +665,16 @@ class ChestPress(Equipment, abc.ABC):
         derived from the fitted coordinate positions and lever-angle profile.
         Before trajectory recording, shoulder-girdle, arm, wrist, and finger
         coordinates are resampled at 30 Hz and filtered with a fourth-order,
-        1 Hz zero-phase Butterworth low-pass filter. The trajectories retain
-        their original sample times. Accelerations are not separately
-        recorded. Sampling for playback is handled separately by the framework
-        viewer. Simulation failures raise an exception with the accumulated
-        ``handle_fit_log``. Palm-anchor residuals are recorded in millimetres
-        with the optimizer's convergence status; residuals do not cause failure
-        by themselves, so the recorded palm-to-handle offset can vary when the
-        anchor is unreachable.
+        1 Hz zero-phase Butterworth low-pass filter. Palm anchors are then
+        refitted at every recorded state so filtering cannot separate the
+        hands from the moving handles. The trajectories retain their original
+        sample times. Accelerations are not separately recorded. Sampling for
+        playback is handled separately by the framework viewer. Simulation
+        failures raise an exception with the accumulated ``handle_fit_log``.
+        Palm-anchor residuals are recorded in millimetres with the optimizer's
+        convergence status; residuals do not cause failure during the raw
+        stroke fit, but failure to restore contact after filtering aborts the
+        simulation.
         """
         if not math.isfinite(step_deg) or step_deg <= 0.0:
             raise ValueError("step_deg must be finite and positive")
@@ -582,6 +693,7 @@ class ChestPress(Equipment, abc.ABC):
             pro_sup_weight=pro_sup_weight,
             plane_distance_weight=plane_distance_weight,
             palm_contact_weight=palm_contact_weight,
+            wrist_flex_weight=wrist_flex_weight,
         )
         fit_log = list(report["grip"]["handle_fit_log"])
         fit_options = {
@@ -590,6 +702,7 @@ class ChestPress(Equipment, abc.ABC):
             "knuckle_end_weight": knuckle_end_weight,
             "plane_distance_weight": plane_distance_weight,
             "pro_sup_weight": pro_sup_weight,
+            "wrist_flex_weight": wrist_flex_weight,
             "wrist_dev_weight": wrist_dev_weight,
             "protraction_weight": protraction_weight,
             "scapular_elevation_weight": scapular_elevation_weight,
@@ -602,6 +715,7 @@ class ChestPress(Equipment, abc.ABC):
                 equipment=framework.equipment,
                 handle_name="right_handle",
                 side="right",
+                fit_shoulder_girdle=True,
                 **fit_options,
             )
             if result[0] is not None:
@@ -743,10 +857,26 @@ class ChestPress(Equipment, abc.ABC):
             concentric_duration_s,
             eccentric_duration_s,
         )
+        upper_limb_coordinates = _upper_limb_coordinates(framework.user)
+        unfiltered_coordinates = [
+            {
+                coordinate.getName(): float(coordinate.getValue(user_state))
+                for coordinate in upper_limb_coordinates
+            }
+            for user_state, _ in states
+        ]
         _filter_upper_limb_trajectories(
             framework.user,
             states,
             state_times,
+        )
+        _restore_filtered_palm_contact(
+            framework,
+            states,
+            state_angles,
+            state_phases,
+            unfiltered_coordinates,
+            fit_log,
         )
         _set_trajectory_coordinate_speeds(
             framework,
