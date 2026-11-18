@@ -73,6 +73,7 @@ class _GraspMixin:
         handle_mesh: Any,
         *,
         palm_margin_m: float = 2e-3,
+        handle_state: Any | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Close the four fingers of a hand on a handle, one finger at a time.
 
@@ -109,7 +110,7 @@ class _GraspMixin:
             Hand to close.
         handle_body : opensim.Body
             Body of a separately initialized model (for example a piece of
-            equipment). Its pose is read from its model's own working state.
+            equipment).
         handle_mesh : opensim.Mesh or sequence of opensim.Mesh
             One or more meshes attached to `handle_body` that the fingers
             touch. Relative mesh files are searched in the user's geometry
@@ -117,6 +118,9 @@ class _GraspMixin:
         palm_margin_m : float, default=2e-3
             Distance, in metres, below which a finger vertex is considered to
             touch the palm.
+        handle_state : opensim.State, optional
+            Current state of the model containing `handle_body`. If omitted,
+            the model's working state is used.
 
         Returns
         -------
@@ -174,7 +178,8 @@ class _GraspMixin:
         # le mesh relative si cercano tra quelle dell'utente e le primitive della libreria
         directories = [*self.geometry_directories, MESHES_DIR]
         handle_model = handle_body.getModel()
-        handle_state = handle_model.getWorkingState()
+        if handle_state is None:
+            handle_state = handle_model.getWorkingState()
         handle_model.realizePosition(handle_state)
         self.realizePosition(self.state)
         user_hand = self.getBodySet().get(f"hand_{suffix}")

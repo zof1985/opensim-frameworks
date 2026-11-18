@@ -10,6 +10,7 @@ import numpy as np
 import opensim as osim
 from scipy.interpolate import CubicSpline
 from scipy.signal import butter, sosfiltfilt
+from tqdm import tqdm
 
 from opensim_frameworks import Equipment, SHOULDER_GIRDLE_COORDINATES
 from opensim_frameworks.framework.framework import Framework
@@ -557,6 +558,7 @@ class ChestPress(Equipment, abc.ABC):
             "right",
             equipment.getBodySet().get("right_handle"),
             equipment.handle_meshes("right"),
+            handle_state=equipment.state,
         )
         lock_hands_to_handles(
             framework=framework,
@@ -746,12 +748,9 @@ class ChestPress(Equipment, abc.ABC):
                 ],
             )
 
-        right_lever_coord = framework.equipment.getCoordinateSet().get(
-            "right_lever-angle"
-        )
-        left_lever_coord = framework.equipment.getCoordinateSet().get(
-            "left_lever-angle"
-        )
+        coordinates = framework.equipment.getCoordinateSet()
+        right_lever_coord = coordinates.get("right_lever-angle")
+        left_lever_coord = coordinates.get("left_lever-angle")
         lower = 0.0
         upper = right_lever_coord.getRangeMax()
         if not right_lever_coord.getRangeMin() <= lower <= upper:
@@ -804,6 +803,7 @@ class ChestPress(Equipment, abc.ABC):
                 "right",
                 framework.equipment.getBodySet().get("right_handle"),
                 framework.equipment.handle_meshes("right"),
+                handle_state=framework.equipment.state,
             )
             contact_maintained = lock_hands_to_handles(
                 framework, mirror_left_from_right=True, fit_log=fit_log
@@ -822,40 +822,17 @@ class ChestPress(Equipment, abc.ABC):
             state_phases.append(phase)
             return True
 
-        angle = lower
-        while True:
-            next_angle = min(angle + step_rad, upper)
-            if next_angle <= angle:
-                error = RuntimeError(
-                    "The right lever range does not allow a positive attached stroke"
-                )
-                setattr(error, "handle_fit_log", fit_log)
-                raise error
-            angle = next_angle
-            if not fit_grasp_and_save(angle, "concentric"):
-                angle = state_angles[-1]
-                if angle <= lower:
-                    error = RuntimeError(
-                        "Palm contact was lost before a positive concentric "
-                        "stroke was recorded"
-                    )
-                    setattr(error, "handle_fit_log", fit_log)
-                    raise error
+        angles = np.linspace(lower, upper, int((upper - lower) // step_rad) + 1)
+        pbar = tqdm(angles, desc="Fitting concentric phase")
+        for angle in pbar:
+            out = fit_grasp_and_save(angle, "concentric")
+            if not out:
+                angles = angles[angles < angle]
+                pbar.close()
                 break
-            if angle >= upper:
-                break
-
-        while angle > lower:
-            angle = max(lower, angle - step_rad)
-            if math.isclose(angle, lower, rel_tol=0.0, abs_tol=1e-12):
-                angle = lower
-            if not fit_grasp_and_save(angle, "eccentric"):
-                error = RuntimeError(
-                    "Palm contact was lost during the eccentric phase at "
-                    f"{math.degrees(angle):.2f} degrees"
-                )
-                setattr(error, "handle_fit_log", fit_log)
-                raise error
+            pbar.update(1)
+        for angle in tqdm(angles[::-1], desc="Fitting eccentric phase"):
+            out = fit_grasp_and_save(angle, "eccentric")
 
         state_times, angular_speeds = _phase_times_and_speeds(
             state_angles,
@@ -893,7 +870,8 @@ class ChestPress(Equipment, abc.ABC):
             angular_speeds,
         )
 
-        # Record each member snapshot so the framework builds synchronized trajectories.
+        # Record each member snapshot so the framework builds synchronized
+        # trajectories.
         for time, (user_state, equipment_state) in zip(
             state_times, states, strict=True
         ):

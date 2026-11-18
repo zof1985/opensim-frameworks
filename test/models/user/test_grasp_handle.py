@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import importlib
 
 import numpy as np
 import pytest
@@ -13,6 +14,7 @@ from opensim_frameworks.utils.constants import MESHES_DIR
 
 opensim = pytest.importorskip("opensim")
 pytest.importorskip("vtk")
+grasp_module = importlib.import_module("opensim_frameworks.models.user.grasp")
 
 FINGER_ORDER = ("middle", "ring", "index", "little")
 STOPPED_BY = {"handle", "palm", "range", "bone", "finger", "blocked"}
@@ -187,6 +189,44 @@ def test_grasp_handle_rejects_an_invalid_hand(scene):
     user, _, body, mesh = scene
     with pytest.raises(ValueError, match="hand"):
         user.grasp_handle("both", body, mesh)
+
+
+def test_grasp_handle_uses_the_supplied_handle_state(scene, monkeypatch):
+    user, model, body, mesh = scene
+    handle_state = opensim.State(model.getWorkingState())
+    observed_states = []
+    original_mesh_matrix = grasp_module.mesh_matrix
+
+    def record_mesh_state(candidate, state):
+        if candidate is mesh:
+            observed_states.append(state)
+        return original_mesh_matrix(candidate, state)
+
+    monkeypatch.setattr(grasp_module, "mesh_matrix", record_mesh_state)
+
+    user.grasp_handle("right", body, mesh, handle_state=handle_state)
+
+    assert observed_states
+    assert all(state is handle_state for state in observed_states)
+
+
+def test_grasp_handle_uses_the_supplied_handle_state(scene, monkeypatch):
+    user, model, body, mesh = scene
+    handle_state = opensim.State(model.getWorkingState())
+    observed_states = []
+    original_mesh_matrix = grasp_module.mesh_matrix
+
+    def record_mesh_state(candidate, state):
+        if candidate is mesh:
+            observed_states.append(state)
+        return original_mesh_matrix(candidate, state)
+
+    monkeypatch.setattr(grasp_module, "mesh_matrix", record_mesh_state)
+
+    user.grasp_handle("right", body, mesh, handle_state=handle_state)
+
+    assert observed_states
+    assert all(state is handle_state for state in observed_states)
 
 
 def test_grasp_handle_rejects_wrong_types(scene):

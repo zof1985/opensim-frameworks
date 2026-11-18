@@ -1076,12 +1076,14 @@ def test_fit_user_returns_messages_for_each_fit(monkeypatch):
                 Coordinate("index_mcp_flexion_l"),
             ])
             self.grasp_calls = []
+            self.grasp_states = []
 
         def getCoordinateSet(self):
             return self.coordinates
 
-        def grasp_handle(self, side, body, meshes):
+        def grasp_handle(self, side, body, meshes, **kwargs):
             self.grasp_calls.append(side)
+            self.grasp_states.append(kwargs["handle_state"])
             self.coordinates.get("index_mcp_flexion_r").value = 0.7
             return {"fitted": side}
 
@@ -1136,6 +1138,7 @@ def test_fit_user_returns_messages_for_each_fit(monkeypatch):
     assert calls == ["position", "fit", "lock"]
     assert fitting_distance_weights == [4321.0]
     assert user.grasp_calls == ["right"]
+    assert user.grasp_states == [equipment.state]
     assert lock_options == [{"mirror_left_from_right": True, "fit_log": report["grip"]["handle_fit_log"]}]
     assert report["grip"]["fingers"] == {
         "right": {"fitted": "right"}, "left": {"mirrored_from_right": True}
@@ -1780,6 +1783,17 @@ def test_filtered_contact_falls_back_to_original_pose(monkeypatch):
 def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_end):
     user = _simulation_model(["arm_r", "arm_l", "elbow_flex_r"])
     equipment = _simulation_model(["right_lever-angle", "left_lever-angle"])
+    grasp_angles = []
+
+    def grasp_handle(*args, handle_state, **kwargs):
+        grasp_angles.append(
+            equipment.getCoordinateSet()
+            .get("right_lever-angle")
+            .getValue(handle_state)
+        )
+        return {}
+
+    user.grasp_handle = grasp_handle
     framework = Framework(user=user, equipment=equipment)
     wrapper = SimpleNamespace(
         fit_user=lambda **kwargs: (
@@ -1870,6 +1884,7 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
         )
         assert fitted_sides and set(fitted_sides) == {"right"}
         assert lock_modes and all(lock_modes)
+        assert np.rad2deg(grasp_angles) == pytest.approx([1.0])
         return
 
     result, fit_log = ChestPress.simulate_kinematics(
@@ -1885,6 +1900,7 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
     )
     assert fitted_sides and set(fitted_sides) == {"right"}
     assert lock_modes and all(lock_modes)
+    assert np.rad2deg(grasp_angles) == pytest.approx([1.0, 2.0, 1.0, 0.0])
     assert [entry["phase"] for entry in fit_log] == [
         "final", "concentric", "concentric", "eccentric", "eccentric",
         "post_filter_contact",
@@ -2014,9 +2030,9 @@ def test_return_phase_clamps_floating_point_lower_endpoint(monkeypatch):
         concentric_duration_s=1.5, eccentric_duration_s=2.5,
     )
 
-    assert result.states_trajectory.getSize() == 41
+    assert result.states_trajectory.getSize() == 39
     assert np.all(np.diff(result.state_times) > 0.0)
-    final_equipment_state = result.states_trajectories["equipment"].get(40)
+    final_equipment_state = result.states_trajectories["equipment"].get(38)
     assert equipment.getCoordinateSet().get(
         "right_lever-angle"
     ).getValue(final_equipment_state) == pytest.approx(0.0)
