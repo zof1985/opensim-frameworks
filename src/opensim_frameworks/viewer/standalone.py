@@ -19,7 +19,6 @@ from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Any
 
-from ..utils.constants import DEFAULT_SIZE
 from . import export as _export
 from .animation import _ViewerModel
 from .player import MotionData
@@ -28,7 +27,7 @@ from .visualizer import VTKVisualizer
 __all__ = ["save_player_executable"]
 
 _OVERLAY_MAGIC = b"OSFPLAY1"
-_DEFAULT_PLAYER_SIZE = (DEFAULT_SIZE[0] // 2, DEFAULT_SIZE[1] // 2)
+_DEFAULT_PLAYER_SIZE = (800, 600)
 
 
 def _write_splash_image(path: Path) -> None:
@@ -409,7 +408,9 @@ def save_player_executable(
 
     OpenSim is used only while generating the data-only VTK scene. The
     resulting executable contains the VTK geometry and per-frame transforms,
-    but does not package or import OpenSim.
+    but does not package or import OpenSim. The initial window client area
+    defaults to 800 by 600 pixels, including the playback controls, and can be
+    resized in both dimensions.
     With ``clean=True``, the model-independent PyInstaller runtime is rebuilt
     instead of reusing the compatible cached executable.
     Existing destination files are replaced by default; pass

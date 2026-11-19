@@ -192,9 +192,8 @@ class Player:
         self._build_ui()
         self._build_scene()
         self.root.update_idletasks()
-        controls_height = self.controls.winfo_reqheight()
         width, height = self.manifest["size"]
-        _configure_window(self.root, width, height + controls_height)
+        _configure_window(self.root, width, height)
         self.root.update()
         if hasattr(self, "_hwnd"):
             _win32_embed.resize_embedded_window(
@@ -218,7 +217,7 @@ class Player:
         self.viewer_frame.pack_propagate(False)
         controls = ttk.Frame(self.root, padding=(8, 8, 8, 0))
         self.controls = controls
-        controls.pack(side="bottom", fill="x")
+        controls.pack(side="bottom", fill="x", before=self.viewer_frame)
         for column in range(3):
             controls.columnconfigure(column, weight=1)
         self.slider_var = tk.DoubleVar(value=0.0)

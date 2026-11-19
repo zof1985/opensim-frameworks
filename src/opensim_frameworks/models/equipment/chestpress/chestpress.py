@@ -802,25 +802,25 @@ class ChestPress(Equipment, abc.ABC):
                 for coordinate in upper_limb_coordinates
             }
 
-        unfiltered_coordinates = [capture_unfiltered_coordinates(framework.user.state)]
-        states: list[tuple[osim.State, osim.State]] = [
-            (
-                osim.State(framework.user.state),
-                osim.State(framework.equipment.state),
-            )
-        ]
-        state_angles: list[float] = [lower]
-        state_phases: list[str] = ["concentric"]
+        unfiltered_coordinates = []
+        states: list[tuple[osim.State, osim.State]] = []
+        state_angles: list[float] = []
+        state_phases: list[str] = []
 
-        def fit_grasp_and_save(angle: float, phase: str) -> bool:
+        def fit_grasp_and_save(
+            equipment_state: osim.State,
+            user_state: osim.State,
+            angle: float,
+            phase: str,
+        ) -> bool:
             if (
                 not left_lever_coord.getRangeMin()
                 <= angle
                 <= left_lever_coord.getRangeMax()
             ):
                 raise ValueError("simulated angle is outside the left lever range")
-            framework.user.state = osim.State(states[-1][0])
-            framework.equipment.state = osim.State(states[-1][1])
+            framework.user.state = osim.State(user_state)
+            framework.equipment.state = osim.State(equipment_state)
             right_lever_coord.setValue(framework.equipment.state, angle, False)
             left_lever_coord.setValue(framework.equipment.state, angle, False)
             framework.equipment.realizePosition(framework.equipment.state)
@@ -845,9 +845,9 @@ class ChestPress(Equipment, abc.ABC):
             if fit_failures:
                 error = RuntimeError(
                     handle_fit_failure_message(
-                        f"{phase} stroke",
-                        math.degrees(angle),
-                        messages,
+                        phase=f"{phase} stroke",
+                        angle_deg=math.degrees(angle),
+                        messages=messages,
                         side=fit_failures[0],
                     )
                 )
@@ -878,7 +878,7 @@ class ChestPress(Equipment, abc.ABC):
             state_phases.append(phase)
             return True
 
-        angles = np.linspace(lower, upper, int((upper - lower) // step_rad) + 1)
+        angles = np.linspace(lower, upper, int((upper - lower) // step_rad + 1))
         tic = datetime.now()
         for angle in angles:
             toc = datetime.now()
@@ -886,7 +886,12 @@ class ChestPress(Equipment, abc.ABC):
                 f"Fitting angle: {math.degrees(angle):0.1f}° (elapsed: {toc - tic})",
                 end="\r",
             )
-            out = fit_grasp_and_save(angle, "concentric")
+            out = fit_grasp_and_save(
+                equipment_state=framework.equipment.state,
+                user_state=framework.user.state,
+                angle=angle,
+                phase="concentric",
+            )
             if not out:
                 angles = angles[angles < angle]
                 break

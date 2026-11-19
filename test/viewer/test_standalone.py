@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import struct
 import sys
+import tkinter as tk
 import zipfile
 from contextlib import contextmanager
 from pathlib import Path
@@ -34,6 +35,64 @@ def test_standalone_window_keeps_default_size_and_allows_resizing():
         ("resizable", True, True),
         ("geometry", "640x480"),
     ]
+
+
+def test_standalone_layout_resizes_viewport_in_both_dimensions(monkeypatch):
+    try:
+        root = tk.Tk()
+    except tk.TclError as error:
+        pytest.skip(f"Tk display unavailable: {error}")
+    try:
+        player = Player.__new__(Player)
+        player.root = root
+        player.manifest = {
+            "size": [800, 600],
+            **{
+                f"show_{key}": True
+                for key in (
+                    "ground", "muscles", "markers", "axes", "vision_cone", "reachability"
+                )
+            },
+        }
+        player.loop = False
+        player.has_motion = True
+        player._build_ui()
+        player._hwnd = 1
+        native_sizes = []
+        vtk_sizes = []
+        player.window = SimpleNamespace(
+            SetSize=lambda width, height: vtk_sizes.append((width, height))
+        )
+        monkeypatch.setattr(
+            standalone_player_module._win32_embed,
+            "resize_embedded_window",
+            lambda _hwnd, width, height: native_sizes.append((width, height)),
+            raising=False,
+        )
+        player.viewer_frame.bind("<Configure>", player._resize_window)
+        root.update_idletasks()
+        controls_height = player.controls.winfo_reqheight()
+        standalone_player_module._configure_window(root, 800, 600)
+        root.update()
+        assert (root.winfo_width(), root.winfo_height()) == (800, 600)
+        assert (player.viewer_frame.winfo_width(), player.viewer_frame.winfo_height()) == (
+            800,
+            600 - controls_height,
+        )
+
+        for width, height in ((700, 400), (900, 850)):
+            root.geometry(f"{width}x{height}")
+            root.update()
+            viewport_size = (width, height - controls_height)
+            assert player.controls.winfo_ismapped()
+            assert (
+                player.viewer_frame.winfo_width(),
+                player.viewer_frame.winfo_height(),
+            ) == viewport_size
+            assert native_sizes[-1] == viewport_size
+            assert vtk_sizes[-1] == viewport_size
+    finally:
+        root.destroy()
 
 
 def make_model():
@@ -149,7 +208,7 @@ def test_executable_passes_clean_and_appends_scene_archive(tmp_path, monkeypatch
 
     assert result == destination
     assert clean_values == [True]
-    assert sizes == [(960, 540)]
+    assert sizes == [(800, 600)]
     with zipfile.ZipFile(destination) as archive:
         assert json.loads(archive.read("manifest.json")) == {
             "has_motion": False,
