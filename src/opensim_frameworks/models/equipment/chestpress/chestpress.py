@@ -920,6 +920,7 @@ class ChestPress(Equipment, abc.ABC):
             states,
             state_times,
         )
+        """
         ChestPress._restore_filtered_palm_contact(
             framework,
             states,
@@ -928,6 +929,7 @@ class ChestPress(Equipment, abc.ABC):
             unfiltered_coordinates,
             fit_log,
         )
+        """
         ChestPress._set_trajectory_coordinate_speeds(
             framework,
             states,
