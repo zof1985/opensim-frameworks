@@ -57,6 +57,7 @@ _ARM_COORDINATE_PREFIXES = (
     "little_",
     "thumb_",
 )
+_FINGER_COORDINATE_PREFIXES = ("index_", "middle_", "ring_", "little_", "thumb_")
 _FIT_COORDINATE_PREFIXES = ("arm_", "elbow_flex_", "pro_sup_", "wrist_")
 _MIRRORED_CONTACT_COORDINATE_PREFIXES = (
     "elbow_flex_",
@@ -848,6 +849,41 @@ def mirror_arm(user, to_mirror: Literal["left", "right"]) -> None:
             target.set_locked(default_locked)
             target.setLocked(user.state, state_locked)
     user.scapula_contact_report(target_suffix[1:])
+
+
+def _mirror_finger_coordinates(user: Any, to_mirror: Literal["left", "right"]) -> None:
+    if to_mirror not in ("left", "right"):
+        raise ValueError("to_mirror must be 'left' or 'right'")
+
+    source_suffix = "_r" if to_mirror == "right" else "_l"
+    target_suffix = "_l" if to_mirror == "right" else "_r"
+    coordinates = user.getCoordinateSet()
+    names = {coordinates.get(index).getName() for index in range(coordinates.getSize())}
+    source_names = sorted(
+        name
+        for name in names
+        if name.endswith(source_suffix)
+        and name.startswith(_FINGER_COORDINATE_PREFIXES)
+    )
+    if not source_names:
+        return
+
+    for source_name in source_names:
+        target_name = source_name[: -len(source_suffix)] + target_suffix
+        if target_name not in names:
+            raise RuntimeError(f"Missing mirrored finger coordinate {target_name}")
+
+        source = coordinates.get(source_name)
+        target = coordinates.get(target_name)
+        default_locked = target.get_locked()
+        state_locked = target.getLocked(user.state)
+        target.set_locked(False)
+        target.setLocked(user.state, False)
+        try:
+            target.setValue(user.state, source.getValue(user.state), False)
+        finally:
+            target.set_locked(default_locked)
+            target.setLocked(user.state, state_locked)
 
 
 def mirror_arm_with_log(user: Any, fit_log: list[dict[str, Any]]) -> None:

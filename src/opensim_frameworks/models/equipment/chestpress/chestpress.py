@@ -24,6 +24,7 @@ from opensim_frameworks.utils.motion_profiles import (
     gaussian_velocity_profile,
 )
 from .handlefit import (
+    _mirror_finger_coordinates,
     handle_fit_failure_message,
     fit_handle,
     lock_hands_to_handles,
@@ -40,11 +41,6 @@ _UPPER_LIMB_COORDINATE_PREFIXES = (
     "elbow_",
     "pro_sup_",
     "wrist_",
-    "index_",
-    "middle_",
-    "ring_",
-    "little_",
-    "thumb_",
 )
 
 
@@ -243,8 +239,7 @@ def _restore_filtered_palm_contact(
     state_phases : list of str
         Matching movement phases.
     unfiltered_coordinates : list of dict
-        Original upper-limb coordinate values, used only if filtered contact
-        cannot be restored.
+        Original upper-limb coordinates captured when each state was saved.
     fit_log : list of dict
         Simulation log to extend with post-filter contact diagnostics.
 
@@ -285,6 +280,11 @@ def _restore_filtered_palm_contact(
             for name, value in original_coordinates.items():
                 coordinates.get(name).setValue(user_state, value, False)
             framework.user.realizePosition(user_state)
+            safe_coordinates = getattr(
+                framework, "_chestpress_safe_palm_contact_coordinates", None
+            )
+            if safe_coordinates is not None:
+                safe_coordinates.clear()
             fallback_log = [{"messages": []}]
             contact_maintained = lock_hands_to_handles(
                 framework,
@@ -554,17 +554,19 @@ class ChestPress(Equipment, abc.ABC):
             setattr(error, "handle_fit_log", fit_log)
             raise error
 
+        lock_hands_to_handles(
+            framework=framework,
+            mirror_left_from_right=True,
+            fit_log=fit_log,
+        )
         right_grasp = user.grasp_handle(
             "right",
             equipment.getBodySet().get("right_handle"),
             equipment.handle_meshes("right"),
             handle_state=equipment.state,
         )
-        lock_hands_to_handles(
-            framework=framework,
-            mirror_left_from_right=True,
-            fit_log=fit_log,
-        )
+        _mirror_finger_coordinates(user, "right")
+        user.realizePosition(user.state)
         report["grip"] = {
             "elbow_flexion_deg": elbow_flexion,
             "palm_handle_position_m": fitted_palm_position,
@@ -762,6 +764,17 @@ class ChestPress(Equipment, abc.ABC):
         ):
             raise RuntimeError("The left lever range does not include zero degrees")
         step_rad = math.radians(step_deg)
+        upper_limb_coordinates = _upper_limb_coordinates(framework.user)
+
+        def capture_unfiltered_coordinates(user_state: osim.State) -> dict[str, float]:
+            return {
+                coordinate.getName(): float(coordinate.getValue(user_state))
+                for coordinate in upper_limb_coordinates
+            }
+
+        unfiltered_coordinates = [
+            capture_unfiltered_coordinates(framework.user.state)
+        ]
         states: list[tuple[osim.State, osim.State]] = [
             (
                 osim.State(framework.user.state),
@@ -783,6 +796,9 @@ class ChestPress(Equipment, abc.ABC):
             right_lever_coord.setValue(framework.equipment.state, angle, False)
             left_lever_coord.setValue(framework.equipment.state, angle, False)
             framework.equipment.realizePosition(framework.equipment.state)
+            # Arm fitting can leave the equipment transform cache one sample behind.
+            framework.equipment.state = osim.State(framework.equipment.state)
+            framework.equipment.realizePosition(framework.equipment.state)
             elbow_flexion, _, messages = fit_at_current_angle()
             fit_log.append(
                 {
@@ -799,12 +815,8 @@ class ChestPress(Equipment, abc.ABC):
                 )
                 setattr(error, "handle_fit_log", fit_log)
                 raise error
-            framework.user.grasp_handle(
-                "right",
-                framework.equipment.getBodySet().get("right_handle"),
-                framework.equipment.handle_meshes("right"),
-                handle_state=framework.equipment.state,
-            )
+            framework.equipment.state = osim.State(framework.equipment.state)
+            framework.equipment.realizePosition(framework.equipment.state)
             contact_maintained = lock_hands_to_handles(
                 framework, mirror_left_from_right=True, fit_log=fit_log
             )
@@ -812,6 +824,17 @@ class ChestPress(Equipment, abc.ABC):
                 raise RuntimeError("palm-anchor fitting did not report contact status")
             if not contact_maintained:
                 return False
+            framework.user.grasp_handle(
+                "right",
+                framework.equipment.getBodySet().get("right_handle"),
+                framework.equipment.handle_meshes("right"),
+                handle_state=framework.equipment.state,
+            )
+            _mirror_finger_coordinates(framework.user, "right")
+            framework.user.realizePosition(framework.user.state)
+            unfiltered_coordinates.append(
+                capture_unfiltered_coordinates(framework.user.state)
+            )
             states.append(
                 (
                     osim.State(framework.user.state),
@@ -823,15 +846,14 @@ class ChestPress(Equipment, abc.ABC):
             return True
 
         angles = np.linspace(lower, upper, int((upper - lower) // step_rad) + 1)
-        pbar = tqdm(angles, desc="Fitting concentric phase")
+        pbar = tqdm(angles[1:], desc="Fitting concentric phase")
         for angle in pbar:
             out = fit_grasp_and_save(angle, "concentric")
             if not out:
                 angles = angles[angles < angle]
                 pbar.close()
                 break
-            pbar.update(1)
-        for angle in tqdm(angles[::-1], desc="Fitting eccentric phase"):
+        for angle in tqdm(angles[-2::-1], desc="Fitting eccentric phase"):
             out = fit_grasp_and_save(angle, "eccentric")
 
         state_times, angular_speeds = _phase_times_and_speeds(
@@ -841,14 +863,6 @@ class ChestPress(Equipment, abc.ABC):
             concentric_duration_s,
             eccentric_duration_s,
         )
-        upper_limb_coordinates = _upper_limb_coordinates(framework.user)
-        unfiltered_coordinates = [
-            {
-                coordinate.getName(): float(coordinate.getValue(user_state))
-                for coordinate in upper_limb_coordinates
-            }
-            for user_state, _ in states
-        ]
         _filter_upper_limb_trajectories(
             framework.user,
             states,

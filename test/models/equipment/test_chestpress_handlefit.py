@@ -1083,7 +1083,11 @@ def test_fit_user_returns_messages_for_each_fit(monkeypatch):
         def getCoordinateSet(self):
             return self.coordinates
 
+        def realizePosition(self, state):
+            return None
+
         def grasp_handle(self, side, body, meshes, **kwargs):
+            calls.append(f"grasp_{side}")
             self.grasp_calls.append(side)
             self.grasp_states.append(kwargs["handle_state"])
             self.coordinates.get("index_mcp_flexion_r").value = 0.7
@@ -1137,7 +1141,7 @@ def test_fit_user_returns_messages_for_each_fit(monkeypatch):
         shoulder_wrist_axis_distance_weight=4321.0,
     )
     assert result is framework
-    assert calls == ["position", "fit", "lock"]
+    assert calls == ["position", "fit", "lock", "grasp_right"]
     assert fitting_distance_weights == [4321.0]
     assert user.grasp_calls == ["right"]
     assert user.grasp_states == [equipment.state]
@@ -1602,19 +1606,23 @@ def test_upper_limb_trajectory_filter_suppresses_high_frequency_motion():
         "arm_r",
         "elbow_flex_r",
         "wrist_flex_r",
-        "index_mcp_flexion_r",
         "sc_protraction_r",
     ]
-    user = _simulation_model([*upper_limb_names, "pelvis_tilt"])
+    finger_name = "index_mcp_flexion_r"
+    user = _simulation_model([*upper_limb_names, finger_name, "pelvis_tilt"])
     normalized_times = np.linspace(0.0, 1.0, 121)
     times = 4.0 * normalized_times**1.05
     low_frequency_motion = 0.017 + 0.005 * np.sin(2.0 * np.pi * 0.25 * times)
     high_frequency_motion = 0.004 * np.sin(2.0 * np.pi * 8.0 * times)
     raw_motion = low_frequency_motion + high_frequency_motion
+    finger_motion = 0.03 + 0.01 * np.sin(2.0 * np.pi * 8.0 * times)
     states = []
-    for value in raw_motion:
+    for value, finger_value in zip(raw_motion, finger_motion, strict=True):
         for name in upper_limb_names:
             user.getCoordinateSet().get(name).setValue(user.state, value, False)
+        user.getCoordinateSet().get(finger_name).setValue(
+            user.state, finger_value, False
+        )
         user.getCoordinateSet().get("pelvis_tilt").setValue(
             user.state, 0.01, False
         )
@@ -1643,6 +1651,10 @@ def test_upper_limb_trajectory_filter_suppresses_high_frequency_motion():
         == pytest.approx(0.01)
         for user_state, _ in states
     )
+    assert [
+        user.getCoordinateSet().get(finger_name).getValue(user_state)
+        for user_state, _ in states
+    ] == pytest.approx(finger_motion)
 
 
 def test_filtered_palm_contact_is_refitted_for_every_recorded_state(monkeypatch):
@@ -1744,6 +1756,9 @@ def test_filtered_contact_falls_back_to_original_pose(monkeypatch):
         ),
         equipment=SimpleNamespace(state=None),
     )
+    framework._chestpress_safe_palm_contact_coordinates = {
+        "right": {"arm_r": -10.0}
+    }
     attempts = 0
 
     def lock_with_filtered_failure(_framework, *, mirror_left_from_right, fit_log):
@@ -1752,6 +1767,7 @@ def test_filtered_contact_falls_back_to_original_pose(monkeypatch):
         if attempts == 1:
             framework.user.state["arm"] = -10.0
             return False
+        assert not framework._chestpress_safe_palm_contact_coordinates
         assert framework.user.state["arm"] == pytest.approx(0.25)
         fit_log[-1]["messages"].append(
             {"kind": "contact_fit", "message": "restored contact"}
@@ -1786,8 +1802,10 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
     user = _simulation_model(["arm_r", "arm_l", "elbow_flex_r"])
     equipment = _simulation_model(["right_lever-angle", "left_lever-angle"])
     grasp_angles = []
+    events = []
 
     def grasp_handle(*args, handle_state, **kwargs):
+        events.append("grasp")
         grasp_angles.append(
             equipment.getCoordinateSet()
             .get("right_lever-angle")
@@ -1807,6 +1825,7 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
     lock_modes = []
 
     def lock_hands(_framework, *, mirror_left_from_right=False, fit_log=None):
+        events.append("lock")
         lock_modes.append(mirror_left_from_right)
         assert mirror_left_from_right
         user.getCoordinateSet().get("arm_l").setValue(
@@ -1820,6 +1839,7 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
     fitted_sides = []
 
     def fit_handle(**kwargs):
+        events.append("fit")
         fitting_weights.append(kwargs["palm_contact_weight"])
         fitting_distance_weights.append(kwargs["shoulder_wrist_axis_distance_weight"])
         fitted_sides.append(kwargs["side"])
@@ -1918,6 +1938,7 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
     ] == pytest.approx(expected_degrees)
     assert lock_modes == [True] * (len(expected_degrees) * 2 - 1)
     assert result is framework
+    assert events[:12] == ["fit", "lock", "grasp"] * 4
     expected_times = [
         0.0,
         1.5 * beta_time_for_position(0.5),
