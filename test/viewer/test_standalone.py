@@ -21,6 +21,21 @@ from opensim_frameworks.viewer.standalone_player import Player, _prepare_assets
 from opensim_frameworks.utils.opensim import resolve_geometry_file
 
 
+def test_standalone_window_keeps_default_size_and_allows_resizing():
+    calls = []
+    root = SimpleNamespace(
+        resizable=lambda width, height: calls.append(("resizable", width, height)),
+        geometry=lambda value: calls.append(("geometry", value)),
+    )
+
+    standalone_player_module._configure_window(root, 640, 480)
+
+    assert calls == [
+        ("resizable", True, True),
+        ("geometry", "640x480"),
+    ]
+
+
 def make_model():
     model = opensim.Model()
     model.setName("portable")

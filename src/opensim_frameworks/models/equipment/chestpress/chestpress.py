@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import abc
 import math
+from datetime import datetime
 from typing import Any
 
 import numpy as np
 import opensim as osim
 from scipy.interpolate import CubicSpline
-from tqdm import tqdm
 
 from opensim_frameworks import Equipment, SHOULDER_GIRDLE_COORDINATES
 from opensim_frameworks.framework.framework import Framework
@@ -27,7 +27,6 @@ from .handlefit import (
     fit_handle,
     handle_fit_failure_message,
     lock_hands_to_handles,
-    mirror_arm_with_log,
     mirror_finger_coordinates,
 )
 from .userpositioning import position_user
@@ -167,15 +166,10 @@ class ChestPress(Equipment, abc.ABC):
                 / eccentric_duration_s
                 * float(gaussian_velocity_profile(time_fraction))
             )
-        if (
-            eccentric_indices.size > 1
-            and angles[eccentric_indices[0]] == peak_angle
-        ):
+        if eccentric_indices.size > 1 and angles[eccentric_indices[0]] == peak_angle:
             repeated_peak = eccentric_indices[0]
             first_return = eccentric_indices[1]
-            times[repeated_peak] = 0.5 * (
-                concentric_duration_s + times[first_return]
-            )
+            times[repeated_peak] = 0.5 * (concentric_duration_s + times[first_return])
         return times, angular_speeds
 
     @staticmethod
@@ -364,7 +358,7 @@ class ChestPress(Equipment, abc.ABC):
             sample_log = [{"messages": []}]
             contact_maintained = lock_hands_to_handles(
                 framework,
-                mirror_left_from_right=True,
+                mirror_left_from_right=False,
                 fit_log=sample_log,
             )
             sample = {
@@ -391,7 +385,7 @@ class ChestPress(Equipment, abc.ABC):
                 fallback_log = [{"messages": []}]
                 contact_maintained = lock_hands_to_handles(
                     framework,
-                    mirror_left_from_right=True,
+                    mirror_left_from_right=False,
                     fit_log=fallback_log,
                 )
                 sample["messages"].append(
@@ -457,7 +451,7 @@ class ChestPress(Equipment, abc.ABC):
         *,
         wrist_flex_weight: float = 10.0,
         wrist_dev_weight: float = 0.2,
-        knuckle_weight: float = 10.0,
+        knuckle_weight: float = 20.0,
         knuckle_end_weight: float = 10.0,
         protraction_weight: float = 10.0,
         scapular_elevation_weight: float = 10.0,
@@ -472,10 +466,9 @@ class ChestPress(Equipment, abc.ABC):
         The user is first positioned by :func:`position_user`: the shoulder
         girdle and trunk are aligned, the pelvis is seated, the hips are
         abducted, the feet are returned to ground contact, and both shoulders
-        and forearms are rotated by 90 degrees. The right arm is fitted against
-        its handle with :func:`fit_handle`, then mirrored to the left and
-        independently fitted against the left handle. Both palms are anchored
-        to their respective handles; the right hand is grasped and its finger
+        and forearms are rotated by 90 degrees. Each arm is independently fitted
+        against its handle with :func:`fit_handle`. Both palms are anchored to
+        their respective handles; the right hand is grasped and its finger
         coordinates are mirrored to the left.
 
         Parameters
@@ -486,7 +479,7 @@ class ChestPress(Equipment, abc.ABC):
             Weight favoring at least 30 degrees of wrist extension.
         wrist_dev_weight : float, default=0.2
             Weight for neutral radial/ulnar deviation.
-        knuckle_weight : float, default=10.0
+        knuckle_weight : float, default=20.0
             Weight for directed alignment of the index-to-little MCP vector
             with the handle axis.
         knuckle_end_weight : float, default=10.0
@@ -589,7 +582,6 @@ class ChestPress(Equipment, abc.ABC):
             setattr(error, "handle_fit_log", fit_log)
             raise error
 
-        mirror_arm_with_log(user, fit_log)
         left_elbow_flexion, fitted_left_palm_position, left_messages = fit_handle(
             user=user,
             equipment=equipment,
@@ -626,7 +618,7 @@ class ChestPress(Equipment, abc.ABC):
         *,
         wrist_flex_weight: float = 10.0,
         wrist_dev_weight: float = 0.2,
-        knuckle_weight: float = 10.0,
+        knuckle_weight: float = 20.0,
         knuckle_end_weight: float = 10.0,
         protraction_weight: float = 10.0,
         scapular_elevation_weight: float = 10.0,
@@ -638,16 +630,16 @@ class ChestPress(Equipment, abc.ABC):
     ) -> tuple[Framework, list[dict[str, Any]]]:
         """Fit and record one outward-and-return press movement.
 
-        Starting from the fitted zero-angle pose, the right lever advances by
+        Starting from the fitted zero-angle pose, both levers advance by
         ``step_deg`` while both palm anchors remain within 1 mm of their
         positions on the moving handles. The first step that exceeds this
         tolerance ends the concentric phase; that detached state is not
         recorded, and the eccentric phase returns from the last attached
-        position. At each outward step the right arm is refitted, the left arm
-        is mirrored and adjusted to its palm anchor, and the right hand is
-        grasped with its finger coordinates mirrored to the left. The
-        eccentric phase replays the accepted concentric states in reverse,
-        including the peak again as its first sample.
+        position. At each outward step, both arms are independently refitted
+        and their palm anchors are adjusted. The right hand is grasped with
+        its finger coordinates mirrored to the left. The eccentric phase
+        replays the accepted concentric states in reverse, including the peak
+        again as its first sample.
 
         Parameters
         ----------
@@ -663,7 +655,7 @@ class ChestPress(Equipment, abc.ABC):
             Weight favoring at least 30 degrees of wrist extension.
         wrist_dev_weight : float, default=0.2
             Weight for neutral radial/ulnar deviation.
-        knuckle_weight : float, default=10.0
+        knuckle_weight : float, default=20.0
             Weight for directed index-to-little MCP alignment with the handle.
         knuckle_end_weight : float, default=10.0
             Weight for keeping both MCP projections within their endpoint limits.
@@ -691,7 +683,7 @@ class ChestPress(Equipment, abc.ABC):
             Framework containing synchronized trajectories and the handle-fit
             log, including the initial fit and each outward and return step.
             Each entry contains ``phase``, ``lever_angle_deg`` and ``messages``;
-            movement-step messages include the right-arm fit and its mirror.
+            movement-step messages include the independent fit for each arm.
 
         Raises
         ------
@@ -713,8 +705,8 @@ class ChestPress(Equipment, abc.ABC):
         coordinates are resampled at 30 Hz and filtered with a fourth-order,
         1 Hz zero-phase Butterworth low-pass filter. Palm anchors are then
         refitted at every recorded state so filtering cannot separate the
-        hands from the moving handles, then recloses the right hand and mirrors
-        its finger coordinates to the left. The trajectories retain their
+        hands from the moving handles,         then recloses the right hand and mirrors its finger coordinates
+        to the left. The trajectories retain their
         original sample times. Accelerations are not separately recorded.
         Sampling for playback is handled separately by the framework viewer. Simulation
         failures raise an exception with the accumulated ``handle_fit_log``.
@@ -758,12 +750,12 @@ class ChestPress(Equipment, abc.ABC):
             "arm_weight": arm_weight,
         }
 
-        def fit_at_current_angle():
+        def fit_at_current_angle(side: str):
             result = fit_handle(
                 user=framework.user,
                 equipment=framework.equipment,
-                handle_name="right_handle",
-                side="right",
+                handle_name=f"{side}_handle",
+                side=side,
                 fit_shoulder_girdle=True,
                 **fit_options,
             )
@@ -773,8 +765,8 @@ class ChestPress(Equipment, abc.ABC):
             retry = fit_handle(
                 user=framework.user,
                 equipment=framework.equipment,
-                handle_name="right_handle",
-                side="right",
+                handle_name=f"{side}_handle",
+                side=side,
                 fit_shoulder_girdle=False,
                 **fit_options,
             )
@@ -836,7 +828,13 @@ class ChestPress(Equipment, abc.ABC):
             # Arm fitting can leave the equipment transform cache one sample behind.
             framework.equipment.state = osim.State(framework.equipment.state)
             framework.equipment.realizePosition(framework.equipment.state)
-            elbow_flexion, _, messages = fit_at_current_angle()
+            messages = []
+            fit_failures = []
+            for side in ("right", "left"):
+                elbow_flexion, _, side_messages = fit_at_current_angle(side)
+                messages.extend(side_messages)
+                if elbow_flexion is None:
+                    fit_failures.append(side)
             fit_log.append(
                 {
                     "phase": phase,
@@ -844,10 +842,13 @@ class ChestPress(Equipment, abc.ABC):
                     "messages": messages,
                 }
             )
-            if elbow_flexion is None:
+            if fit_failures:
                 error = RuntimeError(
                     handle_fit_failure_message(
-                        f"{phase} stroke", math.degrees(angle), messages
+                        f"{phase} stroke",
+                        math.degrees(angle),
+                        messages,
+                        side=fit_failures[0],
                     )
                 )
                 setattr(error, "handle_fit_log", fit_log)
@@ -856,7 +857,7 @@ class ChestPress(Equipment, abc.ABC):
             framework.equipment.realizePosition(framework.equipment.state)
             contact_maintained = lock_hands_to_handles(
                 framework,
-                mirror_left_from_right=True,
+                mirror_left_from_right=False,
                 fit_log=fit_log,
             )
             if not isinstance(contact_maintained, bool):
@@ -878,14 +879,21 @@ class ChestPress(Equipment, abc.ABC):
             return True
 
         angles = np.linspace(lower, upper, int((upper - lower) // step_rad) + 1)
-        angles = angles[1:]
-        pbar = tqdm(angles, desc="Fitting concentric phase")
-        for angle in pbar:
+        tic = datetime.now()
+        for angle in angles:
+            toc = datetime.now()
+            print(
+                f"Fitting angle: {math.degrees(angle):0.1f}° (elapsed: {toc - tic})",
+                end="\r",
+            )
             out = fit_grasp_and_save(angle, "concentric")
             if not out:
                 angles = angles[angles < angle]
-                pbar.close()
                 break
+        toc = datetime.now()
+        print(
+            f"Concentric phase fitted with range {math.degrees(angles[0]):0.1f}°-{math.degrees(angles[-1]):0.1f}° in {toc - tic}"
+        )
 
         # add the eccentric phase angles
         for state in states[::-1]:

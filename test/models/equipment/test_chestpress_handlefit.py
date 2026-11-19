@@ -1060,12 +1060,12 @@ def test_fit_and_simulation_share_default_weights():
     }
     assert fit_weights == simulation_weights
     assert fit_weights["palm_contact_weight"] == 20.0
-    assert fit_weights["knuckle_weight"] == 10.0
+    assert fit_weights["knuckle_weight"] == 20.0
     assert fit_weights["shoulder_wrist_axis_distance_weight"] == 10.0
     assert fit_weights["protraction_weight"] == 10.0
     assert fit_weights["scapular_elevation_weight"] == 10.0
     assert handle_fit.parameters["palm_contact_weight"].default == 20.0
-    assert handle_fit.parameters["knuckle_weight"].default == 10.0
+    assert handle_fit.parameters["knuckle_weight"].default == 20.0
     assert handle_fit.parameters["shoulder_wrist_axis_distance_weight"].default == 10.0
     assert handle_fit.parameters["protraction_weight"].default == 10.0
     assert handle_fit.parameters["scapular_elevation_weight"].default == 10.0
@@ -1144,11 +1144,6 @@ def test_fit_user_returns_messages_for_each_fit(monkeypatch):
         return 20.0, np.zeros(3), [{"message": "fit message"}]
 
     monkeypatch.setattr(chestpress, "lock_hands_to_handles", lock_hands)
-    monkeypatch.setattr(
-        chestpress,
-        "mirror_arm_with_log",
-        lambda _user, _fit_log: calls.append("mirror"),
-    )
     monkeypatch.setattr(chestpress, "fit_handle", fit_handle)
     result, report = ChestPress.fit_user(
         equipment,
@@ -1158,7 +1153,7 @@ def test_fit_user_returns_messages_for_each_fit(monkeypatch):
     )
     assert result is framework
     assert calls == [
-        "position", "fit_right", "mirror", "fit_left", "lock", "grasp_right"
+        "position", "fit_right", "fit_left", "lock", "grasp_right"
     ]
     assert fitting_distance_weights == [4321.0, 4321.0]
     assert user.grasp_calls == ["right"]
@@ -1707,7 +1702,7 @@ def test_filtered_palm_contact_is_refitted_for_every_recorded_state(monkeypatch)
     calls = []
 
     def lock_hands(_framework, *, mirror_left_from_right, fit_log):
-        assert mirror_left_from_right
+        assert not mirror_left_from_right
         angle = framework.equipment.state["angle"]
         framework.user.state["arm"] = angle
         calls.append(angle)
@@ -1866,9 +1861,11 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
     def lock_hands(_framework, *, mirror_left_from_right=False, fit_log=None):
         events.append("lock")
         lock_modes.append(mirror_left_from_right)
-        assert mirror_left_from_right
+        assert not mirror_left_from_right
         user.getCoordinateSet().get("arm_l").setValue(
-            user.state, user.getCoordinateSet().get("arm_r").getValue(user.state), False
+            user.state,
+            2.0 * user.getCoordinateSet().get("arm_r").getValue(user.state) + 0.1,
+            False,
         )
         return True
 
@@ -1896,15 +1893,17 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
                     "nfev=1000, cost=42, optimality=3"
                 )
             }]
-        user.getCoordinateSet().get("arm_r").setValue(
-            user.state, angle * 0.5, False
+        suffix = "r" if kwargs["side"] == "right" else "l"
+        user.getCoordinateSet().get(f"arm_{suffix}").setValue(
+            user.state, angle * (0.5 if suffix == "r" else 0.25), False
         )
         elbow_flexion = (
             0.5 if angle == pytest.approx(np.deg2rad(2.0)) else 90.0
         )
-        user.getCoordinateSet().get("elbow_flex_r").setValue(
-            user.state, np.deg2rad(elbow_flexion), False
-        )
+        if suffix == "r":
+            user.getCoordinateSet().get("elbow_flex_r").setValue(
+                user.state, np.deg2rad(elbow_flexion), False
+            )
         return elbow_flexion, None, []
 
     monkeypatch.setattr(chestpress, "fit_handle", fit_handle)
@@ -1943,8 +1942,8 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
         assert fitting_distance_weights and all(
             weight == 5432.0 for weight in fitting_distance_weights
         )
-        assert fitted_sides and set(fitted_sides) == {"right"}
-        assert lock_modes and all(lock_modes)
+        assert fitted_sides and set(fitted_sides) == {"right", "left"}
+        assert lock_modes and not any(lock_modes)
         assert np.rad2deg(grasp_angles) == pytest.approx([1.0])
         return
 
@@ -1959,8 +1958,8 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
     assert fitting_distance_weights and all(
         weight == 5432.0 for weight in fitting_distance_weights
     )
-    assert fitted_sides and set(fitted_sides) == {"right"}
-    assert lock_modes and all(lock_modes)
+    assert fitted_sides and set(fitted_sides) == {"right", "left"}
+    assert lock_modes and not any(lock_modes)
     assert np.rad2deg(grasp_angles) == pytest.approx(
         [1.0, 2.0, 0.0, 1.0, 2.0, 2.0, 1.0, 0.0]
     )
@@ -1976,10 +1975,10 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
         sample["lever_angle_deg"]
         for sample in fit_log[-1]["samples"]
     ] == pytest.approx(expected_degrees)
-    assert lock_modes == [True] * (len(expected_degrees) + 2)
+    assert lock_modes == [False] * (len(expected_degrees) + 2)
     assert result is framework
-    assert events[:6] == ["fit", "lock", "grasp_right"] * 2
-    assert events[6:] == [
+    assert events[:8] == ["fit", "fit", "lock", "grasp_right"] * 2
+    assert events[8:] == [
         event
         for _ in expected_degrees
         for event in ("lock", "grasp_right")
@@ -2014,11 +2013,10 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
         for side in ("left", "right"):
             coordinate = equipment.getCoordinateSet().get(f"{side}_lever-angle")
             assert coordinate.getValue(equipment_state) == pytest.approx(angle)
-        for side in ("l", "r"):
-            coordinate = user.getCoordinateSet().get(f"arm_{side}")
-            assert coordinate.getValue(user_state) == pytest.approx(
-                filtered_arm_values[index]
-            )
+        right_arm = user.getCoordinateSet().get("arm_r").getValue(user_state)
+        left_arm = user.getCoordinateSet().get("arm_l").getValue(user_state)
+        assert right_arm == pytest.approx(filtered_arm_values[index])
+        assert left_arm == pytest.approx(2.0 * right_arm + 0.1)
         if index == 1:
             phase_time = beta_time_for_position(0.5)
             expected_speed = (
@@ -2045,7 +2043,7 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
             ("equipment", equipment, "right_lever-angle", angle),
             ("equipment", equipment, "left_lever-angle", angle),
             ("user", user, "arm_r", filtered_arm_values[index]),
-            ("user", user, "arm_l", filtered_arm_values[index]),
+            ("user", user, "arm_l", left_arm),
         ):
             coordinate = model.getCoordinateSet().get(name)
             path = result.path_map[(member, coordinate.getAbsolutePathString())]
@@ -2123,9 +2121,7 @@ def test_simulation_starts_eccentric_phase_when_palm_contact_breaks(monkeypatch)
     )
 
     def lock_hands(_framework, *, mirror_left_from_right=False, fit_log=None):
-        assert mirror_left_from_right
-        right_arm = user.getCoordinateSet().get("arm_r").getValue(user.state)
-        user.getCoordinateSet().get("arm_l").setValue(user.state, right_arm, False)
+        assert not mirror_left_from_right
         angle = equipment.getCoordinateSet().get("right_lever-angle").getValue(
             equipment.state
         )
@@ -2276,9 +2272,10 @@ def test_simulation_rejects_fewer_than_two_states(monkeypatch):
         {
             "phase": "concentric",
             "lever_angle_deg": 1.0,
-            "messages": [{
-                "message": "retried with the previous safe shoulder-girdle pose"
-            }],
+            "messages": [
+                {"message": "retried with the previous safe shoulder-girdle pose"},
+                {"message": "retried with the previous safe shoulder-girdle pose"},
+            ],
         }
     ]
     assert framework.states_trajectory.getSize() == 0

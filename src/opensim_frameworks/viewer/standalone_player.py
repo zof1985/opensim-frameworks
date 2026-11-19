@@ -101,6 +101,11 @@ def _update_startup_splash(message: str) -> None:
         pyi_splash.update_text(message)
 
 
+def _configure_window(root: tk.Tk, width: int, height: int) -> None:
+    root.resizable(True, True)
+    root.geometry(f"{width}x{height}")
+
+
 class _Tooltips:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
@@ -189,7 +194,7 @@ class Player:
         self.root.update_idletasks()
         controls_height = self.controls.winfo_reqheight()
         width, height = self.manifest["size"]
-        self.root.geometry(f"{width}x{height + controls_height}")
+        _configure_window(self.root, width, height + controls_height)
         self.root.update()
         if hasattr(self, "_hwnd"):
             _win32_embed.resize_embedded_window(

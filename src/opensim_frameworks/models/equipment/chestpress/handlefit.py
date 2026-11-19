@@ -763,9 +763,13 @@ def _capture_fit_messages(
 
 
 def handle_fit_failure_message(
-    phase: str, angle_deg: float, messages: list[dict[str, str | int | None]]
+    phase: str,
+    angle_deg: float,
+    messages: list[dict[str, str | int | None]],
+    *,
+    side: Literal["left", "right"] = "right",
 ) -> str:
-    prefix = "right handle fit did not converge: "
+    prefix = f"{side} handle fit did not converge: "
     diagnostic = next(
         (
             message["message"][len(prefix) :]
@@ -920,7 +924,7 @@ def fit_handle(
     side: Literal["left", "right"],
     *,
     palm_contact_weight: float = 20.0,
-    knuckle_weight: float = 10.0,
+    knuckle_weight: float = 20.0,
     knuckle_end_weight: float = 10.0,
     plane_distance_weight: float = 1.0,
     shoulder_wrist_axis_distance_weight: float = 10.0,
@@ -985,7 +989,7 @@ def fit_handle(
     palm_contact_weight : float, default=20.0
         Weight for matching the palm-marker and middle MCP-to-axis distances to
         the cylinder radius.
-    knuckle_weight : float, default=10.0
+    knuckle_weight : float, default=20.0
         Weight for aligning the directed vector from little to index MCP with
         the directed handle axis.
     knuckle_end_weight : float, default=10.0
