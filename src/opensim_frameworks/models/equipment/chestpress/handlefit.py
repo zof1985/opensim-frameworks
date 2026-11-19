@@ -32,6 +32,7 @@ __all__ = [
     "handle_fit_failure_message",
     "mirror_arm",
     "mirror_arm_with_log",
+    "mirror_finger_coordinates",
     "palm_axis_distance_penalty",
     "wrist_flexion_penalty",
     "wrist_deviation_penalty",
@@ -59,11 +60,7 @@ _ARM_COORDINATE_PREFIXES = (
 )
 _FINGER_COORDINATE_PREFIXES = ("index_", "middle_", "ring_", "little_", "thumb_")
 _FIT_COORDINATE_PREFIXES = ("arm_", "elbow_flex_", "pro_sup_", "wrist_")
-_MIRRORED_CONTACT_COORDINATE_PREFIXES = (
-    "elbow_flex_",
-    "pro_sup_",
-    "wrist_",
-)
+_MIRRORED_CONTACT_COORDINATE_PREFIXES = _FIT_COORDINATE_PREFIXES
 _PALM_POSITION_TOLERANCE_M = 0.001
 _POSITION_TOLERANCE_M = 0.001
 _ANGLE_TOLERANCE_RAD = math.radians(1.0)
@@ -851,7 +848,23 @@ def mirror_arm(user, to_mirror: Literal["left", "right"]) -> None:
     user.scapula_contact_report(target_suffix[1:])
 
 
-def _mirror_finger_coordinates(user: Any, to_mirror: Literal["left", "right"]) -> None:
+def mirror_finger_coordinates(user: Any, to_mirror: Literal["left", "right"]) -> None:
+    """Copy one hand's finger coordinates to the opposite hand.
+
+    Parameters
+    ----------
+    user : opensim_frameworks.User
+        User whose finger coordinates are updated.
+    to_mirror : {"left", "right"}
+        Side whose coordinates are copied to the opposite side.
+
+    Raises
+    ------
+    ValueError
+        If ``to_mirror`` is not ``"left"`` or ``"right"``.
+    RuntimeError
+        If a matching finger coordinate is missing on the opposite side.
+    """
     if to_mirror not in ("left", "right"):
         raise ValueError("to_mirror must be 'left' or 'right'")
 
@@ -914,8 +927,8 @@ def fit_handle(
     pro_sup_weight: float = 1.0,
     wrist_flex_weight: float = 10.0,
     wrist_dev_weight: float = 0.2,
-    protraction_weight: float = 1.0,
-    scapular_elevation_weight: float = 1.0,
+    protraction_weight: float = 10.0,
+    scapular_elevation_weight: float = 10.0,
     arm_weight: float = 1.0,
     fit_shoulder_girdle: bool = True,
 ) -> tuple[float | None, np.ndarray | None]:
@@ -990,10 +1003,10 @@ def fit_handle(
         Weight favoring at least 30 degrees of wrist extension.
     wrist_dev_weight : float, default=0.2
         Weight for neutral wrist radial/ulnar deviation.
-    protraction_weight : float, default=1.0
+    protraction_weight : float, default=10.0
         Weight penalizing protraction relative to the coordinate's range
         minimum, favoring a retracted shoulder.
-    scapular_elevation_weight : float, default=1.0
+    scapular_elevation_weight : float, default=10.0
         Weight penalizing positive scapular elevation.
     arm_weight : float, default=1.0
         Weight penalizing negative shoulder axial rotation, corresponding to

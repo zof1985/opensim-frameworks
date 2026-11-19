@@ -9,12 +9,12 @@ from typing import Any
 import numpy as np
 import opensim as osim
 from scipy.interpolate import CubicSpline
-from scipy.signal import butter, sosfiltfilt
 from tqdm import tqdm
 
 from opensim_frameworks import Equipment, SHOULDER_GIRDLE_COORDINATES
 from opensim_frameworks.framework.framework import Framework
 from opensim_frameworks.models.user.user import User
+from opensim_frameworks.utils.filters import filter_array
 from opensim_frameworks.utils.geometry import body_transform_array
 from opensim_frameworks.utils.kinematics import marker_position_array
 from opensim_frameworks.utils.motion_profiles import (
@@ -24,10 +24,10 @@ from opensim_frameworks.utils.motion_profiles import (
     gaussian_velocity_profile,
 )
 from .handlefit import (
-    _mirror_finger_coordinates,
     handle_fit_failure_message,
     fit_handle,
     lock_hands_to_handles,
+    mirror_finger_coordinates,
 )
 from .userpositioning import position_user
 
@@ -36,299 +36,7 @@ __all__ = ["ChestPress"]
 _TRAJECTORY_FILTER_ORDER = 4
 _TRAJECTORY_FILTER_CUTOFF_HZ = 1.0
 _TRAJECTORY_FILTER_SAMPLE_RATE_HZ = 30.0
-_UPPER_LIMB_COORDINATE_PREFIXES = (
-    "arm_",
-    "elbow_",
-    "pro_sup_",
-    "wrist_",
-)
-
-
-def _phase_times_and_speeds(
-    state_angles: list[float],
-    state_phases: list[str],
-    lower_angle: float,
-    concentric_duration_s: float,
-    eccentric_duration_s: float,
-) -> tuple[np.ndarray, np.ndarray]:
-    angles = np.asarray(state_angles, dtype=float)
-    phases = np.asarray(state_phases)
-    concentric_indices = np.flatnonzero(phases == "concentric")
-    eccentric_indices = np.flatnonzero(phases == "eccentric")
-    peak_angle = float(angles[concentric_indices[-1]])
-    travel = peak_angle - lower_angle
-    if travel <= 0.0:
-        raise ValueError("the fitted press stroke must span a positive angle")
-
-    times = np.empty(angles.size, dtype=float)
-    angular_speeds = np.zeros(angles.size, dtype=float)
-    for index in concentric_indices:
-        progress = float(np.clip((angles[index] - lower_angle) / travel, 0.0, 1.0))
-        time_fraction = float(beta_time_for_position(progress))
-        times[index] = concentric_duration_s * time_fraction
-        angular_speeds[index] = (
-            travel / concentric_duration_s * float(beta_velocity_profile(time_fraction))
-        )
-
-    for index in eccentric_indices:
-        progress = float(np.clip((peak_angle - angles[index]) / travel, 0.0, 1.0))
-        time_fraction = float(gaussian_time_for_position(progress))
-        times[index] = concentric_duration_s + eccentric_duration_s * time_fraction
-        angular_speeds[index] = (
-            -travel
-            / eccentric_duration_s
-            * float(gaussian_velocity_profile(time_fraction))
-        )
-    return times, angular_speeds
-
-
-def _set_trajectory_coordinate_speeds(
-    framework: Framework,
-    states: list[tuple[osim.State, osim.State]],
-    state_angles: list[float],
-    state_phases: list[str],
-    angular_speeds: np.ndarray,
-) -> None:
-    angles = np.asarray(state_angles, dtype=float)
-    phases = np.asarray(state_phases)
-    concentric_indices = np.flatnonzero(phases == "concentric")
-    eccentric_indices = np.flatnonzero(phases == "eccentric")
-    eccentric_segment_indices = np.concatenate(
-        (concentric_indices[-1:], eccentric_indices)
-    )
-
-    for member_index, model in enumerate((framework.user, framework.equipment)):
-        coordinates = model.getCoordinateSet()
-        for coordinate_index in range(coordinates.getSize()):
-            coordinate = coordinates.get(coordinate_index)
-            positions = np.asarray(
-                [coordinate.getValue(state[member_index]) for state in states],
-                dtype=float,
-            )
-            speeds = np.zeros(len(states), dtype=float)
-            if concentric_indices.size >= 2:
-                spline = CubicSpline(
-                    angles[concentric_indices], positions[concentric_indices]
-                )
-                speeds[concentric_indices] = (
-                    spline(angles[concentric_indices], 1)
-                    * angular_speeds[concentric_indices]
-                )
-            if eccentric_segment_indices.size >= 2 and eccentric_indices.size:
-                ordered_indices = eccentric_segment_indices[
-                    np.argsort(angles[eccentric_segment_indices])
-                ]
-                spline = CubicSpline(
-                    angles[ordered_indices], positions[ordered_indices]
-                )
-                speeds[eccentric_indices] = (
-                    spline(angles[eccentric_indices], 1)
-                    * angular_speeds[eccentric_indices]
-                )
-            for state_index, state in enumerate(states):
-                coordinate.setSpeedValue(
-                    state[member_index], float(speeds[state_index])
-                )
-
-
-def _filter_upper_limb_trajectories(
-    user: User,
-    states: list[tuple[osim.State, osim.State]],
-    state_times: np.ndarray,
-) -> None:
-    times = np.asarray(state_times, dtype=float)
-    if (
-        times.ndim != 1
-        or times.size != len(states)
-        or times.size < 2
-        or not np.all(np.isfinite(times))
-        or np.any(np.diff(times) <= 0.0)
-    ):
-        raise ValueError("state_times must be finite, increasing, and match states")
-
-    upper_limb_coordinates = _upper_limb_coordinates(user)
-    if not upper_limb_coordinates:
-        return
-
-    sample_count = max(
-        int(math.ceil((times[-1] - times[0]) * _TRAJECTORY_FILTER_SAMPLE_RATE_HZ)) + 1,
-        2,
-    )
-    uniform_times = np.linspace(times[0], times[-1], sample_count)
-    sample_rate_hz = (sample_count - 1) / (times[-1] - times[0])
-    sos = butter(
-        _TRAJECTORY_FILTER_ORDER,
-        _TRAJECTORY_FILTER_CUTOFF_HZ,
-        btype="lowpass",
-        fs=sample_rate_hz,
-        output="sos",
-    )
-    padlen = min(3 * (2 * len(sos) + 1), sample_count - 1)
-
-    positions = np.asarray(
-        [
-            [coordinate.getValue(user_state) for coordinate in upper_limb_coordinates]
-            for user_state, _ in states
-        ],
-        dtype=float,
-    )
-    uniform_positions = np.column_stack(
-        [
-            np.interp(uniform_times, times, positions[:, index])
-            for index in range(positions.shape[1])
-        ]
-    )
-    filtered_uniform_positions = sosfiltfilt(
-        sos, uniform_positions, axis=0, padlen=padlen
-    )
-    filtered_positions = np.column_stack(
-        [
-            np.interp(times, uniform_times, filtered_uniform_positions[:, index])
-            for index in range(filtered_uniform_positions.shape[1])
-        ]
-    )
-
-    for index, coordinate in enumerate(upper_limb_coordinates):
-        filtered_positions[:, index] = np.clip(
-            filtered_positions[:, index],
-            coordinate.getRangeMin(),
-            coordinate.getRangeMax(),
-        )
-    for state_index, (user_state, _) in enumerate(states):
-        for coordinate_index, coordinate in enumerate(upper_limb_coordinates):
-            coordinate.setValue(
-                user_state,
-                float(filtered_positions[state_index, coordinate_index]),
-                False,
-            )
-        user.realizePosition(user_state)
-
-
-def _upper_limb_coordinates(user: User) -> list[Any]:
-    coordinates = user.getCoordinateSet()
-    result = []
-    for index in range(coordinates.getSize()):
-        coordinate = coordinates.get(index)
-        name = coordinate.getName()
-        if (
-            name.startswith(_UPPER_LIMB_COORDINATE_PREFIXES)
-            or name.rsplit("_", 1)[0] in SHOULDER_GIRDLE_COORDINATES
-        ):
-            result.append(coordinate)
-    return result
-
-
-def _restore_filtered_palm_contact(
-    framework: Framework,
-    states: list[tuple[osim.State, osim.State]],
-    state_angles: list[float],
-    state_phases: list[str],
-    unfiltered_coordinates: list[dict[str, float]],
-    fit_log: list[dict[str, Any]],
-) -> None:
-    """Refit both palms to their handle anchors after trajectory filtering.
-
-    Parameters
-    ----------
-    framework : opensim_frameworks.Framework
-        Framework containing the user, equipment, and fitted palm anchors.
-    states : list of (opensim.State, opensim.State)
-        User and equipment states to correct, in trajectory order.
-    state_angles : list of float
-        Matching lever angles in radians.
-    state_phases : list of str
-        Matching movement phases.
-    unfiltered_coordinates : list of dict
-        Original upper-limb coordinates captured when each state was saved.
-    fit_log : list of dict
-        Simulation log to extend with post-filter contact diagnostics.
-
-    Raises
-    ------
-    RuntimeError
-        If contact cannot be restored for any recorded state.
-    """
-    contact_report: dict[str, Any] = {
-        "phase": "post_filter_contact",
-        "samples": [],
-    }
-    fit_log.append(contact_report)
-    for (user_state, equipment_state), angle, phase, original_coordinates in zip(
-        states, state_angles, state_phases, unfiltered_coordinates, strict=True
-    ):
-        framework.user.state = user_state
-        framework.equipment.state = equipment_state
-        sample_log = [{"messages": []}]
-        contact_maintained = lock_hands_to_handles(
-            framework,
-            mirror_left_from_right=True,
-            fit_log=sample_log,
-        )
-        sample = {
-            "phase": phase,
-            "lever_angle_deg": math.degrees(angle),
-            "messages": sample_log[0]["messages"],
-        }
-        if not isinstance(contact_maintained, bool):
-            error = RuntimeError(
-                "post-filter palm-anchor fitting did not report contact status"
-            )
-            setattr(error, "handle_fit_log", fit_log)
-            raise error
-        if not contact_maintained:
-            coordinates = framework.user.getCoordinateSet()
-            for name, value in original_coordinates.items():
-                coordinates.get(name).setValue(user_state, value, False)
-            framework.user.realizePosition(user_state)
-            safe_coordinates = getattr(
-                framework, "_chestpress_safe_palm_contact_coordinates", None
-            )
-            if safe_coordinates is not None:
-                safe_coordinates.clear()
-            fallback_log = [{"messages": []}]
-            contact_maintained = lock_hands_to_handles(
-                framework,
-                mirror_left_from_right=True,
-                fit_log=fallback_log,
-            )
-            sample["messages"].append(
-                {
-                    "kind": "post_filter_contact_fallback",
-                    "level": "WARNING",
-                    "message": (
-                        "restored original upper-limb coordinates after filtered "
-                        "palm-anchor fitting failed"
-                    ),
-                }
-            )
-            sample["messages"].extend(fallback_log[0]["messages"])
-            sample["fallback"] = "unfiltered_upper_limb_pose"
-            if not isinstance(contact_maintained, bool):
-                error = RuntimeError(
-                    "palm-anchor fitting did not report contact status after "
-                    "restoring original coordinates"
-                )
-                setattr(error, "handle_fit_log", fit_log)
-                raise error
-        contact_report["samples"].append(sample)
-        if not contact_maintained:
-            error = RuntimeError(
-                "Palm contact could not be restored after filtering at "
-                f"{math.degrees(angle):.2f} degrees during the {phase} phase"
-            )
-            setattr(error, "handle_fit_log", fit_log)
-            raise error
-
-
-def _palm_position_in_handle(user: User, equipment: Equipment, side: str) -> np.ndarray:
-    suffix = "r" if side == "right" else "l"
-    handle = equipment.getBodySet().get(f"{side}_handle")
-    handle_marker = equipment.getMarkerSet().get(f"{side}_handle")
-    palm_marker = user.getMarkerSet().get("RPALM" if suffix == "r" else "LPALM")
-    transform = body_transform_array(handle, equipment.state)
-    palm = marker_position_array(palm_marker, user.state)
-    center = marker_position_array(handle_marker, equipment.state)
-    return transform[:3, :3].T @ (palm - center)
+_UPPER_LIMB_COORDINATE_PREFIXES = ("arm_", "elbow_", "pro_sup_", "wrist_")
 
 
 class ChestPress(Equipment, abc.ABC):
@@ -420,6 +128,298 @@ class ChestPress(Equipment, abc.ABC):
             is not None
         ]
 
+    @staticmethod
+    def _phase_times_and_speeds(
+        state_angles: list[float],
+        state_phases: list[str],
+        lower_angle: float,
+        concentric_duration_s: float,
+        eccentric_duration_s: float,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        angles = np.asarray(state_angles, dtype=float)
+        phases = np.asarray(state_phases)
+        concentric_indices = np.flatnonzero(phases == "concentric")
+        eccentric_indices = np.flatnonzero(phases == "eccentric")
+        peak_angle = float(angles[concentric_indices[-1]])
+        travel = peak_angle - lower_angle
+        if travel <= 0.0:
+            raise ValueError("the fitted press stroke must span a positive angle")
+
+        times = np.empty(angles.size, dtype=float)
+        angular_speeds = np.zeros(angles.size, dtype=float)
+        for index in concentric_indices:
+            progress = float(np.clip((angles[index] - lower_angle) / travel, 0.0, 1.0))
+            time_fraction = float(beta_time_for_position(progress))
+            times[index] = concentric_duration_s * time_fraction
+            angular_speeds[index] = (
+                travel
+                / concentric_duration_s
+                * float(beta_velocity_profile(time_fraction))
+            )
+
+        for index in eccentric_indices:
+            progress = float(np.clip((peak_angle - angles[index]) / travel, 0.0, 1.0))
+            time_fraction = float(gaussian_time_for_position(progress))
+            times[index] = concentric_duration_s + eccentric_duration_s * time_fraction
+            angular_speeds[index] = (
+                -travel
+                / eccentric_duration_s
+                * float(gaussian_velocity_profile(time_fraction))
+            )
+        return times, angular_speeds
+
+    @staticmethod
+    def _set_trajectory_coordinate_speeds(
+        framework: Framework,
+        states: list[tuple[osim.State, osim.State]],
+        state_angles: list[float],
+        state_phases: list[str],
+        angular_speeds: np.ndarray,
+    ) -> None:
+        angles = np.asarray(state_angles, dtype=float)
+        phases = np.asarray(state_phases)
+        concentric_indices = np.flatnonzero(phases == "concentric")
+        eccentric_indices = np.flatnonzero(phases == "eccentric")
+        eccentric_segment_indices = np.concatenate(
+            (concentric_indices[-1:], eccentric_indices)
+        )
+
+        for member_index, model in enumerate((framework.user, framework.equipment)):
+            coordinates = model.getCoordinateSet()
+            for coordinate_index in range(coordinates.getSize()):
+                coordinate = coordinates.get(coordinate_index)
+                positions = np.asarray(
+                    [coordinate.getValue(state[member_index]) for state in states],
+                    dtype=float,
+                )
+                speeds = np.zeros(len(states), dtype=float)
+                if concentric_indices.size >= 2:
+                    spline = CubicSpline(
+                        angles[concentric_indices], positions[concentric_indices]
+                    )
+                    speeds[concentric_indices] = (
+                        spline(angles[concentric_indices], 1)
+                        * angular_speeds[concentric_indices]
+                    )
+                if eccentric_segment_indices.size >= 2 and eccentric_indices.size:
+                    ordered_indices = eccentric_segment_indices[
+                        np.argsort(angles[eccentric_segment_indices])
+                    ]
+                    spline = CubicSpline(
+                        angles[ordered_indices], positions[ordered_indices]
+                    )
+                    speeds[eccentric_indices] = (
+                        spline(angles[eccentric_indices], 1)
+                        * angular_speeds[eccentric_indices]
+                    )
+                for state_index, state in enumerate(states):
+                    coordinate.setSpeedValue(
+                        state[member_index], float(speeds[state_index])
+                    )
+
+    @classmethod
+    def _filter_upper_limb_trajectories(
+        cls,
+        user: User,
+        states: list[tuple[osim.State, osim.State]],
+        state_times: np.ndarray,
+    ) -> None:
+        times = np.asarray(state_times, dtype=float)
+        if (
+            times.ndim != 1
+            or times.size != len(states)
+            or times.size < 2
+            or not np.all(np.isfinite(times))
+            or np.any(np.diff(times) <= 0.0)
+        ):
+            raise ValueError("state_times must be finite, increasing, and match states")
+
+        upper_limb_coordinates = cls._upper_limb_coordinates(user)
+        if not upper_limb_coordinates:
+            return
+
+        sample_count = max(
+            int(math.ceil((times[-1] - times[0]) * _TRAJECTORY_FILTER_SAMPLE_RATE_HZ))
+            + 1,
+            2,
+        )
+        uniform_times = np.linspace(times[0], times[-1], sample_count)
+        sample_rate_hz = (sample_count - 1) / (times[-1] - times[0])
+
+        positions = np.asarray(
+            [
+                [
+                    coordinate.getValue(user_state)
+                    for coordinate in upper_limb_coordinates
+                ]
+                for user_state, _ in states
+            ],
+            dtype=float,
+        )
+        uniform_positions = np.column_stack(
+            [
+                np.interp(uniform_times, times, positions[:, index])
+                for index in range(positions.shape[1])
+            ]
+        )
+        filtered_uniform_positions = filter_array(
+            uniform_positions,
+            cutoff=_TRAJECTORY_FILTER_CUTOFF_HZ,
+            order=_TRAJECTORY_FILTER_ORDER,
+            filter_type="lowpass",
+            sampling_frequency=sample_rate_hz,
+        )
+        filtered_positions = np.column_stack(
+            [
+                np.interp(times, uniform_times, filtered_uniform_positions[:, index])
+                for index in range(filtered_uniform_positions.shape[1])
+            ]
+        )
+
+        for index, coordinate in enumerate(upper_limb_coordinates):
+            filtered_positions[:, index] = np.clip(
+                filtered_positions[:, index],
+                coordinate.getRangeMin(),
+                coordinate.getRangeMax(),
+            )
+        for state_index, (user_state, _) in enumerate(states):
+            for coordinate_index, coordinate in enumerate(upper_limb_coordinates):
+                coordinate.setValue(
+                    user_state,
+                    float(filtered_positions[state_index, coordinate_index]),
+                    False,
+                )
+            user.realizePosition(user_state)
+
+    @staticmethod
+    def _upper_limb_coordinates(user: User) -> list[Any]:
+        coordinates = user.getCoordinateSet()
+        result = []
+        for index in range(coordinates.getSize()):
+            coordinate = coordinates.get(index)
+            name = coordinate.getName()
+            if (
+                name.startswith(_UPPER_LIMB_COORDINATE_PREFIXES)
+                or name.rsplit("_", 1)[0] in SHOULDER_GIRDLE_COORDINATES
+            ):
+                result.append(coordinate)
+        return result
+
+    @staticmethod
+    def _restore_filtered_palm_contact(
+        framework: Framework,
+        states: list[tuple[osim.State, osim.State]],
+        state_angles: list[float],
+        state_phases: list[str],
+        unfiltered_coordinates: list[dict[str, float]],
+        fit_log: list[dict[str, Any]],
+    ) -> None:
+        """Refit both palms to their handle anchors after trajectory filtering.
+
+        Parameters
+        ----------
+        framework : opensim_frameworks.Framework
+            Framework containing the user, equipment, and fitted palm anchors.
+        states : list of (opensim.State, opensim.State)
+            User and equipment states to correct, in trajectory order.
+        state_angles : list of float
+            Matching lever angles in radians.
+        state_phases : list of str
+            Matching movement phases.
+        unfiltered_coordinates : list of dict
+            Original upper-limb coordinates captured when each state was saved.
+        fit_log : list of dict
+            Simulation log to extend with post-filter contact diagnostics.
+
+        Raises
+        ------
+        RuntimeError
+            If contact cannot be restored for any recorded state.
+        """
+        contact_report: dict[str, Any] = {
+            "phase": "post_filter_contact",
+            "samples": [],
+        }
+        fit_log.append(contact_report)
+        for (user_state, equipment_state), angle, phase, original_coordinates in zip(
+            states, state_angles, state_phases, unfiltered_coordinates, strict=True
+        ):
+            framework.user.state = user_state
+            framework.equipment.state = equipment_state
+            sample_log = [{"messages": []}]
+            contact_maintained = lock_hands_to_handles(
+                framework,
+                mirror_left_from_right=True,
+                fit_log=sample_log,
+            )
+            sample = {
+                "phase": phase,
+                "lever_angle_deg": math.degrees(angle),
+                "messages": sample_log[0]["messages"],
+            }
+            if not isinstance(contact_maintained, bool):
+                error = RuntimeError(
+                    "post-filter palm-anchor fitting did not report contact status"
+                )
+                setattr(error, "handle_fit_log", fit_log)
+                raise error
+            if not contact_maintained:
+                coordinates = framework.user.getCoordinateSet()
+                for name, value in original_coordinates.items():
+                    coordinates.get(name).setValue(user_state, value, False)
+                framework.user.realizePosition(user_state)
+                safe_coordinates = getattr(
+                    framework, "_chestpress_safe_palm_contact_coordinates", None
+                )
+                if safe_coordinates is not None:
+                    safe_coordinates.clear()
+                fallback_log = [{"messages": []}]
+                contact_maintained = lock_hands_to_handles(
+                    framework,
+                    mirror_left_from_right=True,
+                    fit_log=fallback_log,
+                )
+                sample["messages"].append(
+                    {
+                        "kind": "post_filter_contact_fallback",
+                        "level": "WARNING",
+                        "message": (
+                            "restored original upper-limb coordinates after filtered "
+                            "palm-anchor fitting failed"
+                        ),
+                    }
+                )
+                sample["messages"].extend(fallback_log[0]["messages"])
+                sample["fallback"] = "unfiltered_upper_limb_pose"
+                if not isinstance(contact_maintained, bool):
+                    error = RuntimeError(
+                        "palm-anchor fitting did not report contact status after "
+                        "restoring original coordinates"
+                    )
+                    setattr(error, "handle_fit_log", fit_log)
+                    raise error
+            contact_report["samples"].append(sample)
+            if not contact_maintained:
+                error = RuntimeError(
+                    "Palm contact could not be restored after filtering at "
+                    f"{math.degrees(angle):.2f} degrees during the {phase} phase"
+                )
+                setattr(error, "handle_fit_log", fit_log)
+                raise error
+
+    @staticmethod
+    def _palm_position_in_handle(
+        user: User, equipment: Equipment, side: str
+    ) -> np.ndarray:
+        suffix = "r" if side == "right" else "l"
+        handle = equipment.getBodySet().get(f"{side}_handle")
+        handle_marker = equipment.getMarkerSet().get(f"{side}_handle")
+        palm_marker = user.getMarkerSet().get("RPALM" if suffix == "r" else "LPALM")
+        transform = body_transform_array(handle, equipment.state)
+        palm = marker_position_array(palm_marker, user.state)
+        center = marker_position_array(handle_marker, equipment.state)
+        return transform[:3, :3].T @ (palm - center)
+
     def fit_user(
         self,
         user: User,
@@ -428,8 +428,8 @@ class ChestPress(Equipment, abc.ABC):
         wrist_dev_weight: float = 0.2,
         knuckle_weight: float = 10.0,
         knuckle_end_weight: float = 10.0,
-        protraction_weight: float = 1.0,
-        scapular_elevation_weight: float = 1.0,
+        protraction_weight: float = 10.0,
+        scapular_elevation_weight: float = 10.0,
         arm_weight: float = 1.0,
         pro_sup_weight: float = 1.0,
         plane_distance_weight: float = 1.0,
@@ -460,10 +460,10 @@ class ChestPress(Equipment, abc.ABC):
         knuckle_end_weight : float, default=10.0
             Weight for keeping both MCP projections within their endpoint
             limits.
-        protraction_weight : float, default=1.0
+        protraction_weight : float, default=10.0
             Weight penalizing scapular protraction relative to its coordinate
             range minimum.
-        scapular_elevation_weight : float, default=1.0
+        scapular_elevation_weight : float, default=10.0
             Weight penalizing positive scapular elevation.
         arm_weight : float, default=1.0
             Weight penalizing external upper-arm rotation.
@@ -565,12 +565,12 @@ class ChestPress(Equipment, abc.ABC):
             equipment.handle_meshes("right"),
             handle_state=equipment.state,
         )
-        _mirror_finger_coordinates(user, "right")
+        mirror_finger_coordinates(user, "right")
         user.realizePosition(user.state)
         report["grip"] = {
             "elbow_flexion_deg": elbow_flexion,
             "palm_handle_position_m": fitted_palm_position,
-            "left_palm_handle_position_m": _palm_position_in_handle(
+            "left_palm_handle_position_m": ChestPress._palm_position_in_handle(
                 user, equipment, "left"
             ),
             "fingers": {
@@ -592,8 +592,8 @@ class ChestPress(Equipment, abc.ABC):
         wrist_dev_weight: float = 0.2,
         knuckle_weight: float = 10.0,
         knuckle_end_weight: float = 10.0,
-        protraction_weight: float = 1.0,
-        scapular_elevation_weight: float = 1.0,
+        protraction_weight: float = 10.0,
+        scapular_elevation_weight: float = 10.0,
         arm_weight: float = 1.0,
         pro_sup_weight: float = 1.0,
         plane_distance_weight: float = 1.0,
@@ -607,10 +607,10 @@ class ChestPress(Equipment, abc.ABC):
         positions on the moving handles. The first step that exceeds this
         tolerance ends the concentric phase; that detached state is not
         recorded, and the eccentric phase returns from the last attached
-        position. At each angle the right arm is refitted, the fingers grasp
-        the handle, and the palm anchors are fit before the arm is mirrored
-        left. The same fitting and grasping sequence is repeated on return to
-        zero.
+        position. At each outward step the right arm is refitted, the left arm
+        is mirrored and adjusted to its palm anchor, and the fingers grasp the
+        handle. The eccentric phase replays the accepted concentric states in
+        reverse.
 
         Parameters
         ----------
@@ -630,10 +630,10 @@ class ChestPress(Equipment, abc.ABC):
             Weight for directed index-to-little MCP alignment with the handle.
         knuckle_end_weight : float, default=10.0
             Weight for keeping both MCP projections within their endpoint limits.
-        protraction_weight : float, default=1.0
+        protraction_weight : float, default=10.0
             Weight penalizing scapular protraction relative to its coordinate
             range minimum.
-        scapular_elevation_weight : float, default=1.0
+        scapular_elevation_weight : float, default=10.0
             Weight penalizing positive scapular elevation.
         arm_weight : float, default=1.0
             Weight penalizing external upper-arm rotation.
@@ -764,7 +764,7 @@ class ChestPress(Equipment, abc.ABC):
         ):
             raise RuntimeError("The left lever range does not include zero degrees")
         step_rad = math.radians(step_deg)
-        upper_limb_coordinates = _upper_limb_coordinates(framework.user)
+        upper_limb_coordinates = ChestPress._upper_limb_coordinates(framework.user)
 
         def capture_unfiltered_coordinates(user_state: osim.State) -> dict[str, float]:
             return {
@@ -772,9 +772,7 @@ class ChestPress(Equipment, abc.ABC):
                 for coordinate in upper_limb_coordinates
             }
 
-        unfiltered_coordinates = [
-            capture_unfiltered_coordinates(framework.user.state)
-        ]
+        unfiltered_coordinates = [capture_unfiltered_coordinates(framework.user.state)]
         states: list[tuple[osim.State, osim.State]] = [
             (
                 osim.State(framework.user.state),
@@ -796,6 +794,7 @@ class ChestPress(Equipment, abc.ABC):
             right_lever_coord.setValue(framework.equipment.state, angle, False)
             left_lever_coord.setValue(framework.equipment.state, angle, False)
             framework.equipment.realizePosition(framework.equipment.state)
+
             # Arm fitting can leave the equipment transform cache one sample behind.
             framework.equipment.state = osim.State(framework.equipment.state)
             framework.equipment.realizePosition(framework.equipment.state)
@@ -818,7 +817,9 @@ class ChestPress(Equipment, abc.ABC):
             framework.equipment.state = osim.State(framework.equipment.state)
             framework.equipment.realizePosition(framework.equipment.state)
             contact_maintained = lock_hands_to_handles(
-                framework, mirror_left_from_right=True, fit_log=fit_log
+                framework,
+                mirror_left_from_right=True,
+                fit_log=fit_log,
             )
             if not isinstance(contact_maintained, bool):
                 raise RuntimeError("palm-anchor fitting did not report contact status")
@@ -830,7 +831,7 @@ class ChestPress(Equipment, abc.ABC):
                 framework.equipment.handle_meshes("right"),
                 handle_state=framework.equipment.state,
             )
-            _mirror_finger_coordinates(framework.user, "right")
+            mirror_finger_coordinates(framework.user, "right")
             framework.user.realizePosition(framework.user.state)
             unfiltered_coordinates.append(
                 capture_unfiltered_coordinates(framework.user.state)
@@ -846,29 +847,36 @@ class ChestPress(Equipment, abc.ABC):
             return True
 
         angles = np.linspace(lower, upper, int((upper - lower) // step_rad) + 1)
-        pbar = tqdm(angles[1:], desc="Fitting concentric phase")
+        angles = angles[1:]
+        pbar = tqdm(angles, desc="Fitting concentric phase")
         for angle in pbar:
             out = fit_grasp_and_save(angle, "concentric")
             if not out:
                 angles = angles[angles < angle]
                 pbar.close()
                 break
-        for angle in tqdm(angles[-2::-1], desc="Fitting eccentric phase"):
-            out = fit_grasp_and_save(angle, "eccentric")
 
-        state_times, angular_speeds = _phase_times_and_speeds(
+        # add the eccentric phase angles
+        for state in states[-2::-1]:
+            states.append(tuple(osim.State(member_state) for member_state in state))
+            angle = float(right_lever_coord.getValue(state[1]))
+            unfiltered_coordinates.append(capture_unfiltered_coordinates(state[0]))
+            state_angles.append(angle)
+            state_phases.append("eccentric")
+
+        state_times, angular_speeds = ChestPress._phase_times_and_speeds(
             state_angles,
             state_phases,
             lower,
             concentric_duration_s,
             eccentric_duration_s,
         )
-        _filter_upper_limb_trajectories(
+        ChestPress._filter_upper_limb_trajectories(
             framework.user,
             states,
             state_times,
         )
-        _restore_filtered_palm_contact(
+        ChestPress._restore_filtered_palm_contact(
             framework,
             states,
             state_angles,
@@ -876,7 +884,7 @@ class ChestPress(Equipment, abc.ABC):
             unfiltered_coordinates,
             fit_log,
         )
-        _set_trajectory_coordinate_speeds(
+        ChestPress._set_trajectory_coordinate_speeds(
             framework,
             states,
             state_angles,

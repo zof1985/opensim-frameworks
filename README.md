@@ -67,18 +67,20 @@ in the handles' local frames.
 
 `simulate_kinematics` returns `(framework, handle_fit_log)`. Starting from the
 zero-angle fit, it advances the right lever by `step_deg` until the right elbow
-reaches 1 degree or less, then returns the lever to zero. At each step it fits
-the right arm, grasps the handle, attempts to retain the palm anchor, mirrors
-the arm to the left, and records the synchronized state. The default step is
+reaches 1 degree or less, then returns the lever to zero by replaying the
+accepted concentric states in reverse. At each outward step it fits the right
+arm, mirrors and adjusts the left arm to its palm anchor, closes the fingers,
+and records the synchronized state. The default step is
 1 degree; `concentric_duration_s` and `eccentric_duration_s` default to 1.5 s
 and 2.5 s. State times follow a Beta(3, 5) concentric speed profile and a
 zero-endpoint Gaussian eccentric speed profile. Generalized coordinate speeds
 are recorded; accelerations are not.
 
 Palm anchoring is best-effort: when the optimizer cannot keep `RPALM` or
-`LPALM` at its original handle-relative point, the simulation continues and
-the fit log records the residual in millimetres, optimizer convergence status,
-and optimizer message. Contact residuals alone do not fail a simulation.
+`LPALM` at its original handle-relative point, the fit log records the residual
+in millimetres, optimizer convergence status, and optimizer message. A step
+that loses contact is not recorded; the eccentric phase returns from the last
+accepted state.
 A 1 mm residual tolerance controls the optimizer's early exit and whether the
 diagnostic is informational or a warning; it is not a hard acceptance limit.
 `handle_fit_log` also contains the Python warnings and enabled logging records
@@ -102,13 +104,15 @@ The fit does not favor the palm being above or below the handle axis.
 The objectives are continuous weighted penalties rather than hard acceptance
 thresholds. Geometric loss components are public functions exported by the
 `handlefit` module; scapular contact and collision residuals are computed by
-`User.scapular_fit_residuals`. The defaults keep the weights low (most are 1.0; the
-palm-contact weight is 20.0, knuckle alignment 10.0, endpoint limits 10.0,
-and wrist deviation 0.2). The weighted residuals and squared contributions
-are included in the fitting log, including when the optimizer reaches its
-iteration limit. The left arm and fingers are mirrored from the right; the
-left palm anchor is then fitted with the mirrored contact coordinates, while
-left finger articulation is not separately re-grasped.
+`User.scapular_fit_residuals`. The defaults keep most weights at 1.0; scapular
+retraction and depression are weighted at 10.0, palm contact at 20.0, knuckle
+alignment and endpoint limits at 10.0, and wrist deviation at 0.2. The weighted
+residuals and squared contributions are included in the fitting log, including
+when the optimizer reaches its iteration limit. The right arm and fingers are
+mirrored to initialize the left side; the left palm anchor is then
+independently fitted using the left arm, elbow, forearm, wrist, and
+shoulder-girdle coordinates. Left finger articulation remains mirrored and is
+not separately re-grasped.
 
 ## Requirements and installation
 

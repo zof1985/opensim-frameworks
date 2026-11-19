@@ -11,6 +11,7 @@ __all__ = [
     "lock_hands_to_handles",
     "mirror_arm",
     "mirror_arm_with_log",
+    "mirror_finger_coordinates",
     "position_user",
     "palm_axis_distance_penalty",
     "wrist_deviation_penalty",
