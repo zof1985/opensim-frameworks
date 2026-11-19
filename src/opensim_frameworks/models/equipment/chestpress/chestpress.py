@@ -24,19 +24,20 @@ from opensim_frameworks.utils.motion_profiles import (
     gaussian_velocity_profile,
 )
 from .handlefit import (
-    handle_fit_failure_message,
     fit_handle,
+    handle_fit_failure_message,
     lock_hands_to_handles,
+    mirror_arm_with_log,
     mirror_finger_coordinates,
 )
 from .userpositioning import position_user
 
 __all__ = ["ChestPress"]
 
-_TRAJECTORY_FILTER_ORDER = 4
-_TRAJECTORY_FILTER_CUTOFF_HZ = 1.0
-_TRAJECTORY_FILTER_SAMPLE_RATE_HZ = 30.0
-_UPPER_LIMB_COORDINATE_PREFIXES = ("arm_", "elbow_", "pro_sup_", "wrist_")
+FILTER_ORDER = 4
+FILTER_CUTOFF_HZ = 1.0
+FILTER_SAMPLE_RATE_HZ = 30.0
+UPPER_LIMB_COORDINATE_PREFIXES = ("arm_", "elbow_", "pro_sup_", "wrist_")
 
 
 class ChestPress(Equipment, abc.ABC):
@@ -166,6 +167,15 @@ class ChestPress(Equipment, abc.ABC):
                 / eccentric_duration_s
                 * float(gaussian_velocity_profile(time_fraction))
             )
+        if (
+            eccentric_indices.size > 1
+            and angles[eccentric_indices[0]] == peak_angle
+        ):
+            repeated_peak = eccentric_indices[0]
+            first_return = eccentric_indices[1]
+            times[repeated_peak] = 0.5 * (
+                concentric_duration_s + times[first_return]
+            )
         return times, angular_speeds
 
     @staticmethod
@@ -180,9 +190,15 @@ class ChestPress(Equipment, abc.ABC):
         phases = np.asarray(state_phases)
         concentric_indices = np.flatnonzero(phases == "concentric")
         eccentric_indices = np.flatnonzero(phases == "eccentric")
-        eccentric_segment_indices = np.concatenate(
-            (concentric_indices[-1:], eccentric_indices)
-        )
+        if (
+            eccentric_indices.size
+            and angles[eccentric_indices[0]] == angles[concentric_indices[-1]]
+        ):
+            eccentric_segment_indices = eccentric_indices
+        else:
+            eccentric_segment_indices = np.concatenate(
+                (concentric_indices[-1:], eccentric_indices)
+            )
 
         for member_index, model in enumerate((framework.user, framework.equipment)):
             coordinates = model.getCoordinateSet()
@@ -239,8 +255,7 @@ class ChestPress(Equipment, abc.ABC):
             return
 
         sample_count = max(
-            int(math.ceil((times[-1] - times[0]) * _TRAJECTORY_FILTER_SAMPLE_RATE_HZ))
-            + 1,
+            int(math.ceil((times[-1] - times[0]) * FILTER_SAMPLE_RATE_HZ)) + 1,
             2,
         )
         uniform_times = np.linspace(times[0], times[-1], sample_count)
@@ -264,8 +279,8 @@ class ChestPress(Equipment, abc.ABC):
         )
         filtered_uniform_positions = filter_array(
             uniform_positions,
-            cutoff=_TRAJECTORY_FILTER_CUTOFF_HZ,
-            order=_TRAJECTORY_FILTER_ORDER,
+            cutoff=FILTER_CUTOFF_HZ,
+            order=FILTER_ORDER,
             filter_type="lowpass",
             sampling_frequency=sample_rate_hz,
         )
@@ -299,7 +314,7 @@ class ChestPress(Equipment, abc.ABC):
             coordinate = coordinates.get(index)
             name = coordinate.getName()
             if (
-                name.startswith(_UPPER_LIMB_COORDINATE_PREFIXES)
+                name.startswith(UPPER_LIMB_COORDINATE_PREFIXES)
                 or name.rsplit("_", 1)[0] in SHOULDER_GIRDLE_COORDINATES
             ):
                 result.append(coordinate)
@@ -406,6 +421,7 @@ class ChestPress(Equipment, abc.ABC):
                 )
                 setattr(error, "handle_fit_log", fit_log)
                 raise error
+            sample["fingers"] = ChestPress._grasp_handles(framework)
 
     @staticmethod
     def _palm_position_in_handle(
@@ -419,6 +435,21 @@ class ChestPress(Equipment, abc.ABC):
         palm = marker_position_array(palm_marker, user.state)
         center = marker_position_array(handle_marker, equipment.state)
         return transform[:3, :3].T @ (palm - center)
+
+    @staticmethod
+    def _grasp_handles(framework: Framework) -> dict[str, dict[str, Any]]:
+        right_grasp = framework.user.grasp_handle(
+            "right",
+            framework.equipment.getBodySet().get("right_handle"),
+            framework.equipment.handle_meshes("right"),
+            handle_state=framework.equipment.state,
+        )
+        mirror_finger_coordinates(framework.user, "right")
+        framework.user.realizePosition(framework.user.state)
+        return {
+            "right": right_grasp,
+            "left": {"mirrored_from_right": True},
+        }
 
     def fit_user(
         self,
@@ -442,9 +473,10 @@ class ChestPress(Equipment, abc.ABC):
         girdle and trunk are aligned, the pelvis is seated, the hips are
         abducted, the feet are returned to ground contact, and both shoulders
         and forearms are rotated by 90 degrees. The right arm is fitted against
-        the handle with :func:`fit_handle` and the hand is closed around it. The right arm is
-        mirrored to the left; the right and left palm markers are anchored in
-        their respective moving handle frames on a best-effort basis.
+        its handle with :func:`fit_handle`, then mirrored to the left and
+        independently fitted against the left handle. Both palms are anchored
+        to their respective handles; the right hand is grasped and its finger
+        coordinates are mirrored to the left.
 
         Parameters
         ----------
@@ -483,11 +515,11 @@ class ChestPress(Equipment, abc.ABC):
         tuple of (opensim_frameworks.Framework, dict)
             Framework containing ``user`` and ``equipment``, and a report with
             the keys ``back``, ``seat``, ``hips``, ``feet`` and ``grip``.
-            ``grip["handle_fit_log"]`` contains messages from the initial fit
-            and the mirrored contact fit. Anchor residuals are included in
+            ``grip["handle_fit_log"]`` contains messages from both initial arm
+            fits and the palm-anchor fits. Anchor residuals are included in
             each fit-log entry and do not by themselves stop the simulation.
-            ``grip["fingers"]["right"]`` holds the right grasp report; the
-            left finger posture is mirrored from the right.
+            ``grip["fingers"]`` holds the right-hand grasp report and notes
+            that its finger coordinates were mirrored to the left.
 
         Raises
         ------
@@ -525,22 +557,25 @@ class ChestPress(Equipment, abc.ABC):
             equipment,
             backrest_angle_deg=self._backrest_angle_deg,
         )
+        fit_options = {
+            "palm_contact_weight": palm_contact_weight,
+            "knuckle_weight": knuckle_weight,
+            "knuckle_end_weight": knuckle_end_weight,
+            "plane_distance_weight": plane_distance_weight,
+            "shoulder_wrist_axis_distance_weight": shoulder_wrist_axis_distance_weight,
+            "pro_sup_weight": pro_sup_weight,
+            "wrist_flex_weight": wrist_flex_weight,
+            "wrist_dev_weight": wrist_dev_weight,
+            "protraction_weight": protraction_weight,
+            "scapular_elevation_weight": scapular_elevation_weight,
+            "arm_weight": arm_weight,
+        }
         elbow_flexion, fitted_palm_position, messages = fit_handle(
             user=user,
             equipment=equipment,
             handle_name="right_handle",
             side="right",
-            palm_contact_weight=palm_contact_weight,
-            knuckle_weight=knuckle_weight,
-            knuckle_end_weight=knuckle_end_weight,
-            plane_distance_weight=plane_distance_weight,
-            shoulder_wrist_axis_distance_weight=shoulder_wrist_axis_distance_weight,
-            pro_sup_weight=pro_sup_weight,
-            wrist_flex_weight=wrist_flex_weight,
-            wrist_dev_weight=wrist_dev_weight,
-            protraction_weight=protraction_weight,
-            scapular_elevation_weight=scapular_elevation_weight,
-            arm_weight=arm_weight,
+            **fit_options,
         )
         fit_log = [
             {
@@ -554,29 +589,30 @@ class ChestPress(Equipment, abc.ABC):
             setattr(error, "handle_fit_log", fit_log)
             raise error
 
-        lock_hands_to_handles(
-            framework=framework,
-            mirror_left_from_right=True,
-            fit_log=fit_log,
+        mirror_arm_with_log(user, fit_log)
+        left_elbow_flexion, fitted_left_palm_position, left_messages = fit_handle(
+            user=user,
+            equipment=equipment,
+            handle_name="left_handle",
+            side="left",
+            **fit_options,
         )
-        right_grasp = user.grasp_handle(
-            "right",
-            equipment.getBodySet().get("right_handle"),
-            equipment.handle_meshes("right"),
-            handle_state=equipment.state,
-        )
-        mirror_finger_coordinates(user, "right")
-        user.realizePosition(user.state)
+        fit_log[0]["messages"].extend(left_messages)
+        if left_elbow_flexion is None or fitted_left_palm_position is None:
+            error = RuntimeError("The initial left arm fit did not converge")
+            setattr(error, "handle_fit_log", fit_log)
+            raise error
+
+        lock_hands_to_handles(framework=framework, fit_log=fit_log)
+        finger_grasps = ChestPress._grasp_handles(framework)
         report["grip"] = {
             "elbow_flexion_deg": elbow_flexion,
             "palm_handle_position_m": fitted_palm_position,
+            "left_elbow_flexion_deg": left_elbow_flexion,
             "left_palm_handle_position_m": ChestPress._palm_position_in_handle(
                 user, equipment, "left"
             ),
-            "fingers": {
-                "right": right_grasp,
-                "left": {"mirrored_from_right": True},
-            },
+            "fingers": finger_grasps,
             "handle_fit_log": fit_log,
         }
         return framework, report
@@ -608,9 +644,10 @@ class ChestPress(Equipment, abc.ABC):
         tolerance ends the concentric phase; that detached state is not
         recorded, and the eccentric phase returns from the last attached
         position. At each outward step the right arm is refitted, the left arm
-        is mirrored and adjusted to its palm anchor, and the fingers grasp the
-        handle. The eccentric phase replays the accepted concentric states in
-        reverse.
+        is mirrored and adjusted to its palm anchor, and the right hand is
+        grasped with its finger coordinates mirrored to the left. The
+        eccentric phase replays the accepted concentric states in reverse,
+        including the peak again as its first sample.
 
         Parameters
         ----------
@@ -676,9 +713,10 @@ class ChestPress(Equipment, abc.ABC):
         coordinates are resampled at 30 Hz and filtered with a fourth-order,
         1 Hz zero-phase Butterworth low-pass filter. Palm anchors are then
         refitted at every recorded state so filtering cannot separate the
-        hands from the moving handles. The trajectories retain their original
-        sample times. Accelerations are not separately recorded. Sampling for
-        playback is handled separately by the framework viewer. Simulation
+        hands from the moving handles, then recloses the right hand and mirrors
+        its finger coordinates to the left. The trajectories retain their
+        original sample times. Accelerations are not separately recorded.
+        Sampling for playback is handled separately by the framework viewer. Simulation
         failures raise an exception with the accumulated ``handle_fit_log``.
         Palm-anchor residuals are recorded in millimetres with the optimizer's
         convergence status; residuals do not cause failure during the raw
@@ -825,14 +863,7 @@ class ChestPress(Equipment, abc.ABC):
                 raise RuntimeError("palm-anchor fitting did not report contact status")
             if not contact_maintained:
                 return False
-            framework.user.grasp_handle(
-                "right",
-                framework.equipment.getBodySet().get("right_handle"),
-                framework.equipment.handle_meshes("right"),
-                handle_state=framework.equipment.state,
-            )
-            mirror_finger_coordinates(framework.user, "right")
-            framework.user.realizePosition(framework.user.state)
+            fit_log[-1]["fingers"] = ChestPress._grasp_handles(framework)
             unfiltered_coordinates.append(
                 capture_unfiltered_coordinates(framework.user.state)
             )
@@ -857,7 +888,7 @@ class ChestPress(Equipment, abc.ABC):
                 break
 
         # add the eccentric phase angles
-        for state in states[-2::-1]:
+        for state in states[::-1]:
             states.append(tuple(osim.State(member_state) for member_state in state))
             angle = float(right_lever_coord.getValue(state[1]))
             unfiltered_coordinates.append(capture_unfiltered_coordinates(state[0]))
