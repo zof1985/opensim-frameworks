@@ -923,8 +923,8 @@ def fit_handle(
     handle_name: str,
     side: Literal["left", "right"],
     *,
-    palm_contact_weight: float = 20.0,
-    knuckle_weight: float = 20.0,
+    palm_contact_weight: float = 40.0,
+    knuckle_weight: float = 40.0,
     knuckle_end_weight: float = 10.0,
     plane_distance_weight: float = 1.0,
     shoulder_wrist_axis_distance_weight: float = 10.0,
@@ -986,10 +986,10 @@ def fit_handle(
         Name of the equipment body and its center marker.
     side : {'left', 'right'}
         Side being fitted (for the arm and shoulder prefix matching).
-    palm_contact_weight : float, default=20.0
+    palm_contact_weight : float, default=40.0
         Weight for matching the palm-marker and middle MCP-to-axis distances to
         the cylinder radius.
-    knuckle_weight : float, default=20.0
+    knuckle_weight : float, default=40.0
         Weight for aligning the directed vector from little to index MCP with
         the directed handle axis.
     knuckle_end_weight : float, default=10.0
