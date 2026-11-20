@@ -8,6 +8,7 @@ import zipfile
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -72,18 +73,19 @@ def test_standalone_layout_resizes_viewport_in_both_dimensions(monkeypatch):
         player.viewer_frame.bind("<Configure>", player._resize_window)
         root.update_idletasks()
         controls_height = player.controls.winfo_reqheight()
+        toggle_width = player.log_toggle.winfo_reqwidth()
         standalone_player_module._configure_window(root, 800, 600)
         root.update()
         assert (root.winfo_width(), root.winfo_height()) == (800, 600)
         assert (player.viewer_frame.winfo_width(), player.viewer_frame.winfo_height()) == (
-            800,
+            800 - toggle_width,
             600 - controls_height,
         )
 
         for width, height in ((700, 400), (900, 850)):
             root.geometry(f"{width}x{height}")
             root.update()
-            viewport_size = (width, height - controls_height)
+            viewport_size = (width - toggle_width, height - controls_height)
             assert player.controls.winfo_ismapped()
             assert (
                 player.viewer_frame.winfo_width(),
@@ -92,6 +94,56 @@ def test_standalone_layout_resizes_viewport_in_both_dimensions(monkeypatch):
             assert native_sizes[-1] == viewport_size
             assert vtk_sizes[-1] == viewport_size
     finally:
+        root.destroy()
+
+
+def test_standalone_log_drawer_toggles_and_displays_events():
+    try:
+        root = tk.Tk()
+    except tk.TclError as error:
+        pytest.skip(f"Tk display unavailable: {error}")
+    player = Player.__new__(Player)
+    player.root = root
+    player.manifest = {
+        "size": [800, 600],
+        **{
+            f"show_{key}": True
+            for key in (
+                "ground", "muscles", "markers", "axes", "vision_cone", "reachability"
+            )
+        },
+    }
+    player.loop = False
+    player.has_motion = True
+    try:
+        player._build_ui()
+        root.geometry("800x600")
+        root.update()
+        assert not player.log_panel.winfo_ismapped()
+        assert player.log_toggle.winfo_height() == root.winfo_height()
+        assert player.viewer_frame.winfo_x() == player.log_toggle.winfo_width()
+
+        player._log_logger.warning("test log entry")
+        player._drain_log_queue()
+        assert "test log entry" in player.log_text.get("1.0", "end")
+
+        player.log_toggle.invoke()
+        root.update()
+        assert player.log_visible
+        assert player.log_panel.winfo_ismapped()
+        assert player.viewer_frame.winfo_x() >= (
+            player.log_toggle.winfo_width() + player.log_panel.winfo_width()
+        )
+        player._drain_log_queue()
+        assert "Log panel opened" in player.log_text.get("1.0", "end")
+
+        player.log_toggle.invoke()
+        root.update()
+        assert not player.log_visible
+        assert not player.log_panel.winfo_ismapped()
+    finally:
+        player._log_logger.removeHandler(player._log_handler)
+        player._log_handler.close()
         root.destroy()
 
 
@@ -476,6 +528,7 @@ def test_standalone_player_exports_animation_with_ffmpeg_only(tmp_path, monkeypa
     )
     player.current_time = 0.5
     player.playing = True
+    player._log_logger = Mock()
     player.fps = 24
     player.frames = [{}, {}]
     player.window = SimpleNamespace(GetSize=lambda: (160, 120))

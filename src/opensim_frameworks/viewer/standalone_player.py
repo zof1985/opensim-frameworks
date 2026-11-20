@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import bisect
 import json
+import logging
 import math
+import queue
 import struct
 import sys
 import time
@@ -162,6 +164,15 @@ class _CameraStyle(vtkInteractorStyleTrackballCamera):
             super().OnLeftButtonDown()
 
 
+class _QueueLogHandler(logging.Handler):
+    def __init__(self, messages: queue.SimpleQueue[str]) -> None:
+        super().__init__(level=logging.INFO)
+        self.messages = messages
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.messages.put(self.format(record))
+
+
 class Player:
     def __init__(self) -> None:
         _prepare_assets()
@@ -209,13 +220,60 @@ class Player:
         self.root.mainloop()
 
     def _build_ui(self) -> None:
+        self._log_queue: queue.SimpleQueue[str] = queue.SimpleQueue()
+        self._log_logger = logging.getLogger(f"{__name__}.Player.{id(self)}")
+        self._log_logger.setLevel(logging.INFO)
+        self._log_logger.propagate = False
+        self._log_handler = _QueueLogHandler(self._log_queue)
+        self._log_handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s  %(message)s", "%H:%M:%S")
+        )
+        self._log_logger.addHandler(self._log_handler)
+
+        self.log_visible = False
+        self.log_toggle = tk.Button(
+            self.root,
+            text="L\nO\nG",
+            width=2,
+            command=self._toggle_log,
+            relief="flat",
+            cursor="hand2",
+            takefocus=True,
+        )
+        self.log_toggle.pack(side="left", fill="y")
+
+        self.log_panel = tk.Frame(self.root, width=320, bg="#f2f2f2")
+        self.log_panel.pack_propagate(False)
+        log_header = ttk.Label(self.log_panel, text="Log", anchor="w")
+        log_header.pack(fill="x", padx=8, pady=(8, 4))
+        log_content = tk.Frame(self.log_panel)
+        log_content.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        self.log_text = tk.Text(
+            log_content,
+            wrap="word",
+            state="disabled",
+            background="#ffffff",
+            foreground="#222222",
+            borderwidth=0,
+            padx=6,
+            pady=6,
+        )
+        log_scrollbar = ttk.Scrollbar(
+            log_content, orient="vertical", command=self.log_text.yview
+        )
+        self.log_text.configure(yscrollcommand=log_scrollbar.set)
+        self.log_text.pack(side="left", fill="both", expand=True)
+        log_scrollbar.pack(side="right", fill="y")
+
+        self.main_frame = tk.Frame(self.root)
+        self.main_frame.pack(side="left", fill="both", expand=True)
         width, height = self.manifest["size"]
         self.viewer_frame = tk.Frame(
-            self.root, bg="black", width=width, height=height
+            self.main_frame, bg="black", width=width, height=height
         )
         self.viewer_frame.pack(side="top", fill="both", expand=True)
         self.viewer_frame.pack_propagate(False)
-        controls = ttk.Frame(self.root, padding=(8, 8, 8, 0))
+        controls = ttk.Frame(self.main_frame, padding=(8, 8, 8, 0))
         self.controls = controls
         controls.pack(side="bottom", fill="x", before=self.viewer_frame)
         for column in range(3):
@@ -337,6 +395,45 @@ class Player:
         self.root.bind_all("<Right>", self._on_tk_keypress, add="+")
         self.slider.bind("<Left>", self._on_tk_keypress, add="+")
         self.slider.bind("<Right>", self._on_tk_keypress, add="+")
+        self.root.report_callback_exception = self._report_callback_exception
+        self._log_logger.info("Viewer initialized")
+
+    def _toggle_log(self) -> None:
+        self.log_visible = not self.log_visible
+        if self.log_visible:
+            self.log_panel.pack(side="left", fill="y", before=self.main_frame)
+            self.log_panel.pack_propagate(False)
+            self.log_panel.configure(width=320)
+            self.log_toggle.configure(text="×")
+            self._log_logger.info("Log panel opened")
+        else:
+            self.log_panel.pack_forget()
+            self.log_toggle.configure(text="L\nO\nG")
+            self._log_logger.info("Log panel closed")
+
+    def _drain_log_queue(self) -> None:
+        if not hasattr(self, "_log_queue"):
+            return
+        messages = []
+        while True:
+            try:
+                messages.append(self._log_queue.get_nowait())
+            except queue.Empty:
+                break
+        if not messages:
+            return
+        self.log_text.configure(state="normal")
+        self.log_text.insert("end", "\n".join(messages) + "\n")
+        self.log_text.see("end")
+        self.log_text.configure(state="disabled")
+
+    def _report_callback_exception(
+        self, exception_type: type[BaseException], exception: BaseException, traceback: Any
+    ) -> None:
+        self._log_logger.error(
+            "Unhandled viewer callback exception",
+            exc_info=(exception_type, exception, traceback),
+        )
 
     def _build_scene(self) -> None:
         self.renderer = vtkRenderer()
@@ -587,6 +684,7 @@ class Player:
             return
         self.playing = not self.playing
         self.play_button.config(text="⏸" if self.playing else "▶")
+        self._log_logger.info("Playback %s", "started" if self.playing else "paused")
 
     def _step_frame(self, direction: int) -> None:
         if not self.has_motion:
@@ -642,6 +740,7 @@ class Player:
         self.play_button.config(text="▶")
         self.current_time = self.start_time
         self._apply_frame(0)
+        self._log_logger.info("Playback stopped")
 
     def _forward(self) -> None:
         speeds = (-8.0, -4.0, -2.0, -1.0, 1.0, 2.0, 4.0, 8.0)
@@ -649,6 +748,7 @@ class Player:
         self.speed = speeds[min(index + 1, len(speeds) - 1)]
         self.playing = True
         self.play_button.config(text="⏸")
+        self._log_logger.info("Playback speed set to %gx", self.speed)
 
     def _backward(self) -> None:
         speeds = (-8.0, -4.0, -2.0, -1.0, 1.0, 2.0, 4.0, 8.0)
@@ -656,6 +756,7 @@ class Player:
         self.speed = speeds[max(index - 1, 0)]
         self.playing = True
         self.play_button.config(text="⏸")
+        self._log_logger.info("Playback speed set to %gx", self.speed)
 
     def _tick(self) -> None:
         now = time.monotonic()
@@ -688,6 +789,7 @@ class Player:
             )
         self.interactor.ProcessEvents()
         self._show_hover()
+        self._drain_log_queue()
         elapsed_ms = (time.monotonic() - now) * 1000
         delay_ms = max(1, round(1000 / self.fps - elapsed_ms))
         self.root.after(delay_ms, self._tick)
@@ -718,7 +820,9 @@ class Player:
                 write_svg(self.renderer, self.window.GetSize(), path)
             else:
                 Image.fromarray(self._capture()).save(path, dpi=(300, 300))
+            self._log_logger.info("Image exported to %s", path)
         except Exception as error:
+            self._log_logger.exception("Image export failed")
             messagebox.showerror("Export failed", str(error), parent=self.root)
 
     def _save_animation(self) -> None:
@@ -749,7 +853,9 @@ class Player:
             for index in range(len(self.frames)):
                 self._apply_frame(index)
                 writer.send(np.ascontiguousarray(self._capture()).tobytes())
+            self._log_logger.info("Animation exported to %s", path)
         except Exception as error:
+            self._log_logger.exception("Animation export failed")
             messagebox.showerror("Export failed", str(error), parent=self.root)
         finally:
             try:
@@ -761,6 +867,10 @@ class Player:
                 self.root.config(cursor="")
 
     def close(self) -> None:
+        self._log_logger.info("Viewer closed")
+        self._drain_log_queue()
+        self._log_logger.removeHandler(self._log_handler)
+        self._log_handler.close()
         self.window.Finalize()
         self.root.destroy()
 
