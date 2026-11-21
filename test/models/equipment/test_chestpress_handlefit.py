@@ -217,6 +217,7 @@ def run_fit(
         "protraction_weight": 0.0,
         "scapular_elevation_weight": 0.0,
         "arm_weight": 0.0,
+        "arm_rotation_target_weight": 0.0,
     }
     zero_weights.update(weights)
     result = handlefit.fit_handle(user, equipment, "right_handle", "right", **zero_weights)
@@ -230,6 +231,7 @@ def test_loss_penalties_are_public_and_exported():
         "wrist_deviation_penalty",
         "forearm_supination_penalty",
         "external_shoulder_rotation_penalty",
+        "arm_rotation_target_penalty",
         "scapular_retraction_penalty",
         "scapular_depression_penalty",
         "knuckle_alignment_penalty",
@@ -273,6 +275,12 @@ def test_public_loss_penalties_return_their_expected_residuals():
     assert handlefit.wrist_flexion_penalty(0.0, 4.0) == pytest.approx(60.0)
     assert handlefit.wrist_flexion_penalty(np.deg2rad(-5.0), 4.0) == pytest.approx(50.0)
     assert handlefit.wrist_flexion_penalty(np.deg2rad(-30.0), 1.0) == 0.0
+    assert handlefit.arm_rotation_target_penalty(
+        np.deg2rad(3.0), 0.0, 4.0
+    ) == pytest.approx(1.2)
+    assert handlefit.arm_rotation_target_penalty(
+        np.deg2rad(3.0), np.deg2rad(3.0), 4.0
+    ) == 0.0
     assert handlefit.wrist_flexion_penalty(np.deg2rad(-40.0), 1.0) == 0.0
     assert handlefit.forearm_supination_penalty(np.deg2rad(85.0), 1.0) == pytest.approx(-1.0)
     assert handlefit.external_shoulder_rotation_penalty(np.deg2rad(-5.0), 1.0) == pytest.approx(-1.0)
@@ -599,6 +607,29 @@ def test_upper_arm_rotation_penalizes_external_rotation_only(fit_setup, monkeypa
         costs,
         [(-0.5 / np.deg2rad(5.0)) ** 2, 0.0, 0.0],
         atol=1e-12,
+    )
+
+
+def test_upper_arm_rotation_is_penalized_away_from_fitted_target(
+    fit_setup, monkeypatch
+):
+    user, equipment, _, palm_ground = fit_setup
+    palm_ground[:] = [0.325, 0.4, 0.5]
+    target = np.deg2rad(10.0)
+    (_, _, messages), costs = run_fit(
+        monkeypatch, user, equipment,
+        probes=[
+            {"arm_rot_r": target},
+            {"arm_rot_r": target + np.deg2rad(5.0)},
+        ],
+        solution={"arm_rot_r": target + np.deg2rad(5.0)},
+        arm_rotation_target_rad=target,
+        arm_rotation_target_weight=4.0,
+    )
+    np.testing.assert_allclose(costs, [0.0, 4.0], atol=1e-12)
+    assert any(
+        "arm_rotation_target: residual=2, loss=4" in message["message"]
+        for message in messages
     )
 
 
@@ -1058,17 +1089,23 @@ def test_fit_and_simulation_share_default_weights():
         name: parameter.default for name, parameter in simulation.parameters.items()
         if name.endswith("_weight")
     }
-    assert fit_weights == simulation_weights
+    assert fit_weights == {
+        name: value for name, value in simulation_weights.items()
+        if name != "arm_rotation_target_weight"
+    }
     assert fit_weights["palm_contact_weight"] == 40.0
     assert fit_weights["knuckle_weight"] == 40.0
     assert fit_weights["shoulder_wrist_axis_distance_weight"] == 10.0
     assert fit_weights["protraction_weight"] == 10.0
     assert fit_weights["scapular_elevation_weight"] == 10.0
+    assert simulation_weights["arm_rotation_target_weight"] == 10.0
     assert handle_fit.parameters["palm_contact_weight"].default == 40.0
     assert handle_fit.parameters["knuckle_weight"].default == 40.0
     assert handle_fit.parameters["shoulder_wrist_axis_distance_weight"].default == 10.0
     assert handle_fit.parameters["protraction_weight"].default == 10.0
     assert handle_fit.parameters["scapular_elevation_weight"].default == 10.0
+    assert handle_fit.parameters["arm_rotation_target_weight"].default == 0.0
+    assert handle_fit.parameters["arm_rotation_target_rad"].default is None
 
 
 def test_kinematic_simulation_uses_only_new_public_name():
@@ -1838,7 +1875,7 @@ def test_filtered_contact_falls_back_to_original_pose(monkeypatch):
 
 @pytest.mark.parametrize("fail_at_end", [False, True])
 def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_end):
-    user = _simulation_model(["arm_r", "arm_l", "elbow_flex_r"])
+    user = _simulation_model(["arm_r", "arm_l", "elbow_flex_r", "arm_rot_r"])
     equipment = _simulation_model(["right_lever-angle", "left_lever-angle"])
     grasp_angles = []
     events = []
@@ -1854,13 +1891,17 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
 
     user.grasp_handle = grasp_handle
     framework = Framework(user=user, equipment=equipment)
-    wrapper = SimpleNamespace(
-        fit_user=lambda **kwargs: (
-            framework, {"grip": {
-                "handle_fit_log": [{"phase": "final", "lever_angle_deg": 0.0, "messages": []}],
-            }}
+    target_arm_rotation = 0.01
+
+    def fit_user(**kwargs):
+        user.getCoordinateSet().get("arm_rot_r").setValue(
+            user.state, target_arm_rotation, False
         )
-    )
+        return framework, {"grip": {
+            "handle_fit_log": [{"phase": "final", "lever_angle_deg": 0.0, "messages": []}],
+        }}
+
+    wrapper = SimpleNamespace(fit_user=fit_user)
     lock_modes = []
 
     def lock_hands(_framework, *, mirror_left_from_right=False, fit_log=None):
@@ -1877,12 +1918,18 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
     monkeypatch.setattr(chestpress, "lock_hands_to_handles", lock_hands)
     fitting_weights = []
     fitting_distance_weights = []
+    fitting_rotation_targets = []
+    fitting_rotation_target_weights = []
     fitted_sides = []
 
     def fit_handle(**kwargs):
         events.append("fit")
         fitting_weights.append(kwargs["palm_contact_weight"])
         fitting_distance_weights.append(kwargs["shoulder_wrist_axis_distance_weight"])
+        fitting_rotation_targets.append(kwargs["arm_rotation_target_rad"])
+        fitting_rotation_target_weights.append(
+            kwargs["arm_rotation_target_weight"]
+        )
         fitted_sides.append(kwargs["side"])
         assert "palm_position_handle" not in kwargs
         assert "palm_position_weight" not in kwargs
@@ -1919,6 +1966,7 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
                 concentric_duration_s=1.5, eccentric_duration_s=2.5,
                 palm_contact_weight=4321.0,
                 shoulder_wrist_axis_distance_weight=5432.0,
+                arm_rotation_target_weight=7654.0,
             )
         fit_log = raised.value.handle_fit_log
         assert "evaluation limit exceeded" in str(raised.value)
@@ -1947,6 +1995,13 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
         assert fitting_distance_weights and all(
             weight == 5432.0 for weight in fitting_distance_weights
         )
+        assert fitting_rotation_targets and all(
+            target == pytest.approx(target_arm_rotation)
+            for target in fitting_rotation_targets
+        )
+        assert fitting_rotation_target_weights and all(
+            weight == 7654.0 for weight in fitting_rotation_target_weights
+        )
         assert fitted_sides and set(fitted_sides) == {"right"}
         assert lock_modes and all(lock_modes)
         assert np.rad2deg(grasp_angles) == pytest.approx([0.0, 1.0])
@@ -1957,11 +2012,19 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
         concentric_duration_s=1.5, eccentric_duration_s=2.5,
         palm_contact_weight=4321.0,
         shoulder_wrist_axis_distance_weight=5432.0,
+        arm_rotation_target_weight=7654.0,
     )
     expected_degrees = [0, 1, 2, 2, 1, 0]
     assert fitting_weights and all(weight == 4321.0 for weight in fitting_weights)
     assert fitting_distance_weights and all(
         weight == 5432.0 for weight in fitting_distance_weights
+    )
+    assert fitting_rotation_targets and all(
+        target == pytest.approx(target_arm_rotation)
+        for target in fitting_rotation_targets
+    )
+    assert fitting_rotation_target_weights and all(
+        weight == 7654.0 for weight in fitting_rotation_target_weights
     )
     assert fitted_sides and set(fitted_sides) == {"right"}
     assert lock_modes and all(lock_modes)
@@ -2047,7 +2110,7 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
 
 
 def test_return_phase_clamps_floating_point_lower_endpoint(monkeypatch):
-    user = _simulation_model(["arm_r", "arm_l", "elbow_flex_r"])
+    user = _simulation_model(["arm_r", "arm_l", "elbow_flex_r", "arm_rot_r"])
     equipment = _simulation_model(["right_lever-angle", "left_lever-angle"])
     equipment.getCoordinateSet().get("right_lever-angle").setRangeMax(
         np.deg2rad(20.0)
@@ -2099,7 +2162,7 @@ def test_return_phase_clamps_floating_point_lower_endpoint(monkeypatch):
 
 
 def test_simulation_starts_eccentric_phase_when_palm_contact_breaks(monkeypatch):
-    user = _simulation_model(["arm_r", "arm_l", "elbow_flex_r"])
+    user = _simulation_model(["arm_r", "arm_l", "elbow_flex_r", "arm_rot_r"])
     equipment = _simulation_model(["right_lever-angle", "left_lever-angle"])
     framework = Framework(user=user, equipment=equipment)
     wrapper = SimpleNamespace(
@@ -2167,7 +2230,7 @@ def test_simulation_starts_eccentric_phase_when_palm_contact_breaks(monkeypatch)
 
 
 def test_simulation_reverses_at_first_unreachable_palm_residual(monkeypatch):
-    user = _simulation_model(["arm_r", "arm_l", "elbow_flex_r"])
+    user = _simulation_model(["arm_r", "arm_l", "elbow_flex_r", "arm_rot_r"])
     equipment = _simulation_model(["right_lever-angle", "left_lever-angle"])
     framework = Framework(user=user, equipment=equipment)
     wrapper = SimpleNamespace(
@@ -2249,7 +2312,7 @@ def test_simulation_reverses_at_first_unreachable_palm_residual(monkeypatch):
 
 
 def test_simulation_rejects_fewer_than_two_states(monkeypatch):
-    user = _simulation_model(["arm_r", "arm_l", "elbow_flex_r"])
+    user = _simulation_model(["arm_r", "arm_l", "elbow_flex_r", "arm_rot_r"])
     equipment = _simulation_model(["right_lever-angle", "left_lever-angle"])
     framework = Framework(user=user, equipment=equipment)
     wrapper = SimpleNamespace(

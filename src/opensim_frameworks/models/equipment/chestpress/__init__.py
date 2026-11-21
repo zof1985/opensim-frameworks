@@ -18,6 +18,7 @@ __all__ = [
     "wrist_flexion_penalty",
     "forearm_supination_penalty",
     "external_shoulder_rotation_penalty",
+    "arm_rotation_target_penalty",
     "scapular_retraction_penalty",
     "scapular_depression_penalty",
     "knuckle_alignment_penalty",

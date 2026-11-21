@@ -38,6 +38,7 @@ __all__ = [
     "wrist_deviation_penalty",
     "forearm_supination_penalty",
     "external_shoulder_rotation_penalty",
+    "arm_rotation_target_penalty",
     "scapular_retraction_penalty",
     "scapular_depression_penalty",
     "knuckle_alignment_penalty",
@@ -159,6 +160,22 @@ def external_shoulder_rotation_penalty(
 ) -> float:
     """Return the one-sided weighted residual for external shoulder rotation."""
     return math.sqrt(weight) * min(shoulder_rotation_rad, 0.0) / math.radians(5.0)
+
+
+def arm_rotation_target_penalty(
+    shoulder_rotation_rad: float,
+    target_rotation_rad: float,
+    weight: float,
+) -> float:
+    """Return the weighted residual for deviation from a fitted arm-rotation target.
+
+    The residual is normalized by a five-degree tolerance.
+    """
+    return (
+        math.sqrt(weight)
+        * (shoulder_rotation_rad - target_rotation_rad)
+        / math.radians(5.0)
+    )
 
 
 def scapular_retraction_penalty(
@@ -975,6 +992,8 @@ def fit_handle(
     protraction_weight: float = 10.0,
     scapular_elevation_weight: float = 10.0,
     arm_weight: float = 1.0,
+    arm_rotation_target_rad: float | None = None,
+    arm_rotation_target_weight: float = 0.0,
     fit_shoulder_girdle: bool = True,
 ) -> tuple[float | None, np.ndarray | None]:
     """Fit a user's arm and wrist against a handle.
@@ -988,8 +1007,9 @@ def fit_handle(
     arm-plane alignment, shoulder-wrist/handle-axis distance and knuckle-line
     alignment are weighted objectives.
     Forearm rotation is encouraged toward 90 degrees and external upper-arm
-    rotation is penalized. Wrist extension is encouraged to at least 30
-    degrees. The palm and middle MCP-to-axis distance targets are the
+    rotation is penalized. When a target is provided, axial arm rotation is
+    also restrained around that target. Wrist extension is encouraged to at
+    least 30 degrees. The palm and middle MCP-to-axis distance targets are the
     enclosing-cylinder radius. The
     little-to-index MCP vector is aligned in the same direction as endpoint 1
     (lower Ground Z) to endpoint 2 (higher Ground Z). The index MCP
@@ -1056,6 +1076,11 @@ def fit_handle(
     arm_weight : float, default=1.0
         Weight penalizing negative shoulder axial rotation, corresponding to
         external rotation in the model's anatomical reference pose.
+    arm_rotation_target_rad : float, optional
+        Target axial arm rotation in radians. When set with a positive target
+        weight, the current arm rotation is penalized for deviating from it.
+    arm_rotation_target_weight : float, default=0.0
+        Weight for maintaining ``arm_rotation_target_rad``.
     fit_shoulder_girdle : bool, default=True
         Whether to include the shoulder-girdle coordinates in the fit.
     Returns
@@ -1073,7 +1098,7 @@ def fit_handle(
     ValueError
         If ``side`` is not ``"left"`` or ``"right"``, or if arm coordinate
         prefixes, handle marker, or valid handle mesh are missing, or if the
-        knuckle-end weight is invalid.
+        a supplied arm-rotation target or its weight is invalid.
 
     Notes
     -----
@@ -1086,6 +1111,18 @@ def fit_handle(
         raise ValueError("side must be 'left' or 'right'")
     if not math.isfinite(knuckle_end_weight) or knuckle_end_weight < 0:
         raise ValueError("knuckle_end_weight must be finite and nonnegative")
+    if not math.isfinite(arm_rotation_target_weight) or arm_rotation_target_weight < 0:
+        raise ValueError(
+            "arm_rotation_target_weight must be finite and nonnegative"
+        )
+    if arm_rotation_target_rad is not None and not math.isfinite(
+        arm_rotation_target_rad
+    ):
+        raise ValueError("arm_rotation_target_rad must be finite when provided")
+    if arm_rotation_target_weight > 0.0 and arm_rotation_target_rad is None:
+        raise ValueError(
+            "arm_rotation_target_rad is required for a positive target weight"
+        )
     # Seleziono braccio, polso e i due comandi della spalla; la scapola viene
     # posizionata da User e le dita si chiudono dopo il fit.
     suffix = "r" if side == "right" else "l"
@@ -1195,6 +1232,14 @@ def fit_handle(
 
         arm_rot = coordinates.get(f"arm_rot_{suffix}").getValue(user.state)
         residuals.append(external_shoulder_rotation_penalty(arm_rot, arm_weight))
+        if arm_rotation_target_rad is not None and arm_rotation_target_weight > 0.0:
+            residuals.append(
+                arm_rotation_target_penalty(
+                    arm_rot,
+                    arm_rotation_target_rad,
+                    arm_rotation_target_weight,
+                )
+            )
 
         protraction = coordinates.get(f"sc_protraction_{suffix}")
         elevation = coordinates.get(f"sc_elevation_{suffix}")
@@ -1286,7 +1331,7 @@ def fit_handle(
         xtol=1e-5,
         gtol=1e-5,
     )
-    loss_component_names = (
+    loss_component_names = [
         "palm_axis_distance",
         "middle_mcp_axis_distance",
         "wrist_deviation",
@@ -1307,7 +1352,9 @@ def fit_handle(
         "little_endpoint_projection",
         "shoulder_wrist_plane",
         "shoulder_wrist_axis_distance",
-    )
+    ]
+    if arm_rotation_target_rad is not None and arm_rotation_target_weight > 0.0:
+        loss_component_names.insert(6, "arm_rotation_target")
 
     def report_loss(values: npt.ArrayLike) -> None:
         residuals = _objective(values)

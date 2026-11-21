@@ -617,6 +617,7 @@ class ChestPress(Equipment, abc.ABC):
         protraction_weight: float = 10.0,
         scapular_elevation_weight: float = 10.0,
         arm_weight: float = 1.0,
+        arm_rotation_target_weight: float = 10.0,
         pro_sup_weight: float = 1.0,
         plane_distance_weight: float = 1.0,
         shoulder_wrist_axis_distance_weight: float = 10.0,
@@ -661,6 +662,9 @@ class ChestPress(Equipment, abc.ABC):
             Weight penalizing positive scapular elevation.
         arm_weight : float, default=1.0
             Weight penalizing external upper-arm rotation.
+        arm_rotation_target_weight : float, default=10.0
+            Weight for keeping right humeral axial rotation near its value
+            immediately after the initial user fit.
         pro_sup_weight : float, default=1.0
             Weight favoring forearm supination near 90 degrees.
         plane_distance_weight : float, default=1.0
@@ -717,6 +721,13 @@ class ChestPress(Equipment, abc.ABC):
             raise ValueError("concentric_duration_s must be finite and positive")
         if not math.isfinite(eccentric_duration_s) or eccentric_duration_s <= 0.0:
             raise ValueError("eccentric_duration_s must be finite and positive")
+        if (
+            not math.isfinite(arm_rotation_target_weight)
+            or arm_rotation_target_weight < 0.0
+        ):
+            raise ValueError(
+                "arm_rotation_target_weight must be finite and nonnegative"
+            )
         framework, report = self.fit_user(
             user=user,
             wrist_dev_weight=wrist_dev_weight,
@@ -731,6 +742,11 @@ class ChestPress(Equipment, abc.ABC):
             palm_contact_weight=palm_contact_weight,
             wrist_flex_weight=wrist_flex_weight,
         )
+        arm_rotation_target_rad = float(
+            framework.user.getCoordinateSet()
+            .get("arm_rot_r")
+            .getValue(framework.user.state)
+        )
         fit_log = list(report["grip"]["handle_fit_log"])
         fit_options = {
             "palm_contact_weight": palm_contact_weight,
@@ -744,6 +760,8 @@ class ChestPress(Equipment, abc.ABC):
             "protraction_weight": protraction_weight,
             "scapular_elevation_weight": scapular_elevation_weight,
             "arm_weight": arm_weight,
+            "arm_rotation_target_rad": arm_rotation_target_rad,
+            "arm_rotation_target_weight": arm_rotation_target_weight,
         }
 
         def fit_at_current_angle(side: str):
