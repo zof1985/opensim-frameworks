@@ -326,6 +326,32 @@ def test_public_loss_penalties_return_their_expected_residuals():
     ) == pytest.approx(4.0)
 
 
+def test_fit_handle_preserves_captured_hand_points(fit_setup, monkeypatch):
+    user, equipment, coordinates, _ = fit_setup
+    original_joint_center = user.joint_center
+
+    def joint_center(name):
+        point = original_joint_center(name).copy()
+        if name == "radius_hand_r":
+            point[0] += coordinates.get("wrist_flex_r").value
+        return point
+
+    user.joint_center = joint_center
+    targets = handlefit._capture_hand_handle_targets(user, equipment, "right")
+    _, costs = run_fit(
+        monkeypatch,
+        user,
+        equipment,
+        probes=[
+            {"wrist_flex_r": 0.0},
+            {"wrist_flex_r": 0.0002},
+        ],
+        hand_handle_targets=targets,
+    )
+    assert costs[0] == pytest.approx(0.0, abs=1e-12)
+    assert costs[1] > costs[0]
+
+
 def test_scapular_fit_residuals_are_added_directly_to_the_objective(
     fit_setup, monkeypatch
 ):
@@ -1165,6 +1191,18 @@ def test_fit_user_fits_right_and_mirrors_left(monkeypatch):
         "_palm_position_in_handle",
         lambda *args, **kwargs: np.zeros(3),
     )
+    captured_target_sides = []
+
+    def capture_hand_targets(_user, _equipment, side):
+        captured_target_sides.append(side)
+        return {
+            name: np.zeros(3)
+            for name in handlefit._HAND_HANDLE_POINT_NAMES
+        }
+
+    monkeypatch.setattr(
+        chestpress, "_capture_hand_handle_targets", capture_hand_targets
+    )
     lock_options = []
 
     def lock_hands(**kwargs):
@@ -1189,6 +1227,8 @@ def test_fit_user_fits_right_and_mirrors_left(monkeypatch):
         shoulder_wrist_axis_distance_weight=4321.0,
     )
     assert result is framework
+    assert captured_target_sides == ["right", "left"]
+    assert set(result._chestpress_hand_handle_targets) == {"right", "left"}
     assert calls == [
         "position", "fit_right", "lock", "grasp_right"
     ]
@@ -1245,6 +1285,18 @@ def test_failed_mirror_preserves_accumulated_log_and_restores_hooks(monkeypatch)
     ]
     assert logging.getLogRecordFactory() is original_factory
     assert warnings.showwarning is original_showwarning
+
+
+def _set_simulation_hand_handle_targets(framework):
+    targets = {
+        side: {
+            name: np.zeros(3)
+            for name in handlefit._HAND_HANDLE_POINT_NAMES
+        }
+        for side in ("right", "left")
+    }
+    object.__setattr__(framework, "_chestpress_hand_handle_targets", targets)
+    return framework
 
 
 def _simulation_model(names):
@@ -1522,6 +1574,16 @@ def test_lock_palm_to_handles_leaves_other_motion_free(monkeypatch):
     handlefit.lock_hands_to_handles(framework)
     assert not framework.couplings
     assert framework.composite.getConstraintSet().getSize() == 0
+    object.__setattr__(
+        framework,
+        "_chestpress_hand_handle_targets",
+        {
+            side: handlefit._capture_hand_handle_targets(
+                framework.user, framework.equipment, side
+            )
+            for side in ("right", "left")
+        },
+    )
 
     for side, angle in (("right", 0.5), ("left", -0.3)):
         framework.equipment.getCoordinateSet().get(
@@ -1536,9 +1598,15 @@ def test_lock_palm_to_handles_leaves_other_motion_free(monkeypatch):
         ).setValue(framework.user.state, 0.5, False)
     framework.user.realizePosition(framework.user.state)
     framework.equipment.realizePosition(framework.equipment.state)
-    handlefit.lock_hands_to_handles(framework)
+    assert handlefit.lock_hands_to_handles(framework)
 
     for side, suffix in (("right", "r"), ("left", "l")):
+        assert handlefit._hand_handle_target_deviation(
+            framework.user,
+            framework.equipment,
+            side,
+            framework._chestpress_hand_handle_targets[side],
+        ) <= handlefit._HAND_HANDLE_TOLERANCE_M
         handle_transform = body_transform_array(
             framework.equipment.getBodySet().get(f"{side}_handle"),
             framework.equipment.state,
@@ -1612,6 +1680,13 @@ def test_symmetric_handle_lock_fits_right_and_mirrors_left(monkeypatch):
         getBodySet=lambda: ComponentSet(),
     )
     framework = SimpleNamespace(user=user, equipment=equipment)
+    framework._chestpress_hand_handle_targets = {
+        side: {
+            name: np.zeros(3)
+            for name in handlefit._HAND_HANDLE_POINT_NAMES
+        }
+        for side in ("right", "left")
+    }
     fits = []
     mirrors = []
     monkeypatch.setattr(
@@ -1631,8 +1706,9 @@ def test_symmetric_handle_lock_fits_right_and_mirrors_left(monkeypatch):
         palm,
         coordinate_prefixes=handlefit._FIT_COORDINATE_PREFIXES,
         starting_values=None,
+        hand_handle_targets=None,
     ):
-        fits.append((side, coordinate_prefixes))
+        fits.append((side, coordinate_prefixes, hand_handle_targets is not None))
         return 0.0005, True, "already within tolerance"
 
     mirror_offset = [0.0]
@@ -1645,6 +1721,13 @@ def test_symmetric_handle_lock_fits_right_and_mirrors_left(monkeypatch):
 
     monkeypatch.setattr(handlefit, "_fit_palm_marker_to_handle", fit)
     monkeypatch.setattr(handlefit, "mirror_arm", mirror)
+    monkeypatch.setattr(
+        handlefit,
+        "_hand_handle_target_deviation",
+        lambda user, equipment, side, targets: (
+            mirror_offset[0] if side == "left" else 0.0
+        ),
+    )
     initial_log = [{"messages": []}]
     initial_contact = handlefit.lock_hands_to_handles(
         framework, mirror_left_from_right=True, fit_log=initial_log
@@ -1658,8 +1741,8 @@ def test_symmetric_handle_lock_fits_right_and_mirrors_left(monkeypatch):
     assert initial_contact
     assert not drift_contact
     assert fits == [
-        ("right", handlefit._FIT_COORDINATE_PREFIXES),
-        ("right", handlefit._FIT_COORDINATE_PREFIXES),
+        ("right", handlefit._FIT_COORDINATE_PREFIXES, True),
+        ("right", handlefit._FIT_COORDINATE_PREFIXES, True),
     ]
     assert mirrors == ["right", "right"]
     anchor_messages = [
@@ -1673,6 +1756,11 @@ def test_symmetric_handle_lock_fits_right_and_mirrors_left(monkeypatch):
     assert anchor_messages[1]["level"] == "WARNING"
     assert "residual=2.000 mm" in anchor_messages[1]["message"]
     assert "without a left-side fit" in anchor_messages[1]["message"]
+    assert any(
+        message["kind"] == "hand_handle_fit"
+        and "2.000 mm" in message["message"]
+        for message in drift_log[-1]["messages"]
+    )
 
 
 def test_upper_limb_trajectory_filter_suppresses_high_frequency_motion():
@@ -1897,6 +1985,7 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
         user.getCoordinateSet().get("arm_rot_r").setValue(
             user.state, target_arm_rotation, False
         )
+        _set_simulation_hand_handle_targets(framework)
         return framework, {"grip": {
             "handle_fit_log": [{"phase": "final", "lever_angle_deg": 0.0, "messages": []}],
         }}
@@ -1920,6 +2009,7 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
     fitting_distance_weights = []
     fitting_rotation_targets = []
     fitting_rotation_target_weights = []
+    fitting_hand_targets = []
     fitted_sides = []
 
     def fit_handle(**kwargs):
@@ -1930,6 +2020,7 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
         fitting_rotation_target_weights.append(
             kwargs["arm_rotation_target_weight"]
         )
+        fitting_hand_targets.append(kwargs["hand_handle_targets"])
         fitted_sides.append(kwargs["side"])
         assert "palm_position_handle" not in kwargs
         assert "palm_position_weight" not in kwargs
@@ -1959,6 +2050,9 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
         return elbow_flexion, None, []
 
     monkeypatch.setattr(chestpress, "fit_handle", fit_handle)
+    monkeypatch.setattr(
+        ChestPress, "_restore_filtered_palm_contact", lambda *args: None
+    )
     if fail_at_end:
         with pytest.raises(RuntimeError, match="concentric stroke phase at 2.00 degrees") as raised:
             ChestPress.simulate_kinematics(
@@ -2002,6 +2096,10 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
         assert fitting_rotation_target_weights and all(
             weight == 7654.0 for weight in fitting_rotation_target_weights
         )
+        assert fitting_hand_targets and all(
+            set(targets) == set(handlefit._HAND_HANDLE_POINT_NAMES)
+            for targets in fitting_hand_targets
+        )
         assert fitted_sides and set(fitted_sides) == {"right"}
         assert lock_modes and all(lock_modes)
         assert np.rad2deg(grasp_angles) == pytest.approx([0.0, 1.0])
@@ -2025,6 +2123,10 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
     )
     assert fitting_rotation_target_weights and all(
         weight == 7654.0 for weight in fitting_rotation_target_weights
+    )
+    assert fitting_hand_targets and all(
+        set(targets) == set(handlefit._HAND_HANDLE_POINT_NAMES)
+        for targets in fitting_hand_targets
     )
     assert fitted_sides and set(fitted_sides) == {"right"}
     assert lock_modes and all(lock_modes)
@@ -2119,6 +2221,7 @@ def test_return_phase_clamps_floating_point_lower_endpoint(monkeypatch):
         np.deg2rad(20.0)
     )
     framework = Framework(user=user, equipment=equipment)
+    _set_simulation_hand_handle_targets(framework)
     wrapper = SimpleNamespace(
         fit_user=lambda **kwargs: (
             framework,
@@ -2131,6 +2234,9 @@ def test_return_phase_clamps_floating_point_lower_endpoint(monkeypatch):
     )
     monkeypatch.setattr(
         chestpress, "lock_hands_to_handles", lambda *args, **kwargs: True
+    )
+    monkeypatch.setattr(
+        ChestPress, "_restore_filtered_palm_contact", lambda *args: None
     )
 
     def fit_handle(**kwargs):
@@ -2165,6 +2271,7 @@ def test_simulation_starts_eccentric_phase_when_palm_contact_breaks(monkeypatch)
     user = _simulation_model(["arm_r", "arm_l", "elbow_flex_r", "arm_rot_r"])
     equipment = _simulation_model(["right_lever-angle", "left_lever-angle"])
     framework = Framework(user=user, equipment=equipment)
+    _set_simulation_hand_handle_targets(framework)
     wrapper = SimpleNamespace(
         fit_user=lambda **kwargs: (
             framework,
@@ -2205,6 +2312,9 @@ def test_simulation_starts_eccentric_phase_when_palm_contact_breaks(monkeypatch)
     monkeypatch.setattr(
         ChestPress, "_filter_upper_limb_trajectories", lambda *args: None
     )
+    monkeypatch.setattr(
+        ChestPress, "_restore_filtered_palm_contact", lambda *args: None
+    )
     result, fit_log = ChestPress.simulate_kinematics(
         wrapper,
         user,
@@ -2233,6 +2343,7 @@ def test_simulation_reverses_at_first_unreachable_palm_residual(monkeypatch):
     user = _simulation_model(["arm_r", "arm_l", "elbow_flex_r", "arm_rot_r"])
     equipment = _simulation_model(["right_lever-angle", "left_lever-angle"])
     framework = Framework(user=user, equipment=equipment)
+    _set_simulation_hand_handle_targets(framework)
     wrapper = SimpleNamespace(
         fit_user=lambda **kwargs: (
             framework,
@@ -2288,6 +2399,9 @@ def test_simulation_reverses_at_first_unreachable_palm_residual(monkeypatch):
     monkeypatch.setattr(chestpress, "lock_hands_to_handles", lock_palm)
     monkeypatch.setattr(chestpress, "fit_handle", fit_handle)
     monkeypatch.setattr(handlefit, "mirror_arm", mirror_arm)
+    monkeypatch.setattr(
+        ChestPress, "_restore_filtered_palm_contact", lambda *args: None
+    )
     trajectory, simulation_log = ChestPress.simulate_kinematics(
         wrapper, user, step_deg=1.0
     )
@@ -2315,6 +2429,7 @@ def test_simulation_rejects_fewer_than_two_states(monkeypatch):
     user = _simulation_model(["arm_r", "arm_l", "elbow_flex_r", "arm_rot_r"])
     equipment = _simulation_model(["right_lever-angle", "left_lever-angle"])
     framework = Framework(user=user, equipment=equipment)
+    _set_simulation_hand_handle_targets(framework)
     wrapper = SimpleNamespace(
         fit_user=lambda **kwargs: (
             framework, {"grip": {

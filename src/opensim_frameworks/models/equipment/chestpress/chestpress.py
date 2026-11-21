@@ -24,6 +24,7 @@ from opensim_frameworks.utils.motion_profiles import (
     gaussian_velocity_profile,
 )
 from .handlefit import (
+    _capture_hand_handle_targets,
     fit_handle,
     handle_fit_failure_message,
     lock_hands_to_handles,
@@ -470,7 +471,9 @@ class ChestPress(Equipment, abc.ABC):
         its handle with :func:`fit_handle`; the left arm is mirrored from the
         right without an independent fit. The right palm is anchored to its
         handle, the mirrored left palm anchor is checked, and the right hand's
-        grasp and finger coordinates are mirrored to the left.
+        grasp and finger coordinates are mirrored to the left. After grasping,
+        palm, wrist and MCP positions are captured in both handle-local frames
+        as fixed targets for dynamic fitting.
 
         Parameters
         ----------
@@ -590,6 +593,14 @@ class ChestPress(Equipment, abc.ABC):
             fit_log=fit_log,
         )
         finger_grasps = ChestPress._grasp_handles(framework)
+        object.__setattr__(
+            framework,
+            "_chestpress_hand_handle_targets",
+            {
+                side: _capture_hand_handle_targets(user, equipment, side)
+                for side in ("right", "left")
+            },
+        )
         report["grip"] = {
             "elbow_flexion_deg": elbow_flexion,
             "palm_handle_position_m": fitted_palm_position,
@@ -631,9 +642,12 @@ class ChestPress(Equipment, abc.ABC):
         tolerance ends the concentric phase; that detached state is not
         recorded, and the eccentric phase returns from the last attached
         position. At each outward step, only the right arm is refitted and
-        anchored; the left arm is mirrored from the right and its palm anchor
-        is checked without refitting. The right hand is grasped with
-        its finger coordinates mirrored to the left. The eccentric phase
+        anchored while the captured hand and wrist points remain within
+        0.1 mm of their handle-local targets; the left arm is mirrored from
+        the right and checked against its own targets without refitting. Wrist,
+        elbow, shoulder and shoulder-girdle coordinates remain available to
+        the optimizer. The right hand is grasped with its finger coordinates
+        mirrored to the left. The eccentric phase
         replays the accepted concentric states in reverse, including the peak
         again as its first sample.
 
@@ -701,12 +715,12 @@ class ChestPress(Equipment, abc.ABC):
         Gaussian speed profile with zero endpoint speed. Contact fitting uses
         the previous attached pose as its initial guess. Coordinate speeds are
         derived from the fitted coordinate positions and lever-angle profile.
-        Before trajectory recording, shoulder-girdle, arm, wrist, and finger
+        Before trajectory recording, shoulder-girdle, arm and wrist
         coordinates are resampled at 30 Hz and filtered with a fourth-order,
-        1 Hz zero-phase Butterworth low-pass filter. Palm anchors are then
-        refitted at every recorded state so filtering cannot separate the
-        hands from the moving handles,         then recloses the right hand and mirrors its finger coordinates
-        to the left. The trajectories retain their
+        1 Hz zero-phase Butterworth low-pass filter. Hand-to-handle targets
+        are then restored at every recorded state, falling back to the
+        unfiltered upper-limb pose if needed. The right hand is re-grasped and
+        its finger coordinates are mirrored to the left. The trajectories retain their
         original sample times. Accelerations are not separately recorded.
         Sampling for playback is handled separately by the framework viewer. Simulation
         failures raise an exception with the accumulated ``handle_fit_log``.
@@ -742,6 +756,15 @@ class ChestPress(Equipment, abc.ABC):
             palm_contact_weight=palm_contact_weight,
             wrist_flex_weight=wrist_flex_weight,
         )
+        hand_handle_targets = getattr(
+            framework, "_chestpress_hand_handle_targets", None
+        )
+        if not isinstance(hand_handle_targets, dict) or set(
+            hand_handle_targets
+        ) != {"right", "left"}:
+            raise RuntimeError(
+                "The initial fit did not capture both hand-to-handle poses"
+            )
         arm_rotation_target_rad = float(
             framework.user.getCoordinateSet()
             .get("arm_rot_r")
@@ -762,6 +785,7 @@ class ChestPress(Equipment, abc.ABC):
             "arm_weight": arm_weight,
             "arm_rotation_target_rad": arm_rotation_target_rad,
             "arm_rotation_target_weight": arm_rotation_target_weight,
+            "hand_handle_targets": hand_handle_targets["right"],
         }
 
         def fit_at_current_angle(side: str):
@@ -931,7 +955,6 @@ class ChestPress(Equipment, abc.ABC):
             states,
             state_times,
         )
-        """
         ChestPress._restore_filtered_palm_contact(
             framework,
             states,
@@ -940,7 +963,6 @@ class ChestPress(Equipment, abc.ABC):
             unfiltered_coordinates,
             fit_log,
         )
-        """
         ChestPress._set_trajectory_coordinate_speeds(
             framework,
             states,

@@ -10,7 +10,7 @@ import math
 import sys
 import threading
 import warnings
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from typing import Any, Literal, ParamSpec
 
@@ -63,6 +63,16 @@ _FINGER_COORDINATE_PREFIXES = ("index_", "middle_", "ring_", "little_", "thumb_"
 _FIT_COORDINATE_PREFIXES = ("arm_", "elbow_flex_", "pro_sup_", "wrist_")
 _PALM_POSITION_TOLERANCE_M = 0.001
 _POSITION_TOLERANCE_M = 0.001
+_HAND_HANDLE_TOLERANCE_M = 0.0001
+_HAND_HANDLE_TARGET_WEIGHT = 1000.0
+_HAND_HANDLE_POINT_NAMES = (
+    "palm",
+    "wrist",
+    "index_mcp",
+    "middle_mcp",
+    "ring_mcp",
+    "little_mcp",
+)
 _ANGLE_TOLERANCE_RAD = math.radians(1.0)
 _MIN_WRIST_EXTENSION_RAD = math.radians(30.0)
 _P = ParamSpec("_P")
@@ -72,6 +82,116 @@ _FitMessage = dict[str, str | int | None]
 
 class _PalmPositionFitError(RuntimeError):
     """Raised when the fitted palm marker cannot reach its handle point."""
+
+
+def _hand_handle_points_ground(user: Any, side: Literal["left", "right"]) -> dict[str, np.ndarray]:
+    suffix = "r" if side == "right" else "l"
+    marker_name = "RPALM" if side == "right" else "LPALM"
+    markers = user.getMarkerSet()
+    marker = next(
+        (
+            markers.get(index)
+            for index in range(markers.getSize())
+            if markers.get(index).getName() == marker_name
+        ),
+        None,
+    )
+    if marker is None:
+        raise ValueError(f"Marker {marker_name} not found in user model")
+    points = {
+        "palm": marker_position_array(marker, user.state),
+        "wrist": user.joint_center(f"radius_hand_{suffix}"),
+    }
+    points.update(
+        {
+            f"{finger}_mcp": user.joint_center(f"{finger}_mcp_{suffix}")
+            for finger in ("index", "middle", "ring", "little")
+        }
+    )
+    return {
+        name: np.asarray(point, dtype=float)
+        for name, point in points.items()
+    }
+
+
+def _capture_hand_handle_targets(
+    user: Any,
+    equipment: Any,
+    side: Literal["left", "right"],
+) -> dict[str, np.ndarray]:
+    """Capture a hand and wrist pose in the handle's local frame."""
+    user.realizePosition(user.state)
+    equipment.realizePosition(equipment.state)
+    handle = equipment.getBodySet().get(f"{side}_handle")
+    frame = body_transform_array(handle, equipment.state)
+    rotation = frame[:3, :3]
+    origin = frame[:3, 3]
+    return {
+        name: rotation.T @ (point - origin)
+        for name, point in _hand_handle_points_ground(user, side).items()
+    }
+
+
+def _validate_hand_handle_targets(
+    targets: Mapping[str, npt.ArrayLike],
+) -> dict[str, np.ndarray]:
+    if set(targets) != set(_HAND_HANDLE_POINT_NAMES):
+        raise ValueError(
+            "hand_handle_targets must contain palm, wrist, and all four MCP points"
+        )
+    validated = {}
+    for name in _HAND_HANDLE_POINT_NAMES:
+        point = np.asarray(targets[name], dtype=float)
+        if point.shape != (3,) or not np.all(np.isfinite(point)):
+            raise ValueError(
+                f"hand_handle_targets[{name!r}] must be a finite 3D point"
+            )
+        validated[name] = point
+    return validated
+
+
+def _hand_handle_target_deviation(
+    user: Any,
+    equipment: Any,
+    side: Literal["left", "right"],
+    targets: Mapping[str, npt.ArrayLike],
+) -> float:
+    handle = equipment.getBodySet().get(f"{side}_handle")
+    frame = body_transform_array(handle, equipment.state)
+    rotation = frame[:3, :3]
+    origin = frame[:3, 3]
+    current_points = _hand_handle_points_ground(user, side)
+    return max(
+        float(
+            np.linalg.norm(
+                rotation.T @ (current_points[name] - origin)
+                - np.asarray(targets[name], dtype=float)
+            )
+        )
+        for name in _HAND_HANDLE_POINT_NAMES
+    )
+
+
+def _hand_handle_target_residuals(
+    user: Any,
+    handle_frame: npt.NDArray[np.float64],
+    side: Literal["left", "right"],
+    targets: Mapping[str, npt.ArrayLike],
+) -> np.ndarray:
+    rotation = handle_frame[:3, :3]
+    origin = handle_frame[:3, 3]
+    current_points = _hand_handle_points_ground(user, side)
+    scale = math.sqrt(_HAND_HANDLE_TARGET_WEIGHT) / _HAND_HANDLE_TOLERANCE_M
+    return np.concatenate(
+        [
+            scale
+            * (
+                rotation.T @ (current_points[name] - origin)
+                - np.asarray(targets[name], dtype=float)
+            )
+            for name in _HAND_HANDLE_POINT_NAMES
+        ]
+    )
 
 
 def palm_axis_distance_penalty(
@@ -407,12 +527,15 @@ def lock_hands_to_handles(
     """Keep palm markers at their fitted points on the handles best-effort.
 
     The first call records each palm marker in its handle frame. Subsequent
-    calls fit that anchor without changing finger articulation. When
-    ``mirror_left_from_right`` is true, only the right palm anchor is fitted;
+    calls fit that anchor without changing finger articulation. When fixed
+    hand-handle targets are present on the framework, palm, wrist and MCP
+    points are also kept within 0.1 mm of their captured handle-frame poses.
+    When ``mirror_left_from_right`` is true, only the right palm anchor is fitted;
     the right arm is mirrored to the left, and the left anchor is checked
     without fitting it. Residuals are logged without stopping simulation.
     The 1 mm tolerance controls the optimizer's early exit and diagnostic level;
-    it is not a hard acceptance threshold.
+    it is not a hard acceptance threshold. The 0.1 mm hand-handle tolerance is
+    an acceptance threshold and an exceeded drift returns ``False``.
 
     Parameters
     ----------
@@ -450,7 +573,15 @@ def lock_hands_to_handles(
             "_chestpress_safe_palm_contact_coordinates",
             safe_coordinates,
         )
+    hand_handle_targets = getattr(
+        framework, "_chestpress_hand_handle_targets", None
+    )
+    if hand_handle_targets is not None and not isinstance(
+        hand_handle_targets, Mapping
+    ):
+        raise ValueError("stored hand-handle targets must be a side-to-target mapping")
     residuals: dict[str, float] = {}
+    hand_target_deviations: dict[str, float] = {}
 
     for side in ("right", "left"):
         handle = equipment.getBodySet().get(f"{side}_handle")
@@ -466,14 +597,37 @@ def lock_hands_to_handles(
         if mirror_left_from_right and side == "left":
             continue
 
-        error, converged, message = _fit_palm_marker_to_handle(
-            user,
-            equipment,
-            handle,
-            side,
-            handle_location["palm"],
-            starting_values=safe_coordinates.get(side),
+        side_targets = (
+            hand_handle_targets.get(side)
+            if hand_handle_targets is not None
+            else None
         )
+        if side_targets is None:
+            error, converged, message = _fit_palm_marker_to_handle(
+                user,
+                equipment,
+                handle,
+                side,
+                handle_location["palm"],
+                starting_values=safe_coordinates.get(side),
+            )
+        else:
+            side_targets = _validate_hand_handle_targets(side_targets)
+            error, converged, message = _fit_palm_marker_to_handle(
+                user,
+                equipment,
+                handle,
+                side,
+                handle_location["palm"],
+                starting_values=safe_coordinates.get(side),
+                hand_handle_targets=side_targets,
+            )
+            hand_target_deviations[side] = _hand_handle_target_deviation(
+                user, equipment, side, side_targets
+            )
+            _report_hand_handle_target_deviation(
+                side, hand_target_deviations[side], fit_log
+            )
         residuals[side] = error
         _report_palm_anchor_residual(side, error, converged, message, fit_log)
 
@@ -498,9 +652,22 @@ def lock_hands_to_handles(
         )
         residuals["left"] = error
         _report_mirrored_palm_anchor_residual(error, fit_log)
+        if hand_handle_targets is not None:
+            left_targets = hand_handle_targets.get("left")
+            if left_targets is not None:
+                left_targets = _validate_hand_handle_targets(left_targets)
+                hand_target_deviations["left"] = _hand_handle_target_deviation(
+                    user, equipment, "left", left_targets
+                )
+                _report_hand_handle_target_deviation(
+                    "left", hand_target_deviations["left"], fit_log
+                )
 
     contact_maintained = all(
         residual <= _PALM_POSITION_TOLERANCE_M for residual in residuals.values()
+    ) and all(
+        deviation <= _HAND_HANDLE_TOLERANCE_M
+        for deviation in hand_target_deviations.values()
     )
     if contact_maintained and hasattr(user, "getCoordinateSet"):
         coordinates = user.getCoordinateSet()
@@ -524,6 +691,25 @@ def lock_hands_to_handles(
                 if name in coordinate_names
             }
     return contact_maintained
+
+
+def _report_hand_handle_target_deviation(
+    side: str,
+    deviation_m: float,
+    fit_log: list[dict[str, Any]] | None,
+) -> None:
+    if not fit_log or deviation_m <= _HAND_HANDLE_TOLERANCE_M:
+        return
+    fit_log[-1]["messages"].append(
+        {
+            "kind": "hand_handle_fit",
+            "level": "WARNING",
+            "message": (
+                f"{side} hand/handle pose deviation={deviation_m * 1000.0:.3f} mm "
+                f"(limit={_HAND_HANDLE_TOLERANCE_M * 1000.0:.3f} mm)"
+            ),
+        }
+    )
 
 
 def _report_mirrored_palm_anchor_residual(
@@ -615,6 +801,7 @@ def _fit_palm_marker_to_handle(
     handle_location: tuple[float, float, float],
     coordinate_prefixes: tuple[str, ...] = _FIT_COORDINATE_PREFIXES,
     starting_values: dict[str, float] | None = None,
+    hand_handle_targets: Mapping[str, npt.ArrayLike] | None = None,
 ) -> tuple[float, bool, str]:
     suffix = "r" if side == "right" else "l"
     marker_name = "RPALM" if side == "right" else "LPALM"
@@ -622,6 +809,8 @@ def _fit_palm_marker_to_handle(
     if markers.getIndex(marker_name) < 0:
         raise ValueError(f"Marker {marker_name} not found in user model")
     marker = markers.get(marker_name)
+    if hand_handle_targets is not None:
+        hand_handle_targets = _validate_hand_handle_targets(hand_handle_targets)
     handle_transform = body_transform_array(handle, equipment.state)
     target_position = (
         handle_transform[:3, :3] @ np.asarray(handle_location) + handle_transform[:3, 3]
@@ -629,7 +818,17 @@ def _fit_palm_marker_to_handle(
     position_error = float(
         np.linalg.norm(marker_position_array(marker, user.state) - target_position)
     )
-    if position_error <= _PALM_POSITION_TOLERANCE_M:
+    hand_target_error = (
+        _hand_handle_target_deviation(
+            user, equipment, side, hand_handle_targets
+        )
+        if hand_handle_targets is not None
+        else 0.0
+    )
+    if (
+        position_error <= _PALM_POSITION_TOLERANCE_M
+        and hand_target_error <= _HAND_HANDLE_TOLERANCE_M
+    ):
         return position_error, True, "already within tolerance"
 
     coordinates = user.getCoordinateSet()
@@ -701,9 +900,22 @@ def _fit_palm_marker_to_handle(
 
     def residual(values: npt.ArrayLike) -> np.ndarray:
         apply_values(values)
-        return (
+        palm_residual = (
             marker_position_array(marker, user.state) - target_position
         ) / _PALM_POSITION_TOLERANCE_M
+        if hand_handle_targets is None:
+            return palm_residual
+        return np.concatenate(
+            (
+                palm_residual,
+                _hand_handle_target_residuals(
+                    user,
+                    body_transform_array(handle, equipment.state),
+                    side,
+                    hand_handle_targets,
+                ),
+            )
+        )
 
     result = least_squares(
         residual,
@@ -720,7 +932,27 @@ def _fit_palm_marker_to_handle(
     position_error = float(
         np.linalg.norm(marker_position_array(marker, user.state) - target_position)
     )
-    return position_error, bool(result.success), str(result.message)
+    hand_target_error = (
+        _hand_handle_target_deviation(
+            user, equipment, side, hand_handle_targets
+        )
+        if hand_handle_targets is not None
+        else 0.0
+    )
+    message = str(result.message)
+    if hand_target_error > _HAND_HANDLE_TOLERANCE_M:
+        message = (
+            f"{message}; hand/handle pose deviation="
+            f"{hand_target_error * 1000.0:.3f} mm"
+        )
+    return (
+        position_error,
+        bool(
+            result.success
+            and hand_target_error <= _HAND_HANDLE_TOLERANCE_M
+        ),
+        message,
+    )
 
 
 @contextmanager
@@ -994,6 +1226,7 @@ def fit_handle(
     arm_weight: float = 1.0,
     arm_rotation_target_rad: float | None = None,
     arm_rotation_target_weight: float = 0.0,
+    hand_handle_targets: Mapping[str, npt.ArrayLike] | None = None,
     fit_shoulder_girdle: bool = True,
 ) -> tuple[float | None, np.ndarray | None]:
     """Fit a user's arm and wrist against a handle.
@@ -1005,7 +1238,9 @@ def fit_handle(
     cylinder.
     Retraction, low shoulder elevation, palm and middle MCP-to-axis distances,
     arm-plane alignment, shoulder-wrist/handle-axis distance and knuckle-line
-    alignment are weighted objectives.
+    alignment are weighted objectives. Supplying fixed hand-handle targets
+    replaces the nominal palm/MCP/knuckle objectives with a high-priority
+    constraint that preserves the captured palm, wrist and MCP locations.
     Forearm rotation is encouraged toward 90 degrees and external upper-arm
     rotation is penalized. When a target is provided, axial arm rotation is
     also restrained around that target. Wrist extension is encouraged to at
@@ -1081,6 +1316,9 @@ def fit_handle(
         weight, the current arm rotation is penalized for deviating from it.
     arm_rotation_target_weight : float, default=0.0
         Weight for maintaining ``arm_rotation_target_rad``.
+    hand_handle_targets : mapping, optional
+        Fixed palm, wrist and MCP positions in the handle-local frame. When
+        provided, the fitting preserves the hand pose relative to the handle.
     fit_shoulder_girdle : bool, default=True
         Whether to include the shoulder-girdle coordinates in the fit.
     Returns
@@ -1096,9 +1334,9 @@ def fit_handle(
     Raises
     ------
     ValueError
-        If ``side`` is not ``"left"`` or ``"right"``, or if arm coordinate
-        prefixes, handle marker, or valid handle mesh are missing, or if the
-        a supplied arm-rotation target or its weight is invalid.
+        If ``side`` is not ``"left"`` or ``"right"``, if arm coordinate
+        prefixes, handle marker, or valid handle mesh are missing, or if a
+        supplied target or weight is invalid.
 
     Notes
     -----
@@ -1123,6 +1361,8 @@ def fit_handle(
         raise ValueError(
             "arm_rotation_target_rad is required for a positive target weight"
         )
+    if hand_handle_targets is not None:
+        hand_handle_targets = _validate_hand_handle_targets(hand_handle_targets)
     # Seleziono braccio, polso e i due comandi della spalla; la scapola viene
     # posizionata da User e le dita si chiudono dopo il fit.
     suffix = "r" if side == "right" else "l"
@@ -1200,27 +1440,34 @@ def fit_handle(
         palm_marker_pos = marker_position_array(user_marker, user.state)
         handle_frame = body_transform_array(handle, equipment.state)
         rotation = handle_frame[:3, :3]
-        residuals = [
-            palm_axis_distance_penalty(
-                palm_marker_pos,
-                handle_frame,
-                axis_origin,
-                axis_direction,
-                cylinder_radius,
-                palm_contact_weight,
-            ),
-        ]
-        middle_knuckle = np.asarray(user.joint_center(f"middle_mcp_{suffix}"))
-        residuals.append(
-            _point_axis_distance_penalty(
-                middle_knuckle,
-                handle_frame,
-                axis_origin,
-                axis_direction,
-                cylinder_radius,
-                palm_contact_weight,
+        residuals = []
+        if hand_handle_targets is None:
+            residuals.extend(
+                [
+                    palm_axis_distance_penalty(
+                        palm_marker_pos,
+                        handle_frame,
+                        axis_origin,
+                        axis_direction,
+                        cylinder_radius,
+                        palm_contact_weight,
+                    ),
+                    _point_axis_distance_penalty(
+                        user.joint_center(f"middle_mcp_{suffix}"),
+                        handle_frame,
+                        axis_origin,
+                        axis_direction,
+                        cylinder_radius,
+                        palm_contact_weight,
+                    ),
+                ]
             )
-        )
+        else:
+            residuals.extend(
+                _hand_handle_target_residuals(
+                    user, handle_frame, side, hand_handle_targets
+                )
+            )
         wrist_dev = coordinates.get(f"wrist_dev_{suffix}").getValue(user.state)
         residuals.append(wrist_deviation_penalty(wrist_dev, wrist_dev_weight))
 
@@ -1266,28 +1513,29 @@ def fit_handle(
             for finger in ("index", "middle", "ring", "little")
         ]
         handle_axis_ground = rotation @ axis_direction
-        residuals.extend(
-            knuckle_alignment_penalty(
-                knuckles[0],
-                knuckles[-1],
-                handle_axis_ground,
-                knuckle_weight,
+        if hand_handle_targets is None:
+            residuals.extend(
+                knuckle_alignment_penalty(
+                    knuckles[0],
+                    knuckles[-1],
+                    handle_axis_ground,
+                    knuckle_weight,
+                )
             )
-        )
 
-        index_distance, index_limit, little_distance, little_limit = (
-            _knuckle_endpoint_distances(np.asarray(knuckles), handle_frame)
-        )
-        residuals.extend(
-            [
-                index_knuckle_endpoint_penalty(
-                    index_distance, index_limit, knuckle_end_weight
-                ),
-                little_knuckle_endpoint_penalty(
-                    little_distance, little_limit, knuckle_end_weight
-                ),
-            ]
-        )
+            index_distance, index_limit, little_distance, little_limit = (
+                _knuckle_endpoint_distances(np.asarray(knuckles), handle_frame)
+            )
+            residuals.extend(
+                [
+                    index_knuckle_endpoint_penalty(
+                        index_distance, index_limit, knuckle_end_weight
+                    ),
+                    little_knuckle_endpoint_penalty(
+                        little_distance, little_limit, knuckle_end_weight
+                    ),
+                ]
+            )
 
         wrist = np.asarray(user.joint_center(f"radius_hand_{suffix}"))
         residuals.append(
@@ -1331,30 +1579,51 @@ def fit_handle(
         xtol=1e-5,
         gtol=1e-5,
     )
-    loss_component_names = [
-        "palm_axis_distance",
-        "middle_mcp_axis_distance",
-        "wrist_deviation",
-        "wrist_flexion",
-        "forearm_supination",
-        "external_shoulder_rotation",
-        "scapular_protraction",
-        "scapular_elevation",
-        "scapular_contact_AI",
-        "scapular_contact_TS",
-        "scapular_contact_AA",
-        "scapular_collision_risk",
-        "knuckle_alignment_x",
-        "knuckle_alignment_y",
-        "knuckle_alignment_z",
-        "knuckle_alignment_direction",
-        "index_endpoint_projection",
-        "little_endpoint_projection",
-        "shoulder_wrist_plane",
-        "shoulder_wrist_axis_distance",
-    ]
+    loss_component_names = []
+    if hand_handle_targets is None:
+        loss_component_names.extend(
+            ["palm_axis_distance", "middle_mcp_axis_distance"]
+        )
+    else:
+        for point_name in _HAND_HANDLE_POINT_NAMES:
+            loss_component_names.extend(
+                f"hand_handle_{point_name}_{axis}"
+                for axis in ("x", "y", "z")
+            )
+    loss_component_names.extend(
+        [
+            "wrist_deviation",
+            "wrist_flexion",
+            "forearm_supination",
+            "external_shoulder_rotation",
+        ]
+    )
     if arm_rotation_target_rad is not None and arm_rotation_target_weight > 0.0:
-        loss_component_names.insert(6, "arm_rotation_target")
+        loss_component_names.append("arm_rotation_target")
+    loss_component_names.extend(
+        [
+            "scapular_protraction",
+            "scapular_elevation",
+            "scapular_contact_AI",
+            "scapular_contact_TS",
+            "scapular_contact_AA",
+            "scapular_collision_risk",
+        ]
+    )
+    if hand_handle_targets is None:
+        loss_component_names.extend(
+            [
+                "knuckle_alignment_x",
+                "knuckle_alignment_y",
+                "knuckle_alignment_z",
+                "knuckle_alignment_direction",
+                "index_endpoint_projection",
+                "little_endpoint_projection",
+            ]
+        )
+    loss_component_names.extend(
+        ["shoulder_wrist_plane", "shoulder_wrist_axis_distance"]
+    )
 
     def report_loss(values: npt.ArrayLike) -> None:
         residuals = _objective(values)
@@ -1370,6 +1639,19 @@ def fit_handle(
         )
 
     report_loss(result.x)
+    if hand_handle_targets is not None:
+        hand_target_error = _hand_handle_target_deviation(
+            user, equipment, side, hand_handle_targets
+        )
+        if hand_target_error > _HAND_HANDLE_TOLERANCE_M:
+            warnings.warn(
+                f"{side} hand/handle pose deviation="
+                f"{hand_target_error * 1000.0:.3f} mm exceeds the "
+                f"{_HAND_HANDLE_TOLERANCE_M * 1000.0:.3f} mm limit",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return None, None
     if not result.success:
         warnings.warn(
             f"{side} handle fit did not converge: {result.message}; nfev={result.nfev}, "
