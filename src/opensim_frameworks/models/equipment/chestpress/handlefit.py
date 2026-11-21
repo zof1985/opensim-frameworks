@@ -60,7 +60,6 @@ _ARM_COORDINATE_PREFIXES = (
 )
 _FINGER_COORDINATE_PREFIXES = ("index_", "middle_", "ring_", "little_", "thumb_")
 _FIT_COORDINATE_PREFIXES = ("arm_", "elbow_flex_", "pro_sup_", "wrist_")
-_MIRRORED_CONTACT_COORDINATE_PREFIXES = _FIT_COORDINATE_PREFIXES
 _PALM_POSITION_TOLERANCE_M = 0.001
 _POSITION_TOLERANCE_M = 0.001
 _ANGLE_TOLERANCE_RAD = math.radians(1.0)
@@ -339,6 +338,49 @@ def shoulder_wrist_axis_distance_penalty(
     return math.sqrt(weight) * distance / _POSITION_TOLERANCE_M
 
 
+def _palm_location_in_handle(
+    user: Any,
+    equipment: Any,
+    handle: Any,
+    side: str,
+) -> tuple[float, float, float]:
+    marker_name = "RPALM" if side == "right" else "LPALM"
+    markers = user.getMarkerSet()
+    if markers.getIndex(marker_name) < 0:
+        raise ValueError(f"Marker {marker_name} not found in user model")
+    handle_transform = body_transform_array(handle, equipment.state)
+    palm_position = marker_position_array(markers.get(marker_name), user.state)
+    return tuple(
+        float(value)
+        for value in handle_transform[:3, :3].T
+        @ (palm_position - handle_transform[:3, 3])
+    )
+
+
+def _palm_anchor_residual(
+    user: Any,
+    equipment: Any,
+    handle: Any,
+    side: str,
+    handle_location: tuple[float, float, float],
+) -> float:
+    marker_name = "RPALM" if side == "right" else "LPALM"
+    markers = user.getMarkerSet()
+    if markers.getIndex(marker_name) < 0:
+        raise ValueError(f"Marker {marker_name} not found in user model")
+    handle_transform = body_transform_array(handle, equipment.state)
+    target_position = (
+        handle_transform[:3, :3] @ np.asarray(handle_location)
+        + handle_transform[:3, 3]
+    )
+    return float(
+        np.linalg.norm(
+            marker_position_array(markers.get(marker_name), user.state)
+            - target_position
+        )
+    )
+
+
 def lock_hands_to_handles(
     framework: Any,
     *,
@@ -349,8 +391,9 @@ def lock_hands_to_handles(
 
     The first call records each palm marker in its handle frame. Subsequent
     calls fit that anchor without changing finger articulation. When
-    ``mirror_left_from_right`` is true, only the right arm is fitted and then
-    mirrored to the left. Any residual is logged without stopping simulation.
+    ``mirror_left_from_right`` is true, only the right palm anchor is fitted;
+    the right arm is mirrored to the left, and the left anchor is checked
+    without fitting it. Residuals are logged without stopping simulation.
     The 1 mm tolerance controls the optimizer's early exit and diagnostic level;
     it is not a hard acceptance threshold.
 
@@ -360,7 +403,8 @@ def lock_hands_to_handles(
         Framework containing ``user`` and ``equipment`` member models.
     mirror_left_from_right : bool, default=False
         Fit the right hand and mirror its arm pose to the left instead of
-        fitting each side independently.
+        fitting each side independently. The mirrored left palm anchor is
+        checked but never optimized.
     fit_log : list of dict, optional
         Log to which anchor residuals and mirrored-arm warnings are appended.
 
@@ -397,18 +441,8 @@ def lock_hands_to_handles(
         if handle_location is None:
             if mirror_left_from_right and side == "left":
                 continue
-            handle_transform = body_transform_array(handle, equipment.state)
-            rotation = handle_transform[:3, :3]
-            origin = handle_transform[:3, 3]
-            marker_name = "RPALM" if side == "right" else "LPALM"
-            markers = user.getMarkerSet()
-            if markers.getIndex(marker_name) < 0:
-                raise ValueError(f"Marker {marker_name} not found in user model")
-            palm_position = marker_position_array(markers.get(marker_name), user.state)
             handle_location = {
-                "palm": tuple(
-                    float(value) for value in rotation.T @ (palm_position - origin)
-                ),
+                "palm": _palm_location_in_handle(user, equipment, handle, side),
             }
             target_locations[side] = handle_location
 
@@ -432,35 +466,21 @@ def lock_hands_to_handles(
         else:
             mirror_arm(user, "right")
 
+        user.realizePosition(user.state)
         handle = equipment.getBodySet().get("left_handle")
         handle_location = target_locations.get("left")
         if handle_location is None:
-            handle_transform = body_transform_array(handle, equipment.state)
-            rotation = handle_transform[:3, :3]
-            origin = handle_transform[:3, 3]
-            markers = user.getMarkerSet()
-            if markers.getIndex("LPALM") < 0:
-                raise ValueError("Marker LPALM not found in user model")
-            marker = markers.get("LPALM")
             handle_location = {
-                "palm": tuple(
-                    float(value)
-                    for value in rotation.T
-                    @ (marker_position_array(marker, user.state) - origin)
+                "palm": _palm_location_in_handle(
+                    user, equipment, handle, "left"
                 ),
             }
             target_locations["left"] = handle_location
-        error, converged, message = _fit_palm_marker_to_handle(
-            user,
-            equipment,
-            handle,
-            "left",
-            handle_location["palm"],
-            coordinate_prefixes=_MIRRORED_CONTACT_COORDINATE_PREFIXES,
-            starting_values=safe_coordinates.get("left"),
+        error = _palm_anchor_residual(
+            user, equipment, handle, "left", handle_location["palm"]
         )
         residuals["left"] = error
-        _report_palm_anchor_residual("left", error, converged, message, fit_log)
+        _report_mirrored_palm_anchor_residual(error, fit_log)
 
     contact_maintained = all(
         residual <= _PALM_POSITION_TOLERANCE_M for residual in residuals.values()
@@ -487,6 +507,27 @@ def lock_hands_to_handles(
                 if name in coordinate_names
             }
     return contact_maintained
+
+
+def _report_mirrored_palm_anchor_residual(
+    error: float,
+    fit_log: list[dict[str, Any]] | None,
+) -> None:
+    level = "INFO" if error <= _PALM_POSITION_TOLERANCE_M else "WARNING"
+    message = (
+        f"left LPALM mirrored anchor residual={error * 1000:.3f} mm; "
+        "left arm mirrored from right without a left-side fit"
+    )
+    entry = {
+        "kind": "contact_fit",
+        "level": level,
+        "category": None,
+        "message": message,
+    }
+    if fit_log:
+        fit_log[-1].setdefault("messages", []).append(entry)
+    elif level == "WARNING":
+        warnings.warn(message, RuntimeWarning, stacklevel=2)
 
 
 def _report_palm_anchor_residual(

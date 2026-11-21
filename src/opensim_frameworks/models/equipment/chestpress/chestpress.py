@@ -323,7 +323,7 @@ class ChestPress(Equipment, abc.ABC):
         unfiltered_coordinates: list[dict[str, float]],
         fit_log: list[dict[str, Any]],
     ) -> None:
-        """Refit both palms to their handle anchors after trajectory filtering.
+        """Refit the right palm and mirror the arm after trajectory filtering.
 
         Parameters
         ----------
@@ -358,7 +358,7 @@ class ChestPress(Equipment, abc.ABC):
             sample_log = [{"messages": []}]
             contact_maintained = lock_hands_to_handles(
                 framework,
-                mirror_left_from_right=False,
+                mirror_left_from_right=True,
                 fit_log=sample_log,
             )
             sample = {
@@ -385,7 +385,7 @@ class ChestPress(Equipment, abc.ABC):
                 fallback_log = [{"messages": []}]
                 contact_maintained = lock_hands_to_handles(
                     framework,
-                    mirror_left_from_right=False,
+                    mirror_left_from_right=True,
                     fit_log=fallback_log,
                 )
                 sample["messages"].append(
@@ -466,10 +466,11 @@ class ChestPress(Equipment, abc.ABC):
         The user is first positioned by :func:`position_user`: the shoulder
         girdle and trunk are aligned, the pelvis is seated, the hips are
         abducted, the feet are returned to ground contact, and both shoulders
-        and forearms are rotated by 90 degrees. Each arm is independently fitted
-        against its handle with :func:`fit_handle`. Both palms are anchored to
-        their respective handles; the right hand is grasped and its finger
-        coordinates are mirrored to the left.
+        and forearms are rotated by 90 degrees. The right arm is fitted against
+        its handle with :func:`fit_handle`; the left arm is mirrored from the
+        right without an independent fit. The right palm is anchored to its
+        handle, the mirrored left palm anchor is checked, and the right hand's
+        grasp and finger coordinates are mirrored to the left.
 
         Parameters
         ----------
@@ -508,9 +509,10 @@ class ChestPress(Equipment, abc.ABC):
         tuple of (opensim_frameworks.Framework, dict)
             Framework containing ``user`` and ``equipment``, and a report with
             the keys ``back``, ``seat``, ``hips``, ``feet`` and ``grip``.
-            ``grip["handle_fit_log"]`` contains messages from both initial arm
-            fits and the palm-anchor fits. Anchor residuals are included in
-            each fit-log entry and do not by themselves stop the simulation.
+            ``grip["handle_fit_log"]`` contains the initial right arm fit,
+            mirrored left-arm contact check, and palm-anchor fit messages.
+            Anchor residuals are included in each fit-log entry and do not by
+            themselves stop the simulation.
             ``grip["fingers"]`` holds the right-hand grasp report and notes
             that its finger coordinates were mirrored to the left.
 
@@ -582,28 +584,20 @@ class ChestPress(Equipment, abc.ABC):
             setattr(error, "handle_fit_log", fit_log)
             raise error
 
-        left_elbow_flexion, fitted_left_palm_position, left_messages = fit_handle(
-            user=user,
-            equipment=equipment,
-            handle_name="left_handle",
-            side="left",
-            **fit_options,
+        lock_hands_to_handles(
+            framework=framework,
+            mirror_left_from_right=True,
+            fit_log=fit_log,
         )
-        fit_log[0]["messages"].extend(left_messages)
-        if left_elbow_flexion is None or fitted_left_palm_position is None:
-            error = RuntimeError("The initial left arm fit did not converge")
-            setattr(error, "handle_fit_log", fit_log)
-            raise error
-
-        lock_hands_to_handles(framework=framework, fit_log=fit_log)
         finger_grasps = ChestPress._grasp_handles(framework)
         report["grip"] = {
             "elbow_flexion_deg": elbow_flexion,
             "palm_handle_position_m": fitted_palm_position,
-            "left_elbow_flexion_deg": left_elbow_flexion,
+            "left_elbow_flexion_deg": elbow_flexion,
             "left_palm_handle_position_m": ChestPress._palm_position_in_handle(
                 user, equipment, "left"
             ),
+            "left_arm_mirrored_from_right": True,
             "fingers": finger_grasps,
             "handle_fit_log": fit_log,
         }
@@ -635,8 +629,9 @@ class ChestPress(Equipment, abc.ABC):
         positions on the moving handles. The first step that exceeds this
         tolerance ends the concentric phase; that detached state is not
         recorded, and the eccentric phase returns from the last attached
-        position. At each outward step, both arms are independently refitted
-        and their palm anchors are adjusted. The right hand is grasped with
+        position. At each outward step, only the right arm is refitted and
+        anchored; the left arm is mirrored from the right and its palm anchor
+        is checked without refitting. The right hand is grasped with
         its finger coordinates mirrored to the left. The eccentric phase
         replays the accepted concentric states in reverse, including the peak
         again as its first sample.
@@ -683,7 +678,8 @@ class ChestPress(Equipment, abc.ABC):
             Framework containing synchronized trajectories and the handle-fit
             log, including the initial fit and each outward and return step.
             Each entry contains ``phase``, ``lever_angle_deg`` and ``messages``;
-            movement-step messages include the independent fit for each arm.
+            movement-step messages include the right-arm fit and mirrored
+            left-anchor check.
 
         Raises
         ------
@@ -829,12 +825,9 @@ class ChestPress(Equipment, abc.ABC):
             framework.equipment.state = osim.State(framework.equipment.state)
             framework.equipment.realizePosition(framework.equipment.state)
             messages = []
-            fit_failures = []
-            for side in ("right", "left"):
-                elbow_flexion, _, side_messages = fit_at_current_angle(side)
-                messages.extend(side_messages)
-                if elbow_flexion is None:
-                    fit_failures.append(side)
+            elbow_flexion, _, side_messages = fit_at_current_angle("right")
+            messages.extend(side_messages)
+            fit_failures = ["right"] if elbow_flexion is None else []
             fit_log.append(
                 {
                     "phase": phase,
@@ -857,7 +850,7 @@ class ChestPress(Equipment, abc.ABC):
             framework.equipment.realizePosition(framework.equipment.state)
             contact_maintained = lock_hands_to_handles(
                 framework,
-                mirror_left_from_right=False,
+                mirror_left_from_right=True,
                 fit_log=fit_log,
             )
             if not isinstance(contact_maintained, bool):
