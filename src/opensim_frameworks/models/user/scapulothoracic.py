@@ -925,6 +925,43 @@ class _ScapulothoracicMixin:
         residuals = _residual_array(radii, setup.contact_radii, setup.length)
         return dict(zip(_POINT_NAMES, residuals.tolist()))
 
+    def acromion_angle_location(
+        self, side: str, state: Any | None = None
+    ) -> tuple[float, float, float]:
+        """Return the scapular acromion-angle landmark in Ground.
+
+        Parameters
+        ----------
+        side : {"r", "l"}
+            Side of the scapula.
+        state : opensim.State or None, optional
+            State at which to evaluate the landmark. Defaults to the current
+            state of the user.
+
+        Returns
+        -------
+        tuple of float
+            ``(x, y, z)`` location in metres in the Ground frame.
+
+        Notes
+        -----
+        This is the scapular ``AA`` landmark, distinct from the
+        glenohumeral joint centre represented by the ``acromial`` joint.
+
+        Raises
+        ------
+        ValueError
+            If ``side`` is not ``"r"`` or ``"l"``.
+        """
+        if side not in ("r", "l"):
+            raise ValueError("side must be 'r' or 'l'")
+        current_state = self.state if state is None else state
+        self.realizePosition(current_state)
+        setup = self._scapulothoracic_setup(side)
+        station = setup.stations[_POINT_NAMES.index("AA")]
+        location = setup.scapula.findStationLocationInGround(current_state, station)
+        return tuple(float(value) for value in vec3_to_numpy(location))
+
     def scapulothoracic_residuals_for(
         self, side: str, coordinates: Mapping[str, float]
     ) -> dict[str, float]:

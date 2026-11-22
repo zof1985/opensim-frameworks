@@ -40,9 +40,10 @@ def position_user(
     ``opensim_frameworks.Framework``. The models are modified in place.
 
     The setup applies the initial shoulder-girdle pose, aligns the trunk and
-    shoulder midpoint to the backrest, seats the pelvis, abducts the hips by
-    30 degrees, restores the feet to their initial ground contact, and
-    internally rotates the shoulders and pronates the forearms by 90 degrees.
+    scapular acromion-angle midpoint to the backrest flags, seats the pelvis,
+    abducts the hips by 30 degrees, restores the feet to their initial ground
+    contact, and internally rotates the shoulders and pronates the forearms
+    by 90 degrees.
 
     Parameters
     ----------
@@ -118,7 +119,7 @@ def align_user_to_backrest(
     backrest_angle_deg: float,
     tolerance: float = 1e-6,
 ) -> dict[str, Any]:
-    """Align the user's trunk and shoulders with the backrest.
+    """Align the user's trunk and acromion-angle landmarks with the backrest.
 
     Parameters
     ----------
@@ -141,7 +142,7 @@ def align_user_to_backrest(
     ValueError
         If no torso or pelvis mesh vertex faces the back pad.
     RuntimeError
-        If the trunk, shoulders, or back contact cannot be aligned.
+        If the trunk, acromion-angle landmarks, or back contact cannot be aligned.
     """
     angle = math.radians(backrest_angle_deg)
     normal = np.array([math.sin(angle), -math.cos(angle), 0.0])
@@ -182,19 +183,21 @@ def align_user_to_backrest(
         line = shoulders - hips
         return math.atan2(line[1], line[0])
 
-    def shoulder_midpoint() -> np.ndarray:
-        """Return the midpoint between shoulder joints in Ground.
+    def acromion_midpoint() -> np.ndarray:
+        """Return the midpoint between the scapular AA landmarks in Ground.
 
         Returns
         -------
         numpy.ndarray, shape (3,)
-            Shoulder midpoint in metres.
+            Midpoint of the left and right acromion-angle landmarks in metres.
         """
-        user.realizePosition(user.state)
-        centers = user.joint_centers
-        return (
-            np.asarray(centers["left_shoulder"]) + np.asarray(centers["right_shoulder"])
-        ) / 2
+        return np.mean(
+            [
+                np.asarray(user.acromion_angle_location(side))
+                for side in ("l", "r")
+            ],
+            axis=0,
+        )
 
     def translate(vector: np.ndarray) -> None:
         """Translate the user along the pelvis translation coordinates.
@@ -246,7 +249,7 @@ def align_user_to_backrest(
         if abs(trunk_angle() - angle) > tolerance:
             raise RuntimeError("Could not align the trunk to the backrest angle")
 
-    offset = shoulder_midpoint() - marker
+    offset = acromion_midpoint() - marker
     in_plane = offset - (offset @ normal) * normal
     translation = -in_plane
     translate(translation)
@@ -256,13 +259,13 @@ def align_user_to_backrest(
     translate(shift)
     translation = translation + shift
 
-    offset = shoulder_midpoint() - marker
+    offset = acromion_midpoint() - marker
     in_plane = offset - (offset @ normal) * normal
     torso_gap, pelvis_gap = contact_gaps()
     if abs(trunk_angle() - angle) > tolerance:
         raise RuntimeError("Trunk angle changed while translating the user")
     if np.linalg.norm(in_plane) > tolerance:
-        raise RuntimeError("Shoulder midpoint is not normal to the marker")
+        raise RuntimeError("Acromion midpoint is not normal to the backrest marker")
     if (
         min(torso_gap, pelvis_gap) < -tolerance
         or min(torso_gap, pelvis_gap) > tolerance
@@ -273,8 +276,8 @@ def align_user_to_backrest(
         "trunk_angle_deg": math.degrees(trunk_angle()),
         "trunk_rotation_deg": math.degrees(rotation),
         "translation_m": translation,
-        "shoulder_marker_offset_m": in_plane,
-        "shoulder_normal_distance_m": float(offset @ normal),
+        "acromion_marker_offset_m": in_plane,
+        "acromion_normal_distance_m": float(offset @ normal),
         "torso_gap_m": torso_gap,
         "pelvis_gap_m": pelvis_gap,
     }

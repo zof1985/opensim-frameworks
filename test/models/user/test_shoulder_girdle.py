@@ -77,6 +77,26 @@ def test_contact_residuals_vanish_at_zero_girdle_pose(user):
             assert value == pytest.approx(0.0, abs=1e-4)
 
 
+def test_acromion_angle_location_tracks_its_scapula(user):
+    right_before = np.asarray(user.acromion_angle_location("r"))
+    left_before = np.asarray(user.acromion_angle_location("l"))
+    coordinate = user.getCoordinateSet().get("sc_protraction_r")
+    coordinate.setValue(
+        user.state,
+        coordinate.getValue(user.state) + np.deg2rad(1.0),
+        False,
+    )
+    user.realizePosition(user.state)
+
+    right_after = np.asarray(user.acromion_angle_location("r"))
+    left_after = np.asarray(user.acromion_angle_location("l"))
+
+    assert not np.allclose(right_after, right_before)
+    assert left_after == pytest.approx(left_before)
+    with pytest.raises(ValueError, match="side must be 'r' or 'l'"):
+        user.acromion_angle_location("right")
+
+
 def test_set_girdle_pose_applies_reference_to_both_sides(user, monkeypatch):
     pose = {
         name: float(index + 1)

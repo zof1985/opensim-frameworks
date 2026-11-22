@@ -507,8 +507,9 @@ class ChestPress(Equipment, abc.ABC):
     ) -> tuple[Framework, dict[str, Any]]:
         """Fit a user on the machine.
 
-        The user is first positioned by :func:`position_user`: the shoulder
-        girdle and trunk are aligned, the pelvis is seated, the hips are
+        The user is first positioned by :func:`position_user`: the trunk and
+        scapular acromion-angle midpoint are aligned with the backrest flags,
+        the pelvis is seated, the hips are
         abducted, the feet are returned to ground contact, and both shoulders
         and forearms are rotated by 90 degrees. The right arm is fitted against
         its handle with :func:`fit_handle`; the left arm is mirrored from the
