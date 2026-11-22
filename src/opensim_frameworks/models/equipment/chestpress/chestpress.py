@@ -26,7 +26,6 @@ from opensim_frameworks.utils.motion_profiles import (
 from .handlefit import (
     _capture_hand_handle_targets,
     fit_handle,
-    handle_fit_failure_message,
     lock_hands_to_handles,
     mirror_finger_coordinates,
 )
@@ -48,6 +47,8 @@ class ChestPress(Equipment, abc.ABC):
     instance verifies that required bodies exist for fitting and simulation
     to function correctly.
     """
+
+    _scapular_protraction_forward_range_scale = 1.0
 
     @property
     @abc.abstractmethod
@@ -432,6 +433,48 @@ class ChestPress(Equipment, abc.ABC):
         return transform[:3, :3].T @ (palm - center)
 
     @staticmethod
+    def _limit_scapular_protraction_mobility(
+        user: User, forward_range_scale: float
+    ) -> None:
+        if (
+            not math.isfinite(forward_range_scale)
+            or not 0.0 < forward_range_scale <= 1.0
+        ):
+            raise ValueError("forward_range_scale must be finite and in (0, 1]")
+        original_maxima = getattr(
+            user, "_chestpress_original_scapular_protraction_maxima", None
+        )
+        if original_maxima is None:
+            if forward_range_scale == 1.0:
+                return
+            original_maxima = {
+                side: user.getCoordinateSet()
+                .get(f"sc_protraction_{suffix}")
+                .getRangeMax()
+                for side, suffix in (("right", "r"), ("left", "l"))
+            }
+            object.__setattr__(
+                user,
+                "_chestpress_original_scapular_protraction_maxima",
+                original_maxima,
+            )
+
+        coordinates = user.getCoordinateSet()
+        for side, suffix in (("right", "r"), ("left", "l")):
+            coordinate = coordinates.get(f"sc_protraction_{suffix}")
+            original_max = original_maxima[side]
+            limited_max = (
+                original_max * forward_range_scale
+                if original_max > 0.0
+                else original_max
+            )
+            limited_max = max(coordinate.getRangeMin(), limited_max)
+            coordinate.setRangeMax(limited_max)
+            if coordinate.getValue(user.state) > limited_max:
+                coordinate.setValue(user.state, limited_max, False)
+        user.realizePosition(user.state)
+
+    @staticmethod
     def _grasp_handles(framework: Framework) -> dict[str, dict[str, Any]]:
         right_grasp = framework.user.grasp_handle(
             "right",
@@ -473,7 +516,9 @@ class ChestPress(Equipment, abc.ABC):
         handle, the mirrored left palm anchor is checked, and the right hand's
         grasp and finger coordinates are mirrored to the left. After grasping,
         palm, wrist and MCP positions are captured in both handle-local frames
-        as fixed targets for dynamic fitting.
+        as fixed targets for dynamic fitting. A project may reduce the
+        positive scapular-protraction range for this fit without changing the
+        user's range in other equipment models.
 
         Parameters
         ----------
@@ -537,6 +582,10 @@ class ChestPress(Equipment, abc.ABC):
         framework = Framework(user=user, equipment=self)
         user = framework.user
         equipment = framework.equipment
+        ChestPress._limit_scapular_protraction_mobility(
+            user,
+            getattr(self, "_scapular_protraction_forward_range_scale", 1.0),
+        )
 
         lever_coordinates = {
             side: equipment.getCoordinateSet().get(f"{side}_lever-angle")
@@ -706,7 +755,8 @@ class ChestPress(Equipment, abc.ABC):
             is outside the left lever's range.
         RuntimeError
             If no positive attached stroke is possible, contact is lost during
-            the eccentric phase, or a handle fit fails.
+            the eccentric phase, or the initial handle fit fails. A failed
+            dynamic fit ends the stroke at the last accepted lever position.
 
         Notes
         -----
@@ -878,16 +928,7 @@ class ChestPress(Equipment, abc.ABC):
                 }
             )
             if fit_failures:
-                error = RuntimeError(
-                    handle_fit_failure_message(
-                        phase=f"{phase} stroke",
-                        angle_deg=math.degrees(angle),
-                        messages=messages,
-                        side=fit_failures[0],
-                    )
-                )
-                setattr(error, "handle_fit_log", fit_log)
-                raise error
+                return False
             framework.equipment.state = osim.State(framework.equipment.state)
             framework.equipment.realizePosition(framework.equipment.state)
             contact_maintained = lock_hands_to_handles(
@@ -930,6 +971,10 @@ class ChestPress(Equipment, abc.ABC):
             if not out:
                 angles = angles[angles < angle]
                 break
+        if not states:
+            error = RuntimeError("No positive attached stroke is possible")
+            setattr(error, "handle_fit_log", fit_log)
+            raise error
         toc = datetime.now()
         print(
             f"Concentric phase fitted with range {math.degrees(angles[0]):0.1f}°-{math.degrees(angles[-1]):0.1f}° in {toc - tic}"

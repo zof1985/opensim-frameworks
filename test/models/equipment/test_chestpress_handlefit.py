@@ -50,6 +50,9 @@ class Coordinate:
     def getRangeMax(self):
         return self.maximum
 
+    def setRangeMax(self, maximum):
+        self.maximum = maximum
+
     def get_locked(self):
         return self.locked
 
@@ -2054,17 +2057,14 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
         ChestPress, "_restore_filtered_palm_contact", lambda *args: None
     )
     if fail_at_end:
-        with pytest.raises(RuntimeError, match="concentric stroke phase at 2.00 degrees") as raised:
-            ChestPress.simulate_kinematics(
-                wrapper, user, step_deg=1.0,
-                concentric_duration_s=1.5, eccentric_duration_s=2.5,
-                palm_contact_weight=4321.0,
-                shoulder_wrist_axis_distance_weight=5432.0,
-                arm_rotation_target_weight=7654.0,
-            )
-        fit_log = raised.value.handle_fit_log
-        assert "evaluation limit exceeded" in str(raised.value)
-        assert "nfev=1000, cost=42, optimality=3" in str(raised.value)
+        result, fit_log = ChestPress.simulate_kinematics(
+            wrapper, user, step_deg=1.0,
+            concentric_duration_s=1.5, eccentric_duration_s=2.5,
+            palm_contact_weight=4321.0,
+            shoulder_wrist_axis_distance_weight=5432.0,
+            arm_rotation_target_weight=7654.0,
+        )
+        assert result is framework
         assert [entry["phase"] for entry in fit_log] == [
             "final", "concentric", "concentric", "concentric"
         ]
@@ -2084,7 +2084,13 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
                 "nfev=1000, cost=42, optimality=3"
             )
         }]
-        assert framework.states_trajectory.getSize() == 0
+        assert result.states_trajectory.getSize() == 4
+        assert np.rad2deg([
+            equipment.getCoordinateSet().get("right_lever-angle").getValue(
+                result.states_trajectories["equipment"].get(index)
+            )
+            for index in range(result.states_trajectory.getSize())
+        ]) == pytest.approx([0.0, 1.0, 1.0, 0.0])
         assert fitting_weights and all(weight == 4321.0 for weight in fitting_weights)
         assert fitting_distance_weights and all(
             weight == 5432.0 for weight in fitting_distance_weights
@@ -2101,7 +2107,7 @@ def test_simulation_records_synchronized_step_trajectories(monkeypatch, fail_at_
             for targets in fitting_hand_targets
         )
         assert fitted_sides and set(fitted_sides) == {"right"}
-        assert lock_modes and all(lock_modes)
+        assert lock_modes == [True, True]
         assert np.rad2deg(grasp_angles) == pytest.approx([0.0, 1.0])
         return
 
@@ -2439,7 +2445,7 @@ def test_simulation_rejects_fewer_than_two_states(monkeypatch):
     )
     monkeypatch.setattr(chestpress, "fit_handle", lambda **kwargs: (None, None, []))
     monkeypatch.setattr(chestpress, "lock_hands_to_handles", lambda *args, **kwargs: None)
-    with pytest.raises(RuntimeError, match="concentric stroke phase at 0.00 degrees") as raised:
+    with pytest.raises(RuntimeError, match="No positive attached stroke is possible") as raised:
         ChestPress.simulate_kinematics(wrapper, user)
     assert raised.value.handle_fit_log == [
         {
@@ -2451,6 +2457,30 @@ def test_simulation_rejects_fewer_than_two_states(monkeypatch):
         }
     ]
     assert framework.states_trajectory.getSize() == 0
+
+
+def test_scapular_protraction_limit_is_idempotent_and_preserves_retraction():
+    right = Coordinate("sc_protraction_r", value=0.5, minimum=-0.4, maximum=0.6)
+    left = Coordinate("sc_protraction_l", value=0.1, minimum=-0.5, maximum=0.8)
+    coordinates = CoordinateSet([right, left])
+    user = SimpleNamespace(
+        state=object(),
+        getCoordinateSet=lambda: coordinates,
+        realizePosition=lambda state: None,
+    )
+
+    ChestPress._limit_scapular_protraction_mobility(user, 0.5)
+    ChestPress._limit_scapular_protraction_mobility(user, 0.5)
+
+    assert right.getRangeMax() == pytest.approx(0.3)
+    assert left.getRangeMax() == pytest.approx(0.4)
+    assert right.getRangeMin() == pytest.approx(-0.4)
+    assert left.getRangeMin() == pytest.approx(-0.5)
+    assert right.getValue(user.state) == pytest.approx(0.3)
+    assert left.getValue(user.state) == pytest.approx(0.1)
+    ChestPress._limit_scapular_protraction_mobility(user, 1.0)
+    assert right.getRangeMax() == pytest.approx(0.6)
+    assert left.getRangeMax() == pytest.approx(0.8)
 
 
 def test_failed_solver_keeps_best_coordinates_and_warns(fit_setup, monkeypatch):
