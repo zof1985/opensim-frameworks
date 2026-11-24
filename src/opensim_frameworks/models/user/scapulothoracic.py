@@ -586,34 +586,9 @@ class _ScapulothoracicMixin:
             side, np.concatenate((angles, scapula)), check_contact=check_contact
         )
 
-    def set_shoulder_elevation(
+    def _set_shoulder_elevation(
         self, side: str, degrees: float, *, check_contact: bool = True
     ) -> None:
-        """Set shoulder-girdle elevation and adapt the scapular orientation.
-
-        Sets the sternoclavicular ``sc_elevation`` angle in degrees while
-        preserving the side's current protraction. The shoulder map derives
-        the remaining scapular coordinates for that requested position.
-        Positive values elevate the shoulder; negative values depress it.
-        This moves the shoulder girdle, not the humerus at the glenohumeral
-        joint. The coordinates are relative to the model's rest pose.
-
-        Parameters
-        ----------
-        side : {"r", "l"}
-            Side of the shoulder.
-        degrees : float
-            Elevation in degrees, positive upward and negative downward.
-        check_contact : bool, default=True
-            Report possible separation or intersection after setting the pose.
-
-        Raises
-        ------
-        ValueError
-            If the side, angle, or requested coordinate range is invalid.
-        """
-        if side not in ("r", "l"):
-            raise ValueError("side must be 'r' or 'l'")
         if not math.isfinite(degrees):
             raise ValueError("shoulder angle must be finite")
         coordinates = self.getCoordinateSet()
@@ -622,23 +597,74 @@ class _ScapulothoracicMixin:
             side, protraction, math.radians(degrees), check_contact=check_contact
         )
 
-    def set_shoulder_protraction(
-        self, side: str, degrees: float, *, check_contact: bool = True
+    def set_left_shoulder_elevation(
+        self, degrees: float, *, check_contact: bool = True
     ) -> None:
-        """Set shoulder-girdle protraction and adapt the scapular orientation.
+        """Set left shoulder-girdle elevation and adapt scapular orientation.
 
-        Sets the sternoclavicular ``sc_protraction`` angle in degrees while
-        preserving the side's current elevation. The shoulder map derives
-        the remaining scapular coordinates for that requested position.
-        Positive values protract the shoulder forward; negative values
-        retract it. This moves the shoulder girdle, not the humerus at the
-        glenohumeral joint. The coordinates are relative to the model's
-        rest pose.
+        Positive values elevate the shoulder; negative values depress it.
+        This moves the shoulder girdle, not the humerus at the glenohumeral
+        joint. The current protraction is preserved.
 
         Parameters
         ----------
-        side : {"r", "l"}
-            Side of the shoulder.
+        degrees : float
+            Elevation in degrees, positive upward and negative downward.
+        check_contact : bool, default=True
+            Report possible separation or intersection after setting the pose.
+
+        Raises
+        ------
+        ValueError
+            If the angle or requested coordinate range is invalid.
+        """
+        self._set_shoulder_elevation("l", degrees, check_contact=check_contact)
+
+    def set_right_shoulder_elevation(
+        self, degrees: float, *, check_contact: bool = True
+    ) -> None:
+        """Set right shoulder-girdle elevation and adapt scapular orientation.
+
+        Positive values elevate the shoulder; negative values depress it.
+        This moves the shoulder girdle, not the humerus at the glenohumeral
+        joint. The current protraction is preserved.
+
+        Parameters
+        ----------
+        degrees : float
+            Elevation in degrees, positive upward and negative downward.
+        check_contact : bool, default=True
+            Report possible separation or intersection after setting the pose.
+
+        Raises
+        ------
+        ValueError
+            If the angle or requested coordinate range is invalid.
+        """
+        self._set_shoulder_elevation("r", degrees, check_contact=check_contact)
+
+    def _set_shoulder_protraction(
+        self, side: str, degrees: float, *, check_contact: bool = True
+    ) -> None:
+        if not math.isfinite(degrees):
+            raise ValueError("shoulder angle must be finite")
+        coordinates = self.getCoordinateSet()
+        elevation = coordinates.get(f"sc_elevation_{side}").getValue(self.state)
+        self.set_shoulder_girdle(
+            side, math.radians(degrees), elevation, check_contact=check_contact
+        )
+
+    def set_left_shoulder_protraction(
+        self, degrees: float, *, check_contact: bool = True
+    ) -> None:
+        """Set left shoulder-girdle protraction and adapt scapular orientation.
+
+        Positive values protract the shoulder forward; negative values
+        retract it. This moves the shoulder girdle, not the humerus at the
+        glenohumeral joint. The current elevation is preserved.
+
+        Parameters
+        ----------
         degrees : float
             Protraction in degrees, positive forward and negative backward.
         check_contact : bool, default=True
@@ -647,17 +673,32 @@ class _ScapulothoracicMixin:
         Raises
         ------
         ValueError
-            If the side, angle, or requested coordinate range is invalid.
+            If the angle or requested coordinate range is invalid.
         """
-        if side not in ("r", "l"):
-            raise ValueError("side must be 'r' or 'l'")
-        if not math.isfinite(degrees):
-            raise ValueError("shoulder angle must be finite")
-        coordinates = self.getCoordinateSet()
-        elevation = coordinates.get(f"sc_elevation_{side}").getValue(self.state)
-        self.set_shoulder_girdle(
-            side, math.radians(degrees), elevation, check_contact=check_contact
-        )
+        self._set_shoulder_protraction("l", degrees, check_contact=check_contact)
+
+    def set_right_shoulder_protraction(
+        self, degrees: float, *, check_contact: bool = True
+    ) -> None:
+        """Set right shoulder-girdle protraction and adapt scapular orientation.
+
+        Positive values protract the shoulder forward; negative values
+        retract it. This moves the shoulder girdle, not the humerus at the
+        glenohumeral joint. The current elevation is preserved.
+
+        Parameters
+        ----------
+        degrees : float
+            Protraction in degrees, positive forward and negative backward.
+        check_contact : bool, default=True
+            Report possible separation or intersection after setting the pose.
+
+        Raises
+        ------
+        ValueError
+            If the angle or requested coordinate range is invalid.
+        """
+        self._set_shoulder_protraction("r", degrees, check_contact=check_contact)
 
     def scapula_contact_report(self, side: str) -> dict[str, float | bool]:
         """Measure scapula-to-rib distance and scapula-thorax mesh crossing.

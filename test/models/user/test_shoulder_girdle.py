@@ -320,17 +320,32 @@ def test_shoulder_angle_setters_preserve_the_other_angle_and_use_the_map(
 
     monkeypatch.setattr(user, "set_shoulder_girdle", capture)
 
-    user.set_shoulder_elevation("r", 12.0, check_contact=False)
-    user.set_shoulder_protraction("l", -7.0)
+    user.set_right_shoulder_elevation(12.0, check_contact=False)
+    user.set_left_shoulder_elevation(-3.0)
+    user.set_right_shoulder_protraction(3.0)
+    user.set_left_shoulder_protraction(-7.0)
 
     assert calls[0][0] == "r"
     assert calls[0][1:3] == pytest.approx((np.radians(5.0), np.radians(12.0)))
     assert calls[0][3] is False
     assert calls[1][0] == "l"
     assert calls[1][1:3] == pytest.approx(
-        (np.radians(-7.0), coordinates.get("sc_elevation_l").getValue(user.state))
+        (
+            coordinates.get("sc_protraction_l").getValue(user.state),
+            np.radians(-3.0),
+        )
     )
     assert calls[1][3] is True
+    assert calls[2][0] == "r"
+    assert calls[2][1:3] == pytest.approx(
+        (np.radians(3.0), np.radians(8.0))
+    )
+    assert calls[2][3] is True
+    assert calls[3][0] == "l"
+    assert calls[3][1:3] == pytest.approx(
+        (np.radians(-7.0), coordinates.get("sc_elevation_l").getValue(user.state))
+    )
+    assert calls[3][3] is True
 
 
 def test_shoulder_map_warns_but_remains_usable_when_all_candidates_fail(user, monkeypatch):

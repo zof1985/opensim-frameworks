@@ -268,11 +268,12 @@ This changes only the lumbar rotation coordinate; positive turns the trunk
 right and negative left. By contrast, `set_body_yaw` rotates the whole body
 through the pelvis.
 
-The shoulder-girdle convenience setters take a side (`"r"` or `"l"`) and an
-angle in degrees:
-`user.set_shoulder_elevation("r", degrees)` and
-`user.set_shoulder_protraction("r", degrees)`. They preserve the other
-sternoclavicular angle and use the shoulder map to calculate the remaining
+The shoulder-girdle convenience setters take angles in degrees:
+`user.set_left_shoulder_elevation(degrees)`,
+`user.set_right_shoulder_elevation(degrees)`,
+`user.set_left_shoulder_protraction(degrees)`, and
+`user.set_right_shoulder_protraction(degrees)`. Each preserves the other
+sternoclavicular angle and uses the shoulder map to calculate the remaining
 scapular coordinates, so the scapula follows the requested girdle position.
 Elevation here means raising/lowering the shoulder girdle, not raising the
 humerus at the glenohumeral joint. Positive elevation raises and negative
