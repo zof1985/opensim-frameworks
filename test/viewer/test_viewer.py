@@ -113,6 +113,49 @@ def test_snapshot_interpolates_recorded_and_sampled_times_and_rejects_others():
         viewer._snapshot_state(frame=0, time_s=0.0)
 
 
+def test_static_single_model_snapshot_renders_member_geometry(monkeypatch, tmp_path):
+    model = make_model()
+    mesh_path = tmp_path / "user_mesh.vtp"
+    mesh_path.touch()
+    model.geometry_directories = (tmp_path,)
+    viewer = FrameworkViewer(Framework(model=model))
+    captured = {}
+
+    class FakeVisualizer:
+        def __init__(self, adapter, *, offscreen, size):
+            captured["model"] = adapter.model
+            captured["mesh_path"] = adapter._resolve_geometry_file("user_mesh.vtp")
+
+        def set_ground_visible(self, visible):
+            pass
+
+        def set_muscles_visible(self, visible):
+            pass
+
+        def set_markers_visible(self, visible):
+            pass
+
+        def set_axes_visible(self, visible):
+            pass
+
+        def set_reachability_visible(self, visible):
+            pass
+
+        def set_vision_cone_visible(self, visible):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(viewer_module, "VTKVisualizer", FakeVisualizer)
+    monkeypatch.setattr(viewer_module, "_save_image", lambda *args, **kwargs: None)
+
+    viewer.save_snapshot(tmp_path / "snapshot.png")
+
+    assert captured["model"] is model
+    assert captured["mesh_path"] == mesh_path
+
+
 def test_static_framework_disables_animation_and_limits_snapshot_time():
     viewer = FrameworkViewer(make_model())
     assert viewer._motion_table() is None

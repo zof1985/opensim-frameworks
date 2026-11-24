@@ -390,8 +390,19 @@ class FrameworkViewer:
             ),
             "camera_view_up": _camera_vector("camera_view_up", camera_view_up),
         }
-        model = self.framework.composite
-        state = self._snapshot_state(frame, time_s)
+        if (
+            len(self.framework) == 1
+            and not self.framework.couplings
+            and self.framework.states_trajectory.getSize() < 2
+            and frame is None
+            and time_s is None
+        ):
+            model = next(iter(self.framework.values()))
+            state = self._opensim.State(model.state)
+            model.realizePosition(state)
+        else:
+            model = self.framework.composite
+            state = self._snapshot_state(frame, time_s)
         adapter = _ViewerModel(model, state)
         destination.parent.mkdir(parents=True, exist_ok=True)
         visualizer = VTKVisualizer(adapter, offscreen=True, size=size)
