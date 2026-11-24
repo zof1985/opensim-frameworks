@@ -246,6 +246,39 @@ not enforce coordinate ranges; the bundled model's initial range is
 approximately -90 to +90 degrees for each. Before exporting or reinitializing
 with values outside that range, widen it as described below.
 
+Direct setters for a single `User` joint coordinate also accept optional
+`range_min` and `range_max` arguments, in degrees. A supplied bound replaces
+the corresponding current bound; an omitted bound leaves it unchanged. When
+either bound is supplied, the requested angle must be inside the resulting
+range. For example:
+
+```python
+user.set_left_hip_flexionextension(110, range_min=-30, range_max=120)
+```
+
+Changing the range does not change the model's default coordinate values. If a
+new range excludes a default, call `user.reinitialize()` after setting a valid
+current angle and before initializing, exporting, or merging the model.
+Coupled setters that solve a valid pose, such as the shoulder-girdle methods
+below, retain their own admissible ranges.
+
+For trunk torsion with the pelvis held at its current pose, use
+`user.set_trunk_rotation(degrees)` (or `user.set_lumbar_rotation(degrees)`).
+This changes only the lumbar rotation coordinate; positive turns the trunk
+right and negative left. By contrast, `set_body_yaw` rotates the whole body
+through the pelvis.
+
+The shoulder-girdle convenience setters take a side (`"r"` or `"l"`) and an
+angle in degrees:
+`user.set_shoulder_elevation("r", degrees)` and
+`user.set_shoulder_protraction("r", degrees)`. They preserve the other
+sternoclavicular angle and use the shoulder map to calculate the remaining
+scapular coordinates, so the scapula follows the requested girdle position.
+Elevation here means raising/lowering the shoulder girdle, not raising the
+humerus at the glenohumeral joint. Positive elevation raises and negative
+depresses; positive protraction moves the shoulder forward and negative
+retracts it. The model's coordinate ranges still apply.
+
 The cervical joints provide neck-base flexion/extension and lateral flexion
 (`neck_base_flexion`, `neck_base_lateral_flexion`), and head flexion/extension,
 lateral flexion, and rotation (`neck_flexion`, `neck_lateral_flexion`,
@@ -268,14 +301,21 @@ corrected reference pose. Unlock a coordinate before changing it:
 user.set_finger_coordinate_locked("right", "index", "mcp", "flexion", False)
 user.set_finger_angle("right", "index", "mcp", "flexion", 20.0)
 print(user.finger_angle("right", "index", "mcp", "flexion"))
+
+# Equivalent joint-specific API, with an optional custom range in degrees:
+user.set_right_index_mcp_flexion(20.0, range_min=0.0, range_max=45.0)
+print(user.right_index_mcp_flexion)
 ```
 
 Coordinates measure degrees relative to the corrected reference pose, which is
 already flexed and is not an anatomical zero. Their bounds are approximate
-and are checked by `set_finger_angle`. Use `finger_coordinate` for direct
-OpenSim access. Finger bodies follow the corresponding hand's scaling,
-including side-specific palm-length changes; ANSUR does not provide
-individual finger lengths in this model.
+and are checked by `set_finger_angle`. Every finger coordinate also has a
+specific `set_<side>_<finger>_<joint>_<motion>` setter and matching
+`<side>_<finger>_<joint>_<motion>` getter, such as
+`set_right_index_mcp_flexion` and `right_index_mcp_flexion`. Use
+`finger_coordinate` for direct OpenSim access. Finger bodies follow the
+corresponding hand's scaling, including side-specific palm-length changes;
+ANSUR does not provide individual finger lengths in this model.
 
 The joint centres are geometric estimates: a sphere is fitted to the distal
 20% of each parent long-bone mesh; the thumb carpometacarpal centre is based

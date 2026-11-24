@@ -4,9 +4,11 @@ Everything here is exposed on :class:`User` through :class:`_FingerMixin`:
 reading and writing individual finger coordinates
 (``finger_coordinate``/``set_finger_angle``/...) and exact triangle-surface
 intersection checks (``hand_surface_intersections`` and
-``hand_handle_intersections``). The anatomical construction of the
-articulated hand bodies (joints, axes, rest pose) lives in :mod:`.hand`; the
-procedure that closes the fingers on a handle lives in :mod:`.grasp`.
+``hand_handle_intersections``). Explicit side/finger/joint/motion setters and
+getters are provided by :class:`._FingerPostureMixin`. The anatomical
+construction of the articulated hand bodies (joints, axes, rest pose) lives
+in :mod:`.hand`; the procedure that closes the fingers on a handle lives in
+:mod:`.grasp`.
 """
 
 from __future__ import annotations
@@ -184,7 +186,11 @@ def _surfaces_intersecting_pairs(
 
 
 class _FingerMixin:
-    """Finger coordinates and exact hand-surface intersection checks."""
+    """Finger coordinates and exact hand-surface intersection checks.
+
+    Named left/right setters and getters for each finger joint are defined in
+    :class:`._FingerPostureMixin`.
+    """
 
     def finger_coordinate(
         self, side: str, finger: str, joint: str, motion: str
@@ -246,7 +252,14 @@ class _FingerMixin:
         coordinate.setLocked(self.state, locked)
 
     def set_finger_angle(
-        self, side: str, finger: str, joint: str, motion: str, degrees: float
+        self,
+        side: str,
+        finger: str,
+        joint: str,
+        motion: str,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
     ) -> None:
         """Set an unlocked finger coordinate relative to the corrected reference pose.
 
@@ -255,7 +268,16 @@ class _FingerMixin:
         side, finger, joint, motion : str
             Identify a coordinate as described by :meth:`finger_coordinate`.
         degrees : float
-            Coordinate value in degrees relative to the corrected reference pose.
+            Coordinate value in degrees relative to the corrected reference
+            pose. For flexion coordinates, positive values flex/curl the
+            finger and negative values extend it; for abduction coordinates,
+            positive values spread the digit and negative values bring it
+            toward the hand's midline. Positive thumb opposition sweeps the
+            thumb across the palm toward the fingers; negative values move it
+            away from opposition.
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. An omitted limit keeps its
+            current value.
 
         Raises
         ------
@@ -269,20 +291,25 @@ class _FingerMixin:
             raise ValueError("finger angle must be finite")
         if coordinate.getLocked(self.state):
             raise ValueError(f"Finger coordinate {coordinate.getName()!r} is locked")
-        lower = coordinate.getRangeMin()
-        upper = coordinate.getRangeMax()
-        lower_degrees = math.degrees(lower)
-        upper_degrees = math.degrees(upper)
+        lower_degrees = (
+            math.degrees(coordinate.getRangeMin())
+            if range_min is None
+            else range_min
+        )
+        upper_degrees = (
+            math.degrees(coordinate.getRangeMax())
+            if range_max is None
+            else range_max
+        )
+        if not math.isfinite(lower_degrees) or not math.isfinite(upper_degrees):
+            raise ValueError("finger coordinate range limits must be finite")
+        if lower_degrees > upper_degrees:
+            raise ValueError("finger range_min must not exceed range_max")
         if not lower_degrees <= degrees <= upper_degrees:
             raise ValueError(f"Finger angle is outside the range of {coordinate.getName()!r}")
-        # Preserve exact bounds when converting endpoint values back to radians.
-        if degrees == lower_degrees:
-            angle = lower
-        elif degrees == upper_degrees:
-            angle = upper
-        else:
-            angle = math.radians(degrees)
-        coordinate.setValue(self.state, angle, False)
+        self._set_coordinate_degrees(
+            coordinate.getName(), degrees, range_min, range_max
+        )
 
     def finger_angle(self, side: str, finger: str, joint: str, motion: str) -> float:
         """Return a finger coordinate in degrees relative to the reference pose.

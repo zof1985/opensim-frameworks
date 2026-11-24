@@ -4,9 +4,20 @@ __all__ = []
 
 
 class _PostureMixin:
-    """Every posture setter/getter pair."""
+    """Every posture setter/getter pair.
 
-    def set_left_hip_flexionextension(self, degrees: float):
+    Every angle setter accepts optional ``range_min`` and ``range_max``
+    arguments in degrees. Supplied limits replace the current coordinate
+    bounds; omitted limits remain unchanged. When either limit is supplied,
+    the requested angle must lie within the resulting range.
+    """
+
+    def set_left_hip_flexionextension(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ):
         """Set the left hip flexion/extension angle, in degrees.
 
         Writes the OpenSim coordinate ``hip_flexion_l``. Positive values
@@ -24,11 +35,15 @@ class _PostureMixin:
         Parameters
         ----------
         degrees : float
-            Target hip flexion/extension angle, in degrees. The underlying
-            OpenSim coordinate is clamped to ``[-30, 120]`` (``clamped`` is
-            ``True`` in the .osim file): a value outside that interval is
-            not rejected, it is silently pulled back to the nearest bound
-            instead of raising.
+            Target hip flexion/extension angle, in degrees.
+            The bundled model's initial coordinate range is
+            ``[-30, 120]`` degrees.
+
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. When either limit is supplied, the requested
+            angle must lie within the resulting range.
 
         Raises
         ------
@@ -39,7 +54,7 @@ class _PostureMixin:
             base .osim file specifies -- see
             ``User._unlock_coordinates``).
         """
-        self._set_coordinate_degrees('hip_flexion_l', degrees)
+        self._set_coordinate_degrees('hip_flexion_l', degrees, range_min, range_max)
 
     @property
     def left_hip_flexionextension(self) -> float:
@@ -50,10 +65,10 @@ class _PostureMixin:
         written by :meth:`set_left_hip_flexionextension` or any other
         writer of this coordinate). Positive values mean the hip is flexed
         (thigh forward/upward relative to the pelvis); negative values
-        mean it is extended (thigh backward). The underlying OpenSim
-        coordinate is clamped to ``[-30, 120]`` degrees, so this is always
-        the value actually read back within that range, even if a caller
-        requested something outside it.
+        mean it is extended (thigh backward).
+        The setter may override the range with ``range_min`` and
+        ``range_max``; this property returns the value currently held by
+        OpenSim.
 
         Returns
         -------
@@ -62,7 +77,12 @@ class _PostureMixin:
         """
         return self._coordinate_degrees('hip_flexion_l')
 
-    def set_right_hip_flexionextension(self, degrees: float):
+    def set_right_hip_flexionextension(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ):
         """Set the right hip flexion/extension angle, in degrees.
 
         Writes the OpenSim coordinate ``hip_flexion_r``. Positive values
@@ -80,11 +100,15 @@ class _PostureMixin:
         Parameters
         ----------
         degrees : float
-            Target hip flexion/extension angle, in degrees. The underlying
-            OpenSim coordinate is clamped to ``[-30, 120]`` (``clamped`` is
-            ``True`` in the .osim file): a value outside that interval is
-            not rejected, it is silently pulled back to the nearest bound
-            instead of raising.
+            Target hip flexion/extension angle, in degrees.
+            The bundled model's initial coordinate range is
+            ``[-30, 120]`` degrees.
+
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. When either limit is supplied, the requested
+            angle must lie within the resulting range.
 
         Raises
         ------
@@ -95,7 +119,7 @@ class _PostureMixin:
             base .osim file specifies -- see
             ``User._unlock_coordinates``).
         """
-        self._set_coordinate_degrees('hip_flexion_r', degrees)
+        self._set_coordinate_degrees('hip_flexion_r', degrees, range_min, range_max)
 
     @property
     def right_hip_flexionextension(self) -> float:
@@ -106,10 +130,10 @@ class _PostureMixin:
         written by :meth:`set_right_hip_flexionextension` or any other
         writer of this coordinate). Positive values mean the hip is flexed
         (thigh forward/upward relative to the pelvis); negative values
-        mean it is extended (thigh backward). The underlying OpenSim
-        coordinate is clamped to ``[-30, 120]`` degrees, so this is always
-        the value actually read back within that range, even if a caller
-        requested something outside it.
+        mean it is extended (thigh backward).
+        The setter may override the range with ``range_min`` and
+        ``range_max``; this property returns the value currently held by
+        OpenSim.
 
         Returns
         -------
@@ -118,7 +142,12 @@ class _PostureMixin:
         """
         return self._coordinate_degrees('hip_flexion_r')
 
-    def set_left_hip_adduction(self, degrees: float):
+    def set_left_hip_adduction(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ):
         """Set the left hip adduction/abduction angle, in degrees.
 
         Writes the OpenSim coordinate ``hip_adduction_l``. Positive values
@@ -135,10 +164,15 @@ class _PostureMixin:
         Parameters
         ----------
         degrees : float
-            Target hip adduction/abduction angle, in degrees. The
-            underlying OpenSim coordinate is clamped to ``[-50, 30]``: a
-            value outside that interval is silently pulled back to the
-            nearest bound instead of raising.
+            Target hip adduction/abduction angle, in degrees.
+            The bundled model's initial coordinate range is
+            ``[-50, 30]`` degrees.
+
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. When either limit is supplied, the requested
+            angle must lie within the resulting range.
 
         Raises
         ------
@@ -148,7 +182,7 @@ class _PostureMixin:
             force-unlocked when the model is built -- see
             ``User._unlock_coordinates``).
         """
-        self._set_coordinate_degrees('hip_adduction_l', degrees)
+        self._set_coordinate_degrees('hip_adduction_l', degrees, range_min, range_max)
 
     @property
     def left_hip_adduction(self) -> float:
@@ -159,10 +193,10 @@ class _PostureMixin:
         written by :meth:`set_left_hip_adduction` or any other writer of
         this coordinate). Positive values mean the hip is adducted (thigh
         toward the midline); negative values mean it is abducted (thigh
-        away from the midline). The underlying OpenSim coordinate is
-        clamped to ``[-50, 30]`` degrees, so this is always the value
-        actually read back within that range, even if a caller requested
-        something outside it.
+        away from the midline).
+        The setter may override the range with ``range_min`` and
+        ``range_max``; this property returns the value currently held by
+        OpenSim.
 
         Returns
         -------
@@ -171,7 +205,12 @@ class _PostureMixin:
         """
         return self._coordinate_degrees('hip_adduction_l')
 
-    def set_right_hip_adduction(self, degrees: float):
+    def set_right_hip_adduction(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ):
         """Set the right hip adduction/abduction angle, in degrees.
 
         Writes the OpenSim coordinate ``hip_adduction_r``. Positive values
@@ -188,10 +227,15 @@ class _PostureMixin:
         Parameters
         ----------
         degrees : float
-            Target hip adduction/abduction angle, in degrees. The
-            underlying OpenSim coordinate is clamped to ``[-50, 30]``: a
-            value outside that interval is silently pulled back to the
-            nearest bound instead of raising.
+            Target hip adduction/abduction angle, in degrees.
+            The bundled model's initial coordinate range is
+            ``[-50, 30]`` degrees.
+
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. When either limit is supplied, the requested
+            angle must lie within the resulting range.
 
         Raises
         ------
@@ -201,7 +245,7 @@ class _PostureMixin:
             force-unlocked when the model is built -- see
             ``User._unlock_coordinates``).
         """
-        self._set_coordinate_degrees('hip_adduction_r', degrees)
+        self._set_coordinate_degrees('hip_adduction_r', degrees, range_min, range_max)
 
     @property
     def right_hip_adduction(self) -> float:
@@ -212,10 +256,10 @@ class _PostureMixin:
         written by :meth:`set_right_hip_adduction` or any other writer of
         this coordinate). Positive values mean the hip is adducted (thigh
         toward the midline); negative values mean it is abducted (thigh
-        away from the midline). The underlying OpenSim coordinate is
-        clamped to ``[-50, 30]`` degrees, so this is always the value
-        actually read back within that range, even if a caller requested
-        something outside it.
+        away from the midline).
+        The setter may override the range with ``range_min`` and
+        ``range_max``; this property returns the value currently held by
+        OpenSim.
 
         Returns
         -------
@@ -224,18 +268,20 @@ class _PostureMixin:
         """
         return self._coordinate_degrees('hip_adduction_r')
 
-    def set_left_hip_rotation(self, degrees: float):
+    def set_left_hip_rotation(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ):
         """Set the left hip (axial) rotation angle, in degrees.
 
         Writes the OpenSim coordinate ``hip_rotation_l``, rotating the
-        thigh about its own long axis. Unlike the flexion/adduction
-        coordinates above, neither the coordinate's name nor its range
-        pins down a sign here: the range is symmetric (``[-40, 40]``
-        degrees) and nothing in this package's code, README, or tests
-        states whether positive is internal (medial) or external
-        (lateral) rotation. Treat the sign as unverified and check the
-        base Rajagopal-Lai-Uhlrich model documentation directly if the
-        direction matters for your use case.
+        thigh about its own long axis. Positive values internally rotate
+        the thigh (anterior surface turns toward the body's midline);
+        negative values externally rotate it (away from the midline).
+        This direction is verified from the bundled model's femur-frame
+        rotation.
 
         Like every posture setter, this only writes the raw coordinate
         value: call :meth:`update_state` before reading anything derived
@@ -244,10 +290,15 @@ class _PostureMixin:
         Parameters
         ----------
         degrees : float
-            Target hip rotation angle, in degrees. The underlying OpenSim
-            coordinate is clamped to ``[-40, 40]``: a value outside that
-            interval is silently pulled back to the nearest bound instead
-            of raising.
+            Target hip rotation angle, in degrees.
+            The bundled model's initial coordinate range is
+            ``[-40, 40]`` degrees.
+
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. When either limit is supplied, the requested
+            angle must lie within the resulting range.
 
         Raises
         ------
@@ -257,7 +308,7 @@ class _PostureMixin:
             force-unlocked when the model is built -- see
             ``User._unlock_coordinates``).
         """
-        self._set_coordinate_degrees('hip_rotation_l', degrees)
+        self._set_coordinate_degrees('hip_rotation_l', degrees, range_min, range_max)
 
     @property
     def left_hip_rotation(self) -> float:
@@ -266,13 +317,12 @@ class _PostureMixin:
         Reads the OpenSim coordinate ``hip_rotation_l`` (raw state read,
         no :meth:`update_state` needed: it reflects the exact value last
         written by :meth:`set_left_hip_rotation` or any other writer of
-        this coordinate). This is the thigh's rotation about its own long
-        axis; whether positive is internal or external rotation is not
-        pinned down by this package's code, README, or tests (see
-        :meth:`set_left_hip_rotation`). The underlying OpenSim coordinate
-        is clamped to ``[-40, 40]`` degrees, so this is always the value
-        actually read back within that range, even if a caller requested
-        something outside it.
+        this coordinate). Positive values internally rotate the thigh
+        (anterior surface toward the body's midline); negative values
+        externally rotate it (away from the midline).
+        The setter may override the range with ``range_min`` and
+        ``range_max``; this property returns the value currently held by
+        OpenSim.
 
         Returns
         -------
@@ -281,18 +331,20 @@ class _PostureMixin:
         """
         return self._coordinate_degrees('hip_rotation_l')
 
-    def set_right_hip_rotation(self, degrees: float):
+    def set_right_hip_rotation(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ):
         """Set the right hip (axial) rotation angle, in degrees.
 
         Writes the OpenSim coordinate ``hip_rotation_r``, rotating the
-        thigh about its own long axis. Unlike the flexion/adduction
-        coordinates above, neither the coordinate's name nor its range
-        pins down a sign here: the range is symmetric (``[-40, 40]``
-        degrees) and nothing in this package's code, README, or tests
-        states whether positive is internal (medial) or external
-        (lateral) rotation. Treat the sign as unverified and check the
-        base Rajagopal-Lai-Uhlrich model documentation directly if the
-        direction matters for your use case.
+        thigh about its own long axis. Positive values internally rotate
+        the thigh (anterior surface turns toward the body's midline);
+        negative values externally rotate it (away from the midline).
+        This direction is verified from the bundled model's femur-frame
+        rotation.
 
         Like every posture setter, this only writes the raw coordinate
         value: call :meth:`update_state` before reading anything derived
@@ -301,10 +353,15 @@ class _PostureMixin:
         Parameters
         ----------
         degrees : float
-            Target hip rotation angle, in degrees. The underlying OpenSim
-            coordinate is clamped to ``[-40, 40]``: a value outside that
-            interval is silently pulled back to the nearest bound instead
-            of raising.
+            Target hip rotation angle, in degrees.
+            The bundled model's initial coordinate range is
+            ``[-40, 40]`` degrees.
+
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. When either limit is supplied, the requested
+            angle must lie within the resulting range.
 
         Raises
         ------
@@ -314,7 +371,7 @@ class _PostureMixin:
             force-unlocked when the model is built -- see
             ``User._unlock_coordinates``).
         """
-        self._set_coordinate_degrees('hip_rotation_r', degrees)
+        self._set_coordinate_degrees('hip_rotation_r', degrees, range_min, range_max)
 
     @property
     def right_hip_rotation(self) -> float:
@@ -323,13 +380,12 @@ class _PostureMixin:
         Reads the OpenSim coordinate ``hip_rotation_r`` (raw state read,
         no :meth:`update_state` needed: it reflects the exact value last
         written by :meth:`set_right_hip_rotation` or any other writer of
-        this coordinate). This is the thigh's rotation about its own long
-        axis; whether positive is internal or external rotation is not
-        pinned down by this package's code, README, or tests (see
-        :meth:`set_right_hip_rotation`). The underlying OpenSim coordinate
-        is clamped to ``[-40, 40]`` degrees, so this is always the value
-        actually read back within that range, even if a caller requested
-        something outside it.
+        this coordinate). Positive values internally rotate the thigh
+        (anterior surface toward the body's midline); negative values
+        externally rotate it (away from the midline).
+        The setter may override the range with ``range_min`` and
+        ``range_max``; this property returns the value currently held by
+        OpenSim.
 
         Returns
         -------
@@ -338,15 +394,20 @@ class _PostureMixin:
         """
         return self._coordinate_degrees('hip_rotation_r')
 
-    def set_left_knee_flexionextension(self, degrees: float):
+    def set_left_knee_flexionextension(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ):
         """Set the left knee flexion/extension angle, in degrees.
 
         Writes the OpenSim coordinate ``knee_angle_l``. Positive values
         flex the knee (shank swings backward relative to the thigh); the
         coordinate's range starts exactly at 0 degrees (full extension)
-        and only goes positive (up to 140 degrees) -- a knee cannot extend
-        past straight in this model, so positive necessarily means
-        flexion.
+        and only goes positive (up to 140 degrees): positive values flex
+        the knee (shank swings backward), while negative values would
+        extend it past straight if a custom range allowed them.
 
         The patella (:attr:`left_patella`) is kinematically coupled to
         this coordinate through a ``CoordinateCouplerConstraint`` in the
@@ -358,10 +419,15 @@ class _PostureMixin:
         Parameters
         ----------
         degrees : float
-            Target knee flexion/extension angle, in degrees. The
-            underlying OpenSim coordinate is clamped to ``[0, 140]``: a
-            value outside that interval is silently pulled back to the
-            nearest bound instead of raising.
+            Target knee flexion/extension angle, in degrees.
+            The bundled model's initial coordinate range is
+            ``[0, 140]`` degrees.
+
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. When either limit is supplied, the requested
+            angle must lie within the resulting range.
 
         Raises
         ------
@@ -371,7 +437,7 @@ class _PostureMixin:
             force-unlocked when the model is built -- see
             ``User._unlock_coordinates``).
         """
-        self._set_coordinate_degrees('knee_angle_l', degrees)
+        self._set_coordinate_degrees('knee_angle_l', degrees, range_min, range_max)
 
     @property
     def left_knee_flexionextension(self) -> float:
@@ -381,12 +447,14 @@ class _PostureMixin:
         :meth:`update_state` needed: it reflects the exact value last
         written by :meth:`set_left_knee_flexionextension` or any other
         writer of this coordinate). Positive values mean the knee is
-        flexed (shank swung backward relative to the thigh); the
-        coordinate cannot go below 0 degrees (full extension) in this
-        model. The underlying OpenSim coordinate is clamped to
-        ``[0, 140]`` degrees, so this is always the value actually read
-        back within that range, even if a caller requested something
-        outside it. Note that the coupled patella position
+        flexed (shank swung backward relative to the thigh); negative
+        values would extend it past straight if a custom range allowed
+        them. The coordinate cannot go below 0 degrees (full extension) in this
+        model.
+        The setter may override the range with ``range_min`` and
+        ``range_max``; this property returns the value currently held by
+        OpenSim.
+        Note that the coupled patella position
         (:attr:`left_patella`) does not automatically reflect a knee angle
         written mid-edit until :meth:`reinitialize` is called (see
         :meth:`set_left_knee_flexionextension`).
@@ -398,15 +466,20 @@ class _PostureMixin:
         """
         return self._coordinate_degrees('knee_angle_l')
 
-    def set_right_knee_flexionextension(self, degrees: float):
+    def set_right_knee_flexionextension(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ):
         """Set the right knee flexion/extension angle, in degrees.
 
         Writes the OpenSim coordinate ``knee_angle_r``. Positive values
         flex the knee (shank swings backward relative to the thigh); the
         coordinate's range starts exactly at 0 degrees (full extension)
-        and only goes positive (up to 140 degrees) -- a knee cannot extend
-        past straight in this model, so positive necessarily means
-        flexion.
+        and only goes positive (up to 140 degrees): positive values flex
+        the knee (shank swings backward), while negative values would
+        extend it past straight if a custom range allowed them.
 
         The patella (:attr:`right_patella`) is kinematically coupled to
         this coordinate through a ``CoordinateCouplerConstraint`` in the
@@ -418,10 +491,15 @@ class _PostureMixin:
         Parameters
         ----------
         degrees : float
-            Target knee flexion/extension angle, in degrees. The
-            underlying OpenSim coordinate is clamped to ``[0, 140]``: a
-            value outside that interval is silently pulled back to the
-            nearest bound instead of raising.
+            Target knee flexion/extension angle, in degrees.
+            The bundled model's initial coordinate range is
+            ``[0, 140]`` degrees.
+
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. When either limit is supplied, the requested
+            angle must lie within the resulting range.
 
         Raises
         ------
@@ -431,7 +509,7 @@ class _PostureMixin:
             force-unlocked when the model is built -- see
             ``User._unlock_coordinates``).
         """
-        self._set_coordinate_degrees('knee_angle_r', degrees)
+        self._set_coordinate_degrees('knee_angle_r', degrees, range_min, range_max)
 
     @property
     def right_knee_flexionextension(self) -> float:
@@ -441,12 +519,14 @@ class _PostureMixin:
         :meth:`update_state` needed: it reflects the exact value last
         written by :meth:`set_right_knee_flexionextension` or any other
         writer of this coordinate). Positive values mean the knee is
-        flexed (shank swung backward relative to the thigh); the
-        coordinate cannot go below 0 degrees (full extension) in this
-        model. The underlying OpenSim coordinate is clamped to
-        ``[0, 140]`` degrees, so this is always the value actually read
-        back within that range, even if a caller requested something
-        outside it. Note that the coupled patella position
+        flexed (shank swung backward relative to the thigh); negative
+        values would extend it past straight if a custom range allowed
+        them. The coordinate cannot go below 0 degrees (full extension) in this
+        model.
+        The setter may override the range with ``range_min`` and
+        ``range_max``; this property returns the value currently held by
+        OpenSim.
+        Note that the coupled patella position
         (:attr:`right_patella`) does not automatically reflect a knee
         angle written mid-edit until :meth:`reinitialize` is called (see
         :meth:`set_right_knee_flexionextension`).
@@ -458,21 +538,19 @@ class _PostureMixin:
         """
         return self._coordinate_degrees('knee_angle_r')
 
-    def set_left_ankle_flexiondorsiflexion(self, degrees: float):
+    def set_left_ankle_flexiondorsiflexion(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ):
         """Set the left ankle flexion/dorsiflexion angle, in degrees.
 
         Writes the OpenSim coordinate ``ankle_angle_l``, which combines
-        plantarflexion and dorsiflexion into a single degree of freedom.
-        Unlike the hip/knee coordinates above, the sign here is not pinned
-        down by this package: the range is symmetric (``[-50, 50]``
-        degrees) and the coordinate's own name does not commit to a
-        direction. This package's example notebook
-        (``example_usage.ipynb``) labels increasing raw values of this
-        coordinate as increasing "Plantar Flexion", which suggests
-        positive = plantarflexion (foot points away from the shin) and
-        negative = dorsiflexion (foot points toward the shin) -- but that
-        is example code, not a test assertion, so treat the direction as
-        unverified and check the base model documentation if it matters.
+        plantarflexion and dorsiflexion into one degree of freedom.
+        Positive values dorsiflex the ankle (toes move toward the shin);
+        negative values plantarflex it (toes point away from the shin),
+        as verified from the calcaneus frame in the bundled model.
 
         Like every posture setter, this only writes the raw coordinate
         value: call :meth:`update_state` before reading anything derived
@@ -481,10 +559,15 @@ class _PostureMixin:
         Parameters
         ----------
         degrees : float
-            Target ankle flexion/dorsiflexion angle, in degrees. The
-            underlying OpenSim coordinate is clamped to ``[-50, 50]``: a
-            value outside that interval is silently pulled back to the
-            nearest bound instead of raising.
+            Target ankle flexion/dorsiflexion angle, in degrees.
+            The bundled model's initial coordinate range is
+            ``[-50, 50]`` degrees.
+
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. When either limit is supplied, the requested
+            angle must lie within the resulting range.
 
         Raises
         ------
@@ -494,7 +577,7 @@ class _PostureMixin:
             force-unlocked when the model is built -- see
             ``User._unlock_coordinates``).
         """
-        self._set_coordinate_degrees('ankle_angle_l', degrees)
+        self._set_coordinate_degrees('ankle_angle_l', degrees, range_min, range_max)
 
     @property
     def left_ankle_flexiondorsiflexion(self) -> float:
@@ -503,14 +586,12 @@ class _PostureMixin:
         Reads the OpenSim coordinate ``ankle_angle_l`` (raw state read, no
         :meth:`update_state` needed: it reflects the exact value last
         written by :meth:`set_left_ankle_flexiondorsiflexion` or any other
-        writer of this coordinate). This combines plantarflexion and
-        dorsiflexion into a single degree of freedom; which sign is which
-        is not firmly pinned down by this package (see
-        :meth:`set_left_ankle_flexiondorsiflexion` for the available
-        evidence). The underlying OpenSim coordinate is clamped to
-        ``[-50, 50]`` degrees, so this is always the value actually read
-        back within that range, even if a caller requested something
-        outside it.
+        writer of this coordinate). Positive values dorsiflex the ankle
+        (toes toward the shin); negative values plantarflex it (toes away
+        from the shin).
+        The setter may override the range with ``range_min`` and
+        ``range_max``; this property returns the value currently held by
+        OpenSim.
 
         Returns
         -------
@@ -519,21 +600,19 @@ class _PostureMixin:
         """
         return self._coordinate_degrees('ankle_angle_l')
 
-    def set_right_ankle_flexiondorsiflexion(self, degrees: float):
+    def set_right_ankle_flexiondorsiflexion(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ):
         """Set the right ankle flexion/dorsiflexion angle, in degrees.
 
         Writes the OpenSim coordinate ``ankle_angle_r``, which combines
-        plantarflexion and dorsiflexion into a single degree of freedom.
-        Unlike the hip/knee coordinates above, the sign here is not pinned
-        down by this package: the range is symmetric (``[-50, 50]``
-        degrees) and the coordinate's own name does not commit to a
-        direction. This package's example notebook
-        (``example_usage.ipynb``) labels increasing raw values of this
-        coordinate as increasing "Plantar Flexion", which suggests
-        positive = plantarflexion (foot points away from the shin) and
-        negative = dorsiflexion (foot points toward the shin) -- but that
-        is example code, not a test assertion, so treat the direction as
-        unverified and check the base model documentation if it matters.
+        plantarflexion and dorsiflexion into one degree of freedom.
+        Positive values dorsiflex the ankle (toes move toward the shin);
+        negative values plantarflex it (toes point away from the shin),
+        as verified from the calcaneus frame in the bundled model.
 
         Like every posture setter, this only writes the raw coordinate
         value: call :meth:`update_state` before reading anything derived
@@ -542,10 +621,15 @@ class _PostureMixin:
         Parameters
         ----------
         degrees : float
-            Target ankle flexion/dorsiflexion angle, in degrees. The
-            underlying OpenSim coordinate is clamped to ``[-50, 50]``: a
-            value outside that interval is silently pulled back to the
-            nearest bound instead of raising.
+            Target ankle flexion/dorsiflexion angle, in degrees.
+            The bundled model's initial coordinate range is
+            ``[-50, 50]`` degrees.
+
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. When either limit is supplied, the requested
+            angle must lie within the resulting range.
 
         Raises
         ------
@@ -555,7 +639,7 @@ class _PostureMixin:
             force-unlocked when the model is built -- see
             ``User._unlock_coordinates``).
         """
-        self._set_coordinate_degrees('ankle_angle_r', degrees)
+        self._set_coordinate_degrees('ankle_angle_r', degrees, range_min, range_max)
 
     @property
     def right_ankle_flexiondorsiflexion(self) -> float:
@@ -564,14 +648,12 @@ class _PostureMixin:
         Reads the OpenSim coordinate ``ankle_angle_r`` (raw state read, no
         :meth:`update_state` needed: it reflects the exact value last
         written by :meth:`set_right_ankle_flexiondorsiflexion` or any
-        other writer of this coordinate). This combines plantarflexion and
-        dorsiflexion into a single degree of freedom; which sign is which
-        is not firmly pinned down by this package (see
-        :meth:`set_right_ankle_flexiondorsiflexion` for the available
-        evidence). The underlying OpenSim coordinate is clamped to
-        ``[-50, 50]`` degrees, so this is always the value actually read
-        back within that range, even if a caller requested something
-        outside it.
+        other writer of this coordinate). Positive values dorsiflex the
+        ankle (toes toward the shin); negative values plantarflex it (toes
+        away from the shin).
+        The setter may override the range with ``range_min`` and
+        ``range_max``; this property returns the value currently held by
+        OpenSim.
 
         Returns
         -------
@@ -580,7 +662,12 @@ class _PostureMixin:
         """
         return self._coordinate_degrees('ankle_angle_r')
 
-    def set_left_subtalar_inversion(self, degrees: float):
+    def set_left_subtalar_inversion(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ):
         """Set the left subtalar inversion/eversion angle, in degrees.
 
         Writes the OpenSim coordinate ``subtalar_angle_l``. Positive
@@ -602,10 +689,15 @@ class _PostureMixin:
         Parameters
         ----------
         degrees : float
-            Target subtalar inversion/eversion angle, in degrees. The
-            underlying OpenSim coordinate is clamped to ``[-35, 35]``: a
-            value outside that interval is silently pulled back to the
-            nearest bound instead of raising.
+            Target subtalar inversion/eversion angle, in degrees.
+            The bundled model's initial coordinate range is
+            ``[-35, 35]`` degrees.
+
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. When either limit is supplied, the requested
+            angle must lie within the resulting range.
 
         Raises
         ------
@@ -614,7 +706,7 @@ class _PostureMixin:
             explicitly re-locked again after construction (e.g. via
             ``coordinate("subtalar_angle_l").set_locked(True)``).
         """
-        self._set_coordinate_degrees('subtalar_angle_l', degrees)
+        self._set_coordinate_degrees('subtalar_angle_l', degrees, range_min, range_max)
 
     @property
     def left_subtalar_inversion(self) -> float:
@@ -625,10 +717,11 @@ class _PostureMixin:
         written by :meth:`set_left_subtalar_inversion` or any other writer
         of this coordinate). Positive values mean the foot is inverted
         (sole turned toward the midline); negative values mean it is
-        everted (sole turned outward). The underlying OpenSim coordinate
-        is clamped to ``[-35, 35]`` degrees, so this is always the value
-        actually read back within that range, even if a caller requested
-        something outside it. This coordinate ships locked in the base
+        everted (sole turned outward).
+        The setter may override the range with ``range_min`` and
+        ``range_max``; this property returns the value currently held by
+        OpenSim.
+        This coordinate ships locked in the base
         .osim file but is force-unlocked for every ``User`` instance (see
         :meth:`set_left_subtalar_inversion`).
 
@@ -639,7 +732,12 @@ class _PostureMixin:
         """
         return self._coordinate_degrees('subtalar_angle_l')
 
-    def set_right_subtalar_inversion(self, degrees: float):
+    def set_right_subtalar_inversion(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ):
         """Set the right subtalar inversion/eversion angle, in degrees.
 
         Writes the OpenSim coordinate ``subtalar_angle_r``. Positive
@@ -661,10 +759,15 @@ class _PostureMixin:
         Parameters
         ----------
         degrees : float
-            Target subtalar inversion/eversion angle, in degrees. The
-            underlying OpenSim coordinate is clamped to ``[-35, 35]``: a
-            value outside that interval is silently pulled back to the
-            nearest bound instead of raising.
+            Target subtalar inversion/eversion angle, in degrees.
+            The bundled model's initial coordinate range is
+            ``[-35, 35]`` degrees.
+
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. When either limit is supplied, the requested
+            angle must lie within the resulting range.
 
         Raises
         ------
@@ -673,7 +776,7 @@ class _PostureMixin:
             explicitly re-locked again after construction (e.g. via
             ``coordinate("subtalar_angle_r").set_locked(True)``).
         """
-        self._set_coordinate_degrees('subtalar_angle_r', degrees)
+        self._set_coordinate_degrees('subtalar_angle_r', degrees, range_min, range_max)
 
     @property
     def right_subtalar_inversion(self) -> float:
@@ -684,10 +787,11 @@ class _PostureMixin:
         written by :meth:`set_right_subtalar_inversion` or any other
         writer of this coordinate). Positive values mean the foot is
         inverted (sole turned toward the midline); negative values mean it
-        is everted (sole turned outward). The underlying OpenSim
-        coordinate is clamped to ``[-35, 35]`` degrees, so this is always
-        the value actually read back within that range, even if a caller
-        requested something outside it. This coordinate ships locked in
+        is everted (sole turned outward).
+        The setter may override the range with ``range_min`` and
+        ``range_max``; this property returns the value currently held by
+        OpenSim.
+        This coordinate ships locked in
         the base .osim file but is force-unlocked for every ``User``
         instance (see :meth:`set_right_subtalar_inversion`).
 
@@ -698,7 +802,12 @@ class _PostureMixin:
         """
         return self._coordinate_degrees('subtalar_angle_r')
 
-    def set_left_mtp_flexion(self, degrees: float):
+    def set_left_mtp_flexion(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ):
         """Set the left metatarsophalangeal (toe) flexion angle, in degrees.
 
         Writes the OpenSim coordinate ``mtp_angle_l``. Positive values
@@ -721,10 +830,15 @@ class _PostureMixin:
         Parameters
         ----------
         degrees : float
-            Target MTP flexion/extension angle, in degrees. The underlying
-            OpenSim coordinate is clamped to ``[-45, 30]``: a value
-            outside that interval is silently pulled back to the nearest
-            bound instead of raising.
+            Target MTP flexion/extension angle, in degrees.
+            The bundled model's initial coordinate range is
+            ``[-45, 30]`` degrees.
+
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. When either limit is supplied, the requested
+            angle must lie within the resulting range.
 
         Raises
         ------
@@ -732,7 +846,7 @@ class _PostureMixin:
             If ``degrees`` is not finite, or if this coordinate has been
             explicitly re-locked again after construction.
         """
-        self._set_coordinate_degrees('mtp_angle_l', degrees)
+        self._set_coordinate_degrees('mtp_angle_l', degrees, range_min, range_max)
 
     @property
     def left_mtp_flexion(self) -> float:
@@ -743,10 +857,11 @@ class _PostureMixin:
         written by :meth:`set_left_mtp_flexion` or any other writer of
         this coordinate). Positive values mean the toes are flexed (curled
         plantarward/downward); negative values mean they are extended
-        (dorsiflexed, pointing up). The underlying OpenSim coordinate is
-        clamped to ``[-45, 30]`` degrees, so this is always the value
-        actually read back within that range, even if a caller requested
-        something outside it. This coordinate ships locked in the base
+        (dorsiflexed, pointing up).
+        The setter may override the range with ``range_min`` and
+        ``range_max``; this property returns the value currently held by
+        OpenSim.
+        This coordinate ships locked in the base
         .osim file but is force-unlocked for every ``User`` instance (see
         :meth:`set_left_mtp_flexion`).
 
@@ -757,7 +872,12 @@ class _PostureMixin:
         """
         return self._coordinate_degrees('mtp_angle_l')
 
-    def set_right_mtp_flexion(self, degrees: float):
+    def set_right_mtp_flexion(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ):
         """Set the right metatarsophalangeal (toe) flexion angle, in degrees.
 
         Writes the OpenSim coordinate ``mtp_angle_r``. Positive values
@@ -780,10 +900,15 @@ class _PostureMixin:
         Parameters
         ----------
         degrees : float
-            Target MTP flexion/extension angle, in degrees. The underlying
-            OpenSim coordinate is clamped to ``[-45, 30]``: a value
-            outside that interval is silently pulled back to the nearest
-            bound instead of raising.
+            Target MTP flexion/extension angle, in degrees.
+            The bundled model's initial coordinate range is
+            ``[-45, 30]`` degrees.
+
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. When either limit is supplied, the requested
+            angle must lie within the resulting range.
 
         Raises
         ------
@@ -792,7 +917,7 @@ class _PostureMixin:
             explicitly re-locked again after construction (see
             ``coordinate("mtp_angle_r").set_locked(True)``).
         """
-        self._set_coordinate_degrees('mtp_angle_r', degrees)
+        self._set_coordinate_degrees('mtp_angle_r', degrees, range_min, range_max)
 
     @property
     def right_mtp_flexion(self) -> float:
@@ -803,10 +928,11 @@ class _PostureMixin:
         written by :meth:`set_right_mtp_flexion` or any other writer of
         this coordinate). Positive values mean the toes are flexed (curled
         plantarward/downward); negative values mean they are extended
-        (dorsiflexed, pointing up). The underlying OpenSim coordinate is
-        clamped to ``[-45, 30]`` degrees, so this is always the value
-        actually read back within that range, even if a caller requested
-        something outside it. This coordinate ships locked in the base
+        (dorsiflexed, pointing up).
+        The setter may override the range with ``range_min`` and
+        ``range_max``; this property returns the value currently held by
+        OpenSim.
+        This coordinate ships locked in the base
         .osim file but is force-unlocked for every ``User`` instance (see
         :meth:`set_right_mtp_flexion`).
 
@@ -817,7 +943,12 @@ class _PostureMixin:
         """
         return self._coordinate_degrees('mtp_angle_r')
 
-    def set_left_shoulder_flexion(self, degrees: float):
+    def set_left_shoulder_flexion(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ):
         """Set the left shoulder flexion/extension angle, in degrees.
 
         Writes the OpenSim coordinate ``arm_flex_l``. Positive values flex
@@ -833,10 +964,15 @@ class _PostureMixin:
         Parameters
         ----------
         degrees : float
-            Target shoulder flexion/extension angle, in degrees. The
-            underlying OpenSim coordinate is clamped to ``[-90, 90]``: a
-            value outside that interval is silently pulled back to the
-            nearest bound instead of raising.
+            Target shoulder flexion/extension angle, in degrees.
+            The bundled model's initial coordinate range is
+            ``[-90, 90]`` degrees.
+
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. When either limit is supplied, the requested
+            angle must lie within the resulting range.
 
         Raises
         ------
@@ -846,7 +982,7 @@ class _PostureMixin:
             force-unlocked when the model is built -- see
             ``User._unlock_coordinates``).
         """
-        self._set_coordinate_degrees('arm_flex_l', degrees)
+        self._set_coordinate_degrees('arm_flex_l', degrees, range_min, range_max)
 
     @property
     def left_shoulder_flexion(self) -> float:
@@ -857,10 +993,10 @@ class _PostureMixin:
         written by :meth:`set_left_shoulder_flexion` or any other writer
         of this coordinate). Positive values mean the shoulder is flexed
         (arm forward/up, toward overhead); negative values mean it is
-        extended (arm backward). The underlying OpenSim coordinate is
-        clamped to ``[-90, 90]`` degrees, so this is always the value
-        actually read back within that range, even if a caller requested
-        something outside it.
+        extended (arm backward).
+        The setter may override the range with ``range_min`` and
+        ``range_max``; this property returns the value currently held by
+        OpenSim.
 
         Returns
         -------
@@ -869,7 +1005,12 @@ class _PostureMixin:
         """
         return self._coordinate_degrees('arm_flex_l')
 
-    def set_right_shoulder_flexion(self, degrees: float):
+    def set_right_shoulder_flexion(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ):
         """Set the right shoulder flexion/extension angle, in degrees.
 
         Writes the OpenSim coordinate ``arm_flex_r``. Positive values flex
@@ -884,10 +1025,15 @@ class _PostureMixin:
         Parameters
         ----------
         degrees : float
-            Target shoulder flexion/extension angle, in degrees. The
-            underlying OpenSim coordinate is clamped to ``[-90, 90]``: a
-            value outside that interval is silently pulled back to the
-            nearest bound instead of raising.
+            Target shoulder flexion/extension angle, in degrees.
+            The bundled model's initial coordinate range is
+            ``[-90, 90]`` degrees.
+
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. When either limit is supplied, the requested
+            angle must lie within the resulting range.
 
         Raises
         ------
@@ -897,7 +1043,7 @@ class _PostureMixin:
             force-unlocked when the model is built -- see
             ``User._unlock_coordinates``).
         """
-        self._set_coordinate_degrees('arm_flex_r', degrees)
+        self._set_coordinate_degrees('arm_flex_r', degrees, range_min, range_max)
 
     @property
     def right_shoulder_flexion(self) -> float:
@@ -908,10 +1054,10 @@ class _PostureMixin:
         written by :meth:`set_right_shoulder_flexion` or any other writer
         of this coordinate). Positive values mean the shoulder is flexed
         (arm forward/up, toward overhead); negative values mean it is
-        extended (arm backward). The underlying OpenSim coordinate is
-        clamped to ``[-90, 90]`` degrees, so this is always the value
-        actually read back within that range, even if a caller requested
-        something outside it.
+        extended (arm backward).
+        The setter may override the range with ``range_min`` and
+        ``range_max``; this property returns the value currently held by
+        OpenSim.
 
         Returns
         -------
@@ -920,7 +1066,12 @@ class _PostureMixin:
         """
         return self._coordinate_degrees('arm_flex_r')
 
-    def set_left_shoulder_adduction(self, degrees: float):
+    def set_left_shoulder_adduction(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ):
         """Set the left shoulder adduction/abduction angle, in degrees.
 
         Writes the OpenSim coordinate ``arm_add_l``. Positive values
@@ -938,10 +1089,15 @@ class _PostureMixin:
         Parameters
         ----------
         degrees : float
-            Target shoulder adduction/abduction angle, in degrees. The
-            underlying OpenSim coordinate is clamped to ``[-120, 90]``: a
-            value outside that interval is silently pulled back to the
-            nearest bound instead of raising.
+            Target shoulder adduction/abduction angle, in degrees.
+            The bundled model's initial coordinate range is
+            ``[-120, 90]`` degrees.
+
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. When either limit is supplied, the requested
+            angle must lie within the resulting range.
 
         Raises
         ------
@@ -951,7 +1107,7 @@ class _PostureMixin:
             force-unlocked when the model is built -- see
             ``User._unlock_coordinates``).
         """
-        self._set_coordinate_degrees('arm_add_l', degrees)
+        self._set_coordinate_degrees('arm_add_l', degrees, range_min, range_max)
 
     @property
     def left_shoulder_adduction(self) -> float:
@@ -962,10 +1118,10 @@ class _PostureMixin:
         written by :meth:`set_left_shoulder_adduction` or any other writer
         of this coordinate). Positive values mean the shoulder is adducted
         (arm toward/across the body); negative values mean it is abducted
-        (arm away from the body, overhead). The underlying OpenSim
-        coordinate is clamped to ``[-120, 90]`` degrees, so this is always
-        the value actually read back within that range, even if a caller
-        requested something outside it.
+        (arm away from the body, overhead).
+        The setter may override the range with ``range_min`` and
+        ``range_max``; this property returns the value currently held by
+        OpenSim.
 
         Returns
         -------
@@ -974,7 +1130,12 @@ class _PostureMixin:
         """
         return self._coordinate_degrees('arm_add_l')
 
-    def set_right_shoulder_adduction(self, degrees: float):
+    def set_right_shoulder_adduction(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ):
         """Set the right shoulder adduction/abduction angle, in degrees.
 
         Writes the OpenSim coordinate ``arm_add_r``. Positive values
@@ -992,10 +1153,15 @@ class _PostureMixin:
         Parameters
         ----------
         degrees : float
-            Target shoulder adduction/abduction angle, in degrees. The
-            underlying OpenSim coordinate is clamped to ``[-120, 90]``: a
-            value outside that interval is silently pulled back to the
-            nearest bound instead of raising.
+            Target shoulder adduction/abduction angle, in degrees.
+            The bundled model's initial coordinate range is
+            ``[-120, 90]`` degrees.
+
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. When either limit is supplied, the requested
+            angle must lie within the resulting range.
 
         Raises
         ------
@@ -1005,7 +1171,7 @@ class _PostureMixin:
             force-unlocked when the model is built -- see
             ``User._unlock_coordinates``).
         """
-        self._set_coordinate_degrees('arm_add_r', degrees)
+        self._set_coordinate_degrees('arm_add_r', degrees, range_min, range_max)
 
     @property
     def right_shoulder_adduction(self) -> float:
@@ -1016,10 +1182,10 @@ class _PostureMixin:
         written by :meth:`set_right_shoulder_adduction` or any other
         writer of this coordinate). Positive values mean the shoulder is
         adducted (arm toward/across the body); negative values mean it is
-        abducted (arm away from the body, overhead). The underlying
-        OpenSim coordinate is clamped to ``[-120, 90]`` degrees, so this
-        is always the value actually read back within that range, even if
-        a caller requested something outside it.
+        abducted (arm away from the body, overhead).
+        The setter may override the range with ``range_min`` and
+        ``range_max``; this property returns the value currently held by
+        OpenSim.
 
         Returns
         -------
@@ -1028,17 +1194,20 @@ class _PostureMixin:
         """
         return self._coordinate_degrees('arm_add_r')
 
-    def set_left_shoulder_rotation(self, degrees: float):
+    def set_left_shoulder_rotation(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ):
         """Set the left shoulder (axial) rotation angle, in degrees.
 
         Writes the OpenSim coordinate ``arm_rot_l``, rotating the upper
-        arm about its own long axis. Neither the coordinate's name nor its
-        range pins down a sign here: the range is symmetric (``[-90, 90]``
-        degrees) and nothing in this package's code, README, or tests
-        states whether positive is internal (medial) or external
-        (lateral) rotation. Treat the sign as unverified and check the
-        base Rajagopal-Lai-Uhlrich model documentation directly if the
-        direction matters for your use case.
+        arm about its own long axis. Positive values internally rotate
+        the arm (anterior surface turns toward the body's midline);
+        negative values externally rotate it (away from the midline).
+        This direction is verified from the bundled model's humerus-frame
+        rotation.
 
         Like every posture setter, this only writes the raw coordinate
         value: call :meth:`update_state` before reading anything derived
@@ -1047,10 +1216,15 @@ class _PostureMixin:
         Parameters
         ----------
         degrees : float
-            Target shoulder rotation angle, in degrees. The underlying
-            OpenSim coordinate is clamped to ``[-90, 90]``: a value
-            outside that interval is silently pulled back to the nearest
-            bound instead of raising.
+            Target shoulder rotation angle, in degrees.
+            The bundled model's initial coordinate range is
+            ``[-90, 90]`` degrees.
+
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. When either limit is supplied, the requested
+            angle must lie within the resulting range.
 
         Raises
         ------
@@ -1060,7 +1234,7 @@ class _PostureMixin:
             force-unlocked when the model is built -- see
             ``User._unlock_coordinates``).
         """
-        self._set_coordinate_degrees('arm_rot_l', degrees)
+        self._set_coordinate_degrees('arm_rot_l', degrees, range_min, range_max)
 
     @property
     def left_shoulder_rotation(self) -> float:
@@ -1069,13 +1243,12 @@ class _PostureMixin:
         Reads the OpenSim coordinate ``arm_rot_l`` (raw state read, no
         :meth:`update_state` needed: it reflects the exact value last
         written by :meth:`set_left_shoulder_rotation` or any other writer
-        of this coordinate). This is the upper arm's rotation about its
-        own long axis; whether positive is internal or external rotation
-        is not pinned down by this package's code, README, or tests (see
-        :meth:`set_left_shoulder_rotation`). The underlying OpenSim
-        coordinate is clamped to ``[-90, 90]`` degrees, so this is always
-        the value actually read back within that range, even if a caller
-        requested something outside it.
+        of this coordinate). Positive values internally rotate the arm
+        (anterior surface toward the body's midline); negative values
+        externally rotate it (away from the midline).
+        The setter may override the range with ``range_min`` and
+        ``range_max``; this property returns the value currently held by
+        OpenSim.
 
         Returns
         -------
@@ -1084,17 +1257,20 @@ class _PostureMixin:
         """
         return self._coordinate_degrees('arm_rot_l')
 
-    def set_right_shoulder_rotation(self, degrees: float):
+    def set_right_shoulder_rotation(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ):
         """Set the right shoulder (axial) rotation angle, in degrees.
 
         Writes the OpenSim coordinate ``arm_rot_r``, rotating the upper
-        arm about its own long axis. Neither the coordinate's name nor its
-        range pins down a sign here: the range is symmetric (``[-90, 90]``
-        degrees) and nothing in this package's code, README, or tests
-        states whether positive is internal (medial) or external
-        (lateral) rotation. Treat the sign as unverified and check the
-        base Rajagopal-Lai-Uhlrich model documentation directly if the
-        direction matters for your use case.
+        arm about its own long axis. Positive values internally rotate
+        the arm (anterior surface turns toward the body's midline);
+        negative values externally rotate it (away from the midline).
+        This direction is verified from the bundled model's humerus-frame
+        rotation.
 
         Like every posture setter, this only writes the raw coordinate
         value: call :meth:`update_state` before reading anything derived
@@ -1103,10 +1279,15 @@ class _PostureMixin:
         Parameters
         ----------
         degrees : float
-            Target shoulder rotation angle, in degrees. The underlying
-            OpenSim coordinate is clamped to ``[-90, 90]``: a value
-            outside that interval is silently pulled back to the nearest
-            bound instead of raising.
+            Target shoulder rotation angle, in degrees.
+            The bundled model's initial coordinate range is
+            ``[-90, 90]`` degrees.
+
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. When either limit is supplied, the requested
+            angle must lie within the resulting range.
 
         Raises
         ------
@@ -1116,7 +1297,7 @@ class _PostureMixin:
             force-unlocked when the model is built -- see
             ``User._unlock_coordinates``).
         """
-        self._set_coordinate_degrees('arm_rot_r', degrees)
+        self._set_coordinate_degrees('arm_rot_r', degrees, range_min, range_max)
 
     @property
     def right_shoulder_rotation(self) -> float:
@@ -1125,13 +1306,12 @@ class _PostureMixin:
         Reads the OpenSim coordinate ``arm_rot_r`` (raw state read, no
         :meth:`update_state` needed: it reflects the exact value last
         written by :meth:`set_right_shoulder_rotation` or any other writer
-        of this coordinate). This is the upper arm's rotation about its
-        own long axis; whether positive is internal or external rotation
-        is not pinned down by this package's code, README, or tests (see
-        :meth:`set_right_shoulder_rotation`). The underlying OpenSim
-        coordinate is clamped to ``[-90, 90]`` degrees, so this is always
-        the value actually read back within that range, even if a caller
-        requested something outside it.
+        of this coordinate). Positive values internally rotate the arm
+        (anterior surface toward the body's midline); negative values
+        externally rotate it (away from the midline).
+        The setter may override the range with ``range_min`` and
+        ``range_max``; this property returns the value currently held by
+        OpenSim.
 
         Returns
         -------
@@ -1140,15 +1320,21 @@ class _PostureMixin:
         """
         return self._coordinate_degrees('arm_rot_r')
 
-    def set_left_elbow_flexion(self, degrees: float):
+    def set_left_elbow_flexion(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ):
         """Set the left elbow flexion angle, in degrees.
 
         Writes the OpenSim coordinate ``elbow_flex_l``. Positive values
         flex the elbow (forearm swings toward the upper arm); the
         coordinate's range starts exactly at 0 degrees (full extension)
-        and only goes positive (up to 150 degrees) -- an elbow cannot
-        extend past straight in this model, so positive necessarily means
-        flexion.
+        and only goes positive (up to 150 degrees): positive values flex
+        the elbow (forearm swings toward the upper arm), while negative
+        values would extend it past straight if a custom range allowed
+        them.
 
         Like every posture setter, this only writes the raw coordinate
         value: call :meth:`update_state` before reading anything derived
@@ -1157,10 +1343,15 @@ class _PostureMixin:
         Parameters
         ----------
         degrees : float
-            Target elbow flexion angle, in degrees. The underlying OpenSim
-            coordinate is clamped to ``[0, 150]``: a value outside that
-            interval is silently pulled back to the nearest bound instead
-            of raising.
+            Target elbow flexion angle, in degrees.
+            The bundled model's initial coordinate range is
+            ``[0, 150]`` degrees.
+
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. When either limit is supplied, the requested
+            angle must lie within the resulting range.
 
         Raises
         ------
@@ -1170,7 +1361,7 @@ class _PostureMixin:
             force-unlocked when the model is built -- see
             ``User._unlock_coordinates``).
         """
-        self._set_coordinate_degrees('elbow_flex_l', degrees)
+        self._set_coordinate_degrees('elbow_flex_l', degrees, range_min, range_max)
 
     @property
     def left_elbow_flexion(self) -> float:
@@ -1180,11 +1371,12 @@ class _PostureMixin:
         :meth:`update_state` needed: it reflects the exact value last
         written by :meth:`set_left_elbow_flexion` or any other writer of
         this coordinate). Positive values mean the elbow is flexed
-        (forearm toward the upper arm); the coordinate cannot go below 0
-        degrees (full extension) in this model. The underlying OpenSim
-        coordinate is clamped to ``[0, 150]`` degrees, so this is always
-        the value actually read back within that range, even if a caller
-        requested something outside it.
+        (forearm toward the upper arm); negative values would extend it
+        past straight if a custom range allowed them. The coordinate
+        has a default minimum of 0 degrees (full extension).
+        The setter may override the range with ``range_min`` and
+        ``range_max``; this property returns the value currently held by
+        OpenSim.
 
         Returns
         -------
@@ -1193,15 +1385,21 @@ class _PostureMixin:
         """
         return self._coordinate_degrees('elbow_flex_l')
 
-    def set_right_elbow_flexion(self, degrees: float):
+    def set_right_elbow_flexion(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ):
         """Set the right elbow flexion angle, in degrees.
 
         Writes the OpenSim coordinate ``elbow_flex_r``. Positive values
         flex the elbow (forearm swings toward the upper arm); the
         coordinate's range starts exactly at 0 degrees (full extension)
-        and only goes positive (up to 150 degrees) -- an elbow cannot
-        extend past straight in this model, so positive necessarily means
-        flexion.
+        and only goes positive (up to 150 degrees): positive values flex
+        the elbow (forearm swings toward the upper arm), while negative
+        values would extend it past straight if a custom range allowed
+        them.
 
         Like every posture setter, this only writes the raw coordinate
         value: call :meth:`update_state` before reading anything derived
@@ -1210,10 +1408,15 @@ class _PostureMixin:
         Parameters
         ----------
         degrees : float
-            Target elbow flexion angle, in degrees. The underlying OpenSim
-            coordinate is clamped to ``[0, 150]``: a value outside that
-            interval is silently pulled back to the nearest bound instead
-            of raising.
+            Target elbow flexion angle, in degrees.
+            The bundled model's initial coordinate range is
+            ``[0, 150]`` degrees.
+
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. When either limit is supplied, the requested
+            angle must lie within the resulting range.
 
         Raises
         ------
@@ -1223,7 +1426,7 @@ class _PostureMixin:
             force-unlocked when the model is built -- see
             ``User._unlock_coordinates``).
         """
-        self._set_coordinate_degrees('elbow_flex_r', degrees)
+        self._set_coordinate_degrees('elbow_flex_r', degrees, range_min, range_max)
 
     @property
     def right_elbow_flexion(self) -> float:
@@ -1233,11 +1436,12 @@ class _PostureMixin:
         :meth:`update_state` needed: it reflects the exact value last
         written by :meth:`set_right_elbow_flexion` or any other writer of
         this coordinate). Positive values mean the elbow is flexed
-        (forearm toward the upper arm); the coordinate cannot go below 0
-        degrees (full extension) in this model. The underlying OpenSim
-        coordinate is clamped to ``[0, 150]`` degrees, so this is always
-        the value actually read back within that range, even if a caller
-        requested something outside it.
+        (forearm toward the upper arm); negative values would extend it
+        past straight if a custom range allowed them. The coordinate
+        has a default minimum of 0 degrees (full extension).
+        The setter may override the range with ``range_min`` and
+        ``range_max``; this property returns the value currently held by
+        OpenSim.
 
         Returns
         -------
@@ -1246,7 +1450,12 @@ class _PostureMixin:
         """
         return self._coordinate_degrees('elbow_flex_r')
 
-    def set_left_wrist_flexion(self, degrees: float):
+    def set_left_wrist_flexion(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ):
         """Set the left wrist flexion/extension angle, in degrees.
 
         Writes the OpenSim coordinate ``wrist_flex_l``. Positive values
@@ -1267,10 +1476,15 @@ class _PostureMixin:
         Parameters
         ----------
         degrees : float
-            Target wrist flexion/extension angle, in degrees. The
-            underlying OpenSim coordinate is clamped to ``[-70, 70]``: a
-            value outside that interval is silently pulled back to the
-            nearest bound instead of raising.
+            Target wrist flexion/extension angle, in degrees.
+            The bundled model's initial coordinate range is
+            ``[-70, 70]`` degrees.
+
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. When either limit is supplied, the requested
+            angle must lie within the resulting range.
 
         Raises
         ------
@@ -1279,7 +1493,7 @@ class _PostureMixin:
             explicitly re-locked again after construction (e.g. via
             ``coordinate("wrist_flex_l").set_locked(True)``).
         """
-        self._set_coordinate_degrees('wrist_flex_l', degrees)
+        self._set_coordinate_degrees('wrist_flex_l', degrees, range_min, range_max)
 
     @property
     def left_wrist_flexion(self) -> float:
@@ -1290,10 +1504,11 @@ class _PostureMixin:
         written by :meth:`set_left_wrist_flexion` or any other writer of
         this coordinate). Positive values mean the wrist is flexed
         (palmar flexion); negative values mean it is extended
-        (dorsiflexion). The underlying OpenSim coordinate is clamped to
-        ``[-70, 70]`` degrees, so this is always the value actually read
-        back within that range, even if a caller requested something
-        outside it. This coordinate ships locked in the base .osim file
+        (dorsiflexion).
+        The setter may override the range with ``range_min`` and
+        ``range_max``; this property returns the value currently held by
+        OpenSim.
+        This coordinate ships locked in the base .osim file
         but is force-unlocked for every ``User`` instance (see
         :meth:`set_left_wrist_flexion`).
 
@@ -1304,7 +1519,12 @@ class _PostureMixin:
         """
         return self._coordinate_degrees('wrist_flex_l')
 
-    def set_right_wrist_flexion(self, degrees: float):
+    def set_right_wrist_flexion(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ):
         """Set the right wrist flexion/extension angle, in degrees.
 
         Writes the OpenSim coordinate ``wrist_flex_r``. Positive values
@@ -1325,10 +1545,15 @@ class _PostureMixin:
         Parameters
         ----------
         degrees : float
-            Target wrist flexion/extension angle, in degrees. The
-            underlying OpenSim coordinate is clamped to ``[-70, 70]``: a
-            value outside that interval is silently pulled back to the
-            nearest bound instead of raising.
+            Target wrist flexion/extension angle, in degrees.
+            The bundled model's initial coordinate range is
+            ``[-70, 70]`` degrees.
+
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. When either limit is supplied, the requested
+            angle must lie within the resulting range.
 
         Raises
         ------
@@ -1337,7 +1562,7 @@ class _PostureMixin:
             explicitly re-locked again after construction (e.g. via
             ``coordinate("wrist_flex_r").set_locked(True)``).
         """
-        self._set_coordinate_degrees('wrist_flex_r', degrees)
+        self._set_coordinate_degrees('wrist_flex_r', degrees, range_min, range_max)
 
     @property
     def right_wrist_flexion(self) -> float:
@@ -1348,10 +1573,11 @@ class _PostureMixin:
         written by :meth:`set_right_wrist_flexion` or any other writer of
         this coordinate). Positive values mean the wrist is flexed
         (palmar flexion); negative values mean it is extended
-        (dorsiflexion). The underlying OpenSim coordinate is clamped to
-        ``[-70, 70]`` degrees, so this is always the value actually read
-        back within that range, even if a caller requested something
-        outside it. This coordinate ships locked in the base .osim file
+        (dorsiflexion).
+        The setter may override the range with ``range_min`` and
+        ``range_max``; this property returns the value currently held by
+        OpenSim.
+        This coordinate ships locked in the base .osim file
         but is force-unlocked for every ``User`` instance (see
         :meth:`set_right_wrist_flexion`).
 
@@ -1362,18 +1588,19 @@ class _PostureMixin:
         """
         return self._coordinate_degrees('wrist_flex_r')
 
-    def set_left_wrist_deviation(self, degrees: float):
+    def set_left_wrist_deviation(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ):
         """Set the left wrist radial/ulnar deviation angle, in degrees.
 
         Writes the OpenSim coordinate ``wrist_dev_l``, which deviates the
-        hand sideways relative to the forearm. Neither the coordinate's
-        name nor its range reliably pins down a sign here: the range is
-        asymmetric in the bundled model (``[-25, 35]`` degrees), but
-        nothing in this package's code, README, or tests states which
-        direction (radial, toward the thumb, vs. ulnar, toward the little
-        finger) is positive. Treat the sign as unverified and check the
-        base Rajagopal-Lai-Uhlrich model documentation directly if the
-        direction matters for your use case.
+        hand sideways relative to the forearm. Positive values produce
+        ulnar deviation (toward the little finger); negative values
+        produce radial deviation (toward the thumb), as verified from the
+        hand-frame motion in the bundled model.
 
         In the bundled .osim file this coordinate ships locked
         (``<locked>true</locked>``); it accepts values here regardless,
@@ -1388,10 +1615,15 @@ class _PostureMixin:
         Parameters
         ----------
         degrees : float
-            Target wrist deviation angle, in degrees. The underlying
-            OpenSim coordinate is clamped to ``[-25, 35]``: a value
-            outside that interval is silently pulled back to the nearest
-            bound instead of raising.
+            Target wrist deviation angle, in degrees.
+            The bundled model's initial coordinate range is
+            ``[-25, 35]`` degrees.
+
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. When either limit is supplied, the requested
+            angle must lie within the resulting range.
 
         Raises
         ------
@@ -1400,7 +1632,7 @@ class _PostureMixin:
             explicitly re-locked again after construction (e.g. via
             ``coordinate("wrist_dev_l").set_locked(True)``).
         """
-        self._set_coordinate_degrees('wrist_dev_l', degrees)
+        self._set_coordinate_degrees('wrist_dev_l', degrees, range_min, range_max)
 
     @property
     def left_wrist_deviation(self) -> float:
@@ -1409,13 +1641,13 @@ class _PostureMixin:
         Reads the OpenSim coordinate ``wrist_dev_l`` (raw state read, no
         :meth:`update_state` needed: it reflects the exact value last
         written by :meth:`set_left_wrist_deviation` or any other writer of
-        this coordinate). This deviates the hand sideways relative to the
-        forearm; whether positive is radial or ulnar deviation is not
-        pinned down by this package's code, README, or tests (see
-        :meth:`set_left_wrist_deviation`). The underlying OpenSim
-        coordinate is clamped to ``[-25, 35]`` degrees, so this is always
-        the value actually read back within that range, even if a caller
-        requested something outside it. This coordinate ships locked in
+        this coordinate). Positive values produce ulnar deviation (toward
+        the little finger); negative values produce radial deviation
+        (toward the thumb).
+        The setter may override the range with ``range_min`` and
+        ``range_max``; this property returns the value currently held by
+        OpenSim.
+        This coordinate ships locked in
         the base .osim file but is force-unlocked for every ``User``
         instance.
 
@@ -1426,18 +1658,19 @@ class _PostureMixin:
         """
         return self._coordinate_degrees('wrist_dev_l')
 
-    def set_right_wrist_deviation(self, degrees: float):
+    def set_right_wrist_deviation(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ):
         """Set the right wrist radial/ulnar deviation angle, in degrees.
 
         Writes the OpenSim coordinate ``wrist_dev_r``, which deviates the
-        hand sideways relative to the forearm. Neither the coordinate's
-        name nor its range reliably pins down a sign here: the range is
-        asymmetric in the bundled model (``[-25, 35]`` degrees), but
-        nothing in this package's code, README, or tests states which
-        direction (radial, toward the thumb, vs. ulnar, toward the little
-        finger) is positive. Treat the sign as unverified and check the
-        base Rajagopal-Lai-Uhlrich model documentation directly if the
-        direction matters for your use case.
+        hand sideways relative to the forearm. Positive values produce
+        ulnar deviation (toward the little finger); negative values
+        produce radial deviation (toward the thumb), as verified from the
+        hand-frame motion in the bundled model.
 
         In the bundled .osim file this coordinate ships locked
         (``<locked>true</locked>``); it accepts values here regardless,
@@ -1452,10 +1685,15 @@ class _PostureMixin:
         Parameters
         ----------
         degrees : float
-            Target wrist deviation angle, in degrees. The underlying
-            OpenSim coordinate is clamped to ``[-25, 35]``: a value
-            outside that interval is silently pulled back to the nearest
-            bound instead of raising.
+            Target wrist deviation angle, in degrees.
+            The bundled model's initial coordinate range is
+            ``[-25, 35]`` degrees.
+
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. When either limit is supplied, the requested
+            angle must lie within the resulting range.
 
         Raises
         ------
@@ -1464,7 +1702,7 @@ class _PostureMixin:
             explicitly re-locked again after construction (e.g. via
             ``coordinate("wrist_dev_r").set_locked(True)``).
         """
-        self._set_coordinate_degrees('wrist_dev_r', degrees)
+        self._set_coordinate_degrees('wrist_dev_r', degrees, range_min, range_max)
 
     @property
     def right_wrist_deviation(self) -> float:
@@ -1473,13 +1711,13 @@ class _PostureMixin:
         Reads the OpenSim coordinate ``wrist_dev_r`` (raw state read, no
         :meth:`update_state` needed: it reflects the exact value last
         written by :meth:`set_right_wrist_deviation` or any other writer
-        of this coordinate). This deviates the hand sideways relative to
-        the forearm; whether positive is radial or ulnar deviation is not
-        pinned down by this package's code, README, or tests (see
-        :meth:`set_right_wrist_deviation`). The underlying OpenSim
-        coordinate is clamped to ``[-25, 35]`` degrees, so this is always
-        the value actually read back within that range, even if a caller
-        requested something outside it. This coordinate ships locked in
+        of this coordinate). Positive values produce ulnar deviation
+        (toward the little finger); negative values produce radial
+        deviation (toward the thumb).
+        The setter may override the range with ``range_min`` and
+        ``range_max``; this property returns the value currently held by
+        OpenSim.
+        This coordinate ships locked in
         the base .osim file but is force-unlocked for every ``User``
         instance.
 
@@ -1490,12 +1728,18 @@ class _PostureMixin:
         """
         return self._coordinate_degrees('wrist_dev_r')
 
-    def set_left_forearm_pronation(self, degrees: float):
+    def set_left_forearm_pronation(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ):
         """Set the left forearm pronation/supination angle, in degrees.
 
         Writes the OpenSim coordinate ``pro_sup_l``. Positive values
-        pronate the forearm (palm turns to face backward/downward); the
-        coordinate's range starts exactly at 0 degrees and only goes
+        pronate the forearm (palm turns to face backward/downward);
+        negative values supinate it (palm turns toward the reference
+        posture). The coordinate's range starts exactly at 0 degrees and only goes
         positive (up to approximately 120 degrees), consistent with 0
         being the fully supinated reference posture and positive values
         moving toward pronation -- per the coordinate's own name.
@@ -1507,11 +1751,15 @@ class _PostureMixin:
         Parameters
         ----------
         degrees : float
-            Target forearm pronation/supination angle, in degrees. The
-            underlying OpenSim coordinate is clamped to approximately
-            ``[0, 119.75]`` (stored as ``2.09`` radians): a value outside
-            that interval is silently pulled back to the nearest bound
-            instead of raising.
+            Target forearm pronation/supination angle, in degrees.
+            The bundled model's initial coordinate range is
+            approximately ``[0, 119.75]`` degrees.
+
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. When either limit is supplied, the requested
+            angle must lie within the resulting range.
 
         Raises
         ------
@@ -1521,7 +1769,7 @@ class _PostureMixin:
             force-unlocked when the model is built -- see
             ``User._unlock_coordinates``).
         """
-        self._set_coordinate_degrees('pro_sup_l', degrees)
+        self._set_coordinate_degrees('pro_sup_l', degrees, range_min, range_max)
 
     @property
     def left_forearm_pronation(self) -> float:
@@ -1531,12 +1779,12 @@ class _PostureMixin:
         :meth:`update_state` needed: it reflects the exact value last
         written by :meth:`set_left_forearm_pronation` or any other writer
         of this coordinate). Positive values mean the forearm is pronated
-        (palm facing backward/downward); the coordinate cannot go below 0
+        (palm facing backward/downward); negative values move it toward
+        supination. The coordinate cannot go below 0
         degrees (the fully supinated reference posture) in this model.
-        The underlying OpenSim coordinate is clamped to approximately
-        ``[0, 119.75]`` degrees, so this is always the value actually read
-        back within that range, even if a caller requested something
-        outside it.
+        The setter may override the range with ``range_min`` and
+        ``range_max``; this property returns the value currently held by
+        OpenSim.
 
         Returns
         -------
@@ -1545,12 +1793,18 @@ class _PostureMixin:
         """
         return self._coordinate_degrees('pro_sup_l')
 
-    def set_right_forearm_pronation(self, degrees: float):
+    def set_right_forearm_pronation(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ):
         """Set the right forearm pronation/supination angle, in degrees.
 
         Writes the OpenSim coordinate ``pro_sup_r``. Positive values
-        pronate the forearm (palm turns to face backward/downward); the
-        coordinate's range starts exactly at 0 degrees and only goes
+        pronate the forearm (palm turns to face backward/downward);
+        negative values supinate it (palm turns toward the reference
+        posture). The coordinate's range starts exactly at 0 degrees and only goes
         positive (up to approximately 120 degrees), consistent with 0
         being the fully supinated reference posture and positive values
         moving toward pronation -- per the coordinate's own name.
@@ -1562,11 +1816,15 @@ class _PostureMixin:
         Parameters
         ----------
         degrees : float
-            Target forearm pronation/supination angle, in degrees. The
-            underlying OpenSim coordinate is clamped to approximately
-            ``[0, 119.75]`` (stored as ``2.09`` radians): a value outside
-            that interval is silently pulled back to the nearest bound
-            instead of raising.
+            Target forearm pronation/supination angle, in degrees.
+            The bundled model's initial coordinate range is
+            approximately ``[0, 119.75]`` degrees.
+
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. When either limit is supplied, the requested
+            angle must lie within the resulting range.
 
         Raises
         ------
@@ -1576,7 +1834,7 @@ class _PostureMixin:
             force-unlocked when the model is built -- see
             ``User._unlock_coordinates``).
         """
-        self._set_coordinate_degrees('pro_sup_r', degrees)
+        self._set_coordinate_degrees('pro_sup_r', degrees, range_min, range_max)
 
     @property
     def right_forearm_pronation(self) -> float:
@@ -1586,12 +1844,12 @@ class _PostureMixin:
         :meth:`update_state` needed: it reflects the exact value last
         written by :meth:`set_right_forearm_pronation` or any other writer
         of this coordinate). Positive values mean the forearm is pronated
-        (palm facing backward/downward); the coordinate cannot go below 0
+        (palm facing backward/downward); negative values move it toward
+        supination. The coordinate cannot go below 0
         degrees (the fully supinated reference posture) in this model.
-        The underlying OpenSim coordinate is clamped to approximately
-        ``[0, 119.75]`` degrees, so this is always the value actually read
-        back within that range, even if a caller requested something
-        outside it.
+        The setter may override the range with ``range_min`` and
+        ``range_max``; this property returns the value currently held by
+        OpenSim.
 
         Returns
         -------
@@ -1600,7 +1858,12 @@ class _PostureMixin:
         """
         return self._coordinate_degrees('pro_sup_r')
 
-    def set_lumbar_extension(self, degrees: float):
+    def set_lumbar_extension(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ):
         """Set the lumbar extension/flexion angle, in degrees.
 
         Writes the OpenSim coordinate ``lumbar_extension``. This is the
@@ -1617,10 +1880,15 @@ class _PostureMixin:
         Parameters
         ----------
         degrees : float
-            Target lumbar extension/flexion angle, in degrees. The
-            underlying OpenSim coordinate is clamped to ``[-90, 90]``: a
-            value outside that interval is silently pulled back to the
-            nearest bound instead of raising.
+            Target lumbar extension/flexion angle, in degrees.
+            The bundled model's initial coordinate range is
+            ``[-90, 90]`` degrees.
+
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. When either limit is supplied, the requested
+            angle must lie within the resulting range.
 
         Raises
         ------
@@ -1630,7 +1898,7 @@ class _PostureMixin:
             force-unlocked when the model is built -- see
             ``User._unlock_coordinates``).
         """
-        self._set_coordinate_degrees('lumbar_extension', degrees)
+        self._set_coordinate_degrees('lumbar_extension', degrees, range_min, range_max)
 
     @property
     def lumbar_extension(self) -> float:
@@ -1642,10 +1910,10 @@ class _PostureMixin:
         this coordinate). There is no left/right pair: the trunk has a
         single lumbar joint in this model. Positive values mean the trunk
         is extended (leaning backward); negative values mean it is flexed
-        (leaning forward). The underlying OpenSim coordinate is clamped to
-        ``[-90, 90]`` degrees, so this is always the value actually read
-        back within that range, even if a caller requested something
-        outside it.
+        (leaning forward).
+        The setter may override the range with ``range_min`` and
+        ``range_max``; this property returns the value currently held by
+        OpenSim.
 
         Returns
         -------
@@ -1654,16 +1922,19 @@ class _PostureMixin:
         """
         return self._coordinate_degrees('lumbar_extension')
 
-    def set_lumbar_bending(self, degrees: float):
+    def set_lumbar_bending(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ):
         """Set the lumbar lateral bending angle, in degrees.
 
         Writes the OpenSim coordinate ``lumbar_bending`` (no left/right
-        pair: the trunk has a single lumbar joint in this model). This
-        bends the trunk sideways; the model does not label which sign
-        bends toward the left vs. the right, and the range is symmetric
-        (``[-90, 90]`` degrees) so it gives no hint either. Treat the sign
-        as unverified and check the base Rajagopal-Lai-Uhlrich model
-        documentation directly if the direction matters for your use case.
+        pair: the trunk has a single lumbar joint in this model). Positive
+        values bend the trunk toward the user's right; negative values
+        bend it toward the left, as verified from the torso-frame motion
+        in the bundled model.
 
         Like every posture setter, this only writes the raw coordinate
         value: call :meth:`update_state` before reading anything derived
@@ -1672,10 +1943,15 @@ class _PostureMixin:
         Parameters
         ----------
         degrees : float
-            Target lumbar lateral bending angle, in degrees. The
-            underlying OpenSim coordinate is clamped to ``[-90, 90]``: a
-            value outside that interval is silently pulled back to the
-            nearest bound instead of raising.
+            Target lumbar lateral bending angle, in degrees.
+            The bundled model's initial coordinate range is
+            ``[-90, 90]`` degrees.
+
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. When either limit is supplied, the requested
+            angle must lie within the resulting range.
 
         Raises
         ------
@@ -1685,7 +1961,7 @@ class _PostureMixin:
             force-unlocked when the model is built -- see
             ``User._unlock_coordinates``).
         """
-        self._set_coordinate_degrees('lumbar_bending', degrees)
+        self._set_coordinate_degrees('lumbar_bending', degrees, range_min, range_max)
 
     @property
     def lumbar_bending(self) -> float:
@@ -1695,12 +1971,11 @@ class _PostureMixin:
         no :meth:`update_state` needed: it reflects the exact value last
         written by :meth:`set_lumbar_bending` or any other writer of this
         coordinate). There is no left/right pair: the trunk has a single
-        lumbar joint in this model. Whether positive bends the trunk
-        toward the left or the right is not pinned down by this package's
-        code, README, or tests (see :meth:`set_lumbar_bending`). The
-        underlying OpenSim coordinate is clamped to ``[-90, 90]`` degrees,
-        so this is always the value actually read back within that range,
-        even if a caller requested something outside it.
+        lumbar joint in this model. Positive values bend the trunk toward
+        the user's right; negative values bend it toward the left.
+        The setter may override the range with ``range_min`` and
+        ``range_max``; this property returns the value currently held by
+        OpenSim.
 
         Returns
         -------
@@ -1709,17 +1984,19 @@ class _PostureMixin:
         """
         return self._coordinate_degrees('lumbar_bending')
 
-    def set_lumbar_rotation(self, degrees: float):
+    def set_lumbar_rotation(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ):
         """Set the lumbar (axial) rotation angle, in degrees.
 
         Writes the OpenSim coordinate ``lumbar_rotation`` (no left/right
         pair: the trunk has a single lumbar joint in this model), rotating
-        the trunk about its own long axis. The model does not label which
-        sign rotates the trunk toward the left vs. the right, and the
-        range is symmetric (``[-90, 90]`` degrees) so it gives no hint
-        either. Treat the sign as unverified and check the base
-        Rajagopal-Lai-Uhlrich model documentation directly if the
-        direction matters for your use case.
+        the trunk about its own long axis. Positive values turn the trunk
+        toward the user's right; negative values turn it left, as verified
+        from the torso-frame motion in the bundled model.
 
         Like every posture setter, this only writes the raw coordinate
         value: call :meth:`update_state` before reading anything derived
@@ -1728,10 +2005,15 @@ class _PostureMixin:
         Parameters
         ----------
         degrees : float
-            Target lumbar rotation angle, in degrees. The underlying
-            OpenSim coordinate is clamped to ``[-90, 90]``: a value
-            outside that interval is silently pulled back to the nearest
-            bound instead of raising.
+            Target lumbar rotation angle, in degrees.
+            The bundled model's initial coordinate range is
+            ``[-90, 90]`` degrees.
+
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. When either limit is supplied, the requested
+            angle must lie within the resulting range.
 
         Raises
         ------
@@ -1741,7 +2023,7 @@ class _PostureMixin:
             force-unlocked when the model is built -- see
             ``User._unlock_coordinates``).
         """
-        self._set_coordinate_degrees('lumbar_rotation', degrees)
+        self._set_coordinate_degrees('lumbar_rotation', degrees, range_min, range_max)
 
     @property
     def lumbar_rotation(self) -> float:
@@ -1751,13 +2033,11 @@ class _PostureMixin:
         no :meth:`update_state` needed: it reflects the exact value last
         written by :meth:`set_lumbar_rotation` or any other writer of this
         coordinate). There is no left/right pair: the trunk has a single
-        lumbar joint in this model. This is the trunk's rotation about its
-        own long axis; whether positive rotates it toward the left or the
-        right is not pinned down by this package's code, README, or tests
-        (see :meth:`set_lumbar_rotation`). The underlying OpenSim
-        coordinate is clamped to ``[-90, 90]`` degrees, so this is always
-        the value actually read back within that range, even if a caller
-        requested something outside it.
+        lumbar joint in this model. Positive values turn the trunk toward
+        the user's right; negative values turn it left.
+        The setter may override the range with ``range_min`` and
+        ``range_max``; this property returns the value currently held by
+        OpenSim.
 
         Returns
         -------

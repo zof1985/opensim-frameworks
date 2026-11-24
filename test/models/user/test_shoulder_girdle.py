@@ -307,6 +307,32 @@ def test_shoulder_map_rejects_invalid_inputs_before_building(user, monkeypatch):
         user.set_shoulder_girdle("r", np.pi, 0.0)
 
 
+def test_shoulder_angle_setters_preserve_the_other_angle_and_use_the_map(
+    user, monkeypatch
+):
+    coordinates = user.getCoordinateSet()
+    coordinates.get("sc_protraction_r").setValue(user.state, np.radians(5.0), False)
+    coordinates.get("sc_elevation_r").setValue(user.state, np.radians(8.0), False)
+    calls = []
+
+    def capture(side, protraction, elevation, *, check_contact=True):
+        calls.append((side, protraction, elevation, check_contact))
+
+    monkeypatch.setattr(user, "set_shoulder_girdle", capture)
+
+    user.set_shoulder_elevation("r", 12.0, check_contact=False)
+    user.set_shoulder_protraction("l", -7.0)
+
+    assert calls[0][0] == "r"
+    assert calls[0][1:3] == pytest.approx((np.radians(5.0), np.radians(12.0)))
+    assert calls[0][3] is False
+    assert calls[1][0] == "l"
+    assert calls[1][1:3] == pytest.approx(
+        (np.radians(-7.0), coordinates.get("sc_elevation_l").getValue(user.state))
+    )
+    assert calls[1][3] is True
+
+
 def test_shoulder_map_warns_but_remains_usable_when_all_candidates_fail(user, monkeypatch):
     from types import SimpleNamespace
 

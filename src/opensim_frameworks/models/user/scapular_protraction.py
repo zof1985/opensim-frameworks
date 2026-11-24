@@ -357,15 +357,28 @@ class _ScapularProtractionMixin:
         built = self._protraction_map(side)
         return built.low, built.high
 
-    def _set_scapular_protraction(self, side: str, degrees: float) -> None:
+    def _set_scapular_protraction(
+        self,
+        side: str,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ) -> None:
         if not math.isfinite(degrees):
             raise ValueError("coordinate angle must be finite")
         others = self.scapular_girdle_from_protraction(side, degrees)
-        self._set_coordinate_degrees(f"sc_protraction_{side}", degrees)
+        self._set_coordinate_degrees(
+            f"sc_protraction_{side}", degrees, range_min, range_max
+        )
         for name, value in zip(_GIRDLE_NAMES[1:], others):
             self._set_coordinate_degrees(f"{name}_{side}", float(value))
 
-    def set_right_scapular_protraction(self, degrees: float) -> None:
+    def set_right_scapular_protraction(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ) -> None:
         """Set the protraction of the right scapula, in degrees.
 
         Writes the five coordinates of the right shoulder girdle: the
@@ -383,15 +396,26 @@ class _ScapularProtractionMixin:
             negative retracts. It must be within
             :attr:`right_scapular_protraction_range`.
 
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. The requested angle must lie within the resulting
+            range.
+
         Raises
         ------
         ValueError
             If `degrees` is not finite or outside the admissible interval (no
             clamping).
         """
-        self._set_scapular_protraction("r", degrees)
+        self._set_scapular_protraction("r", degrees, range_min, range_max)
 
-    def set_left_scapular_protraction(self, degrees: float) -> None:
+    def set_left_scapular_protraction(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ) -> None:
         """Set the protraction of the left scapula, in degrees.
 
         See :meth:`set_right_scapular_protraction`; the left side has its own
@@ -403,12 +427,18 @@ class _ScapularProtractionMixin:
             Protraction in degrees, within
             :attr:`left_scapular_protraction_range`.
 
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. The requested angle must lie within the resulting
+            range.
+
         Raises
         ------
         ValueError
             If `degrees` is not finite or outside the admissible interval.
         """
-        self._set_scapular_protraction("l", degrees)
+        self._set_scapular_protraction("l", degrees, range_min, range_max)
 
     @property
     def right_scapular_protraction(self) -> float:

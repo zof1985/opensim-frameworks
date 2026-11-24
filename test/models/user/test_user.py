@@ -616,6 +616,42 @@ def test_every_posture_setter_writes_its_target_coordinate(
 
 
 @requires_opensim
+def test_all_posture_setters_accept_exact_degree_ranges():
+    user = make_user(gender="F")
+
+    for setter_name, coordinate_name in POSTURE_SETTERS:
+        getattr(user, setter_name)(12.0, range_min=-10.0, range_max=35.0)
+        coordinate = user.getCoordinateSet().get(coordinate_name)
+        assert coordinate.getRangeMin() == pytest.approx(np.deg2rad(-10.0))
+        assert coordinate.getRangeMax() == pytest.approx(np.deg2rad(35.0))
+        assert coordinate.getValue(user.state) == pytest.approx(np.deg2rad(12.0))
+
+
+@requires_opensim
+def test_posture_range_updates_are_validated_without_changing_the_coordinate():
+    user = make_user(gender="M")
+    coordinate = user.getCoordinateSet().get("hip_flexion_l")
+    before = (
+        coordinate.getValue(user.state),
+        coordinate.getRangeMin(),
+        coordinate.getRangeMax(),
+    )
+
+    with pytest.raises(ValueError, match="within the requested range"):
+        user.set_left_hip_flexionextension(12.0, range_min=-5.0, range_max=10.0)
+    with pytest.raises(ValueError, match="range_min must not exceed range_max"):
+        user.set_left_hip_flexionextension(12.0, range_min=10.0, range_max=-5.0)
+
+    assert coordinate.getValue(user.state) == pytest.approx(before[0])
+    assert coordinate.getRangeMin() == pytest.approx(before[1])
+    assert coordinate.getRangeMax() == pytest.approx(before[2])
+
+    user.set_left_hip_flexionextension(12.0, range_min=-5.0)
+    assert coordinate.getRangeMin() == pytest.approx(np.deg2rad(-5.0))
+    assert coordinate.getRangeMax() == pytest.approx(before[2])
+
+
+@requires_opensim
 def test_posture_setters_do_not_cross_talk_between_sides():
     user = make_user(gender="M")
 
@@ -696,6 +732,31 @@ def test_body_rotations_are_absolute_independent_and_reject_nonfinite_values():
     assert (user.body_tilt, user.body_roll, user.body_yaw) == pytest.approx(
         (10.0, -20.0, 180.0)
     )
+
+
+@requires_opensim
+def test_trunk_rotation_alias_changes_lumbar_rotation_without_moving_pelvis():
+    user = make_user(gender="M")
+    coordinates = user.getCoordinateSet()
+    pelvis_values = tuple(
+        coordinates.get(name).getValue(user.state)
+        for name in ("pelvis_tx", "pelvis_ty", "pelvis_tz", "pelvis_tilt", "pelvis_list", "pelvis_rotation")
+    )
+
+    user.set_trunk_rotation(25.0, range_min=-45.0, range_max=45.0)
+
+    assert user.trunk_rotation == pytest.approx(25.0)
+    assert user.lumbar_rotation == pytest.approx(25.0)
+    assert coordinates.get("lumbar_rotation").getRangeMin() == pytest.approx(
+        np.deg2rad(-45.0)
+    )
+    assert coordinates.get("lumbar_rotation").getRangeMax() == pytest.approx(
+        np.deg2rad(45.0)
+    )
+    assert tuple(
+        coordinates.get(name).getValue(user.state)
+        for name in ("pelvis_tx", "pelvis_ty", "pelvis_tz", "pelvis_tilt", "pelvis_list", "pelvis_rotation")
+    ) == pytest.approx(pelvis_values)
 
 
 def test_posture_properties_mirror_every_posture_setter():

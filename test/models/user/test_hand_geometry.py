@@ -46,6 +46,37 @@ def test_finger_flexion_maxima_are_the_documented_defaults(side, finger):
         assert math.degrees(coordinate.getRangeMax()) == pytest.approx(maximum)
 
 
+def test_specific_finger_joint_setters_and_getters_cover_all_coordinates():
+    user = User("M", height_cm=175)
+    coordinates = [
+        (finger, joint, motion)
+        for finger in ("index", "middle", "ring", "little")
+        for joint, motion in (
+            ("mcp", "flexion"),
+            ("mcp", "abduction"),
+            ("pip", "flexion"),
+            ("dip", "flexion"),
+        )
+    ] + [
+        ("thumb", "cmc", "opposition"),
+        ("thumb", "cmc", "flexion"),
+        ("thumb", "mcp", "flexion"),
+        ("thumb", "ip", "flexion"),
+    ]
+
+    for side in ("left", "right"):
+        for finger, joint, motion in coordinates:
+            user.set_finger_coordinate_locked(side, finger, joint, motion, False)
+            setter = getattr(user, f"set_{side}_{finger}_{joint}_{motion}")
+            getter_name = f"{side}_{finger}_{joint}_{motion}"
+            setter(10.0, range_min=-10.0, range_max=30.0)
+
+            coordinate = user.finger_coordinate(side, finger, joint, motion)
+            assert getattr(user, getter_name) == pytest.approx(10.0)
+            assert math.degrees(coordinate.getRangeMin()) == pytest.approx(-10.0)
+            assert math.degrees(coordinate.getRangeMax()) == pytest.approx(30.0)
+
+
 def _finger_mesh_names(side):
     """Return the moving finger mesh filenames for one side.
 

@@ -34,6 +34,7 @@ from ...utils.opensim import (
     register_geometry_search_path,
 )
 from .data import AnthropometricReference, DEFAULT_DATASET, resolve_reference
+from .finger_posture_generated import _FingerPostureMixin
 from .fingers import _FingerMixin
 from .grasp import _GraspMixin
 from .hand import MOVING_HAND_SEGMENTS, add_articulated_hands
@@ -100,6 +101,7 @@ class User(
     _LandmarkMixin,
     _SegmentMeasurementMixin,
     _FingerMixin,
+    _FingerPostureMixin,
     _GraspMixin,
     _ScapulothoracicMixin,
     _ScapularProtractionMixin,
@@ -872,84 +874,199 @@ class User(
             if source.resolve() != destination.resolve():
                 shutil.copy2(source, destination)
 
-    def set_body_tilt(self, degrees: float) -> None:
+    def set_body_tilt(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ) -> None:
         """Set the whole-body tilt through the pelvis root joint.
 
         Sets the absolute ``pelvis_tilt`` coordinate about the z axis, in
-        degrees. The pelvis origin stays fixed and joint posture is unchanged.
-        Call :meth:`update_state` before using derived quantities.
+        degrees. Positive values tilt the trunk backward; negative values
+        tilt it forward. The pelvis origin stays fixed and joint posture is
+        unchanged. Call :meth:`update_state` before using derived quantities.
 
         Parameters
         ----------
         degrees : float
-            Finite angle in degrees, positive about the OpenSim z axis.
+            Finite angle in degrees: positive tilts backward, negative
+            forward.
+
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. The requested angle must lie within the resulting
+            range.
 
         Raises
         ------
         ValueError
             If ``degrees`` is not finite.
         """
-        self._set_coordinate_degrees("pelvis_tilt", degrees)
+        self._set_coordinate_degrees("pelvis_tilt", degrees, range_min, range_max)
 
     @property
     def body_tilt(self) -> float:
-        """Return the raw pelvis tilt coordinate in degrees."""
+        """Return the raw pelvis tilt coordinate in degrees.
+
+        Positive values tilt the trunk backward; negative values tilt it
+        forward.
+        """
         return self._coordinate_degrees("pelvis_tilt")
 
-    def set_body_roll(self, degrees: float) -> None:
+    def set_body_roll(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ) -> None:
         """Set the whole-body roll through the pelvis root joint.
 
         Sets the absolute ``pelvis_list`` coordinate about the x axis, in
-        degrees. The pelvis origin stays fixed and joint posture is unchanged.
-        Call :meth:`update_state` before using derived quantities.
+        degrees. Positive values roll the trunk toward the user's right;
+        negative values roll it left. The pelvis origin stays fixed and joint
+        posture is unchanged. Call :meth:`update_state` before using derived
+        quantities.
 
         Parameters
         ----------
         degrees : float
-            Finite angle in degrees, positive about the OpenSim x axis.
+            Finite angle in degrees: positive rolls right, negative left.
+
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. The requested angle must lie within the resulting
+            range.
 
         Raises
         ------
         ValueError
             If ``degrees`` is not finite.
         """
-        self._set_coordinate_degrees("pelvis_list", degrees)
+        self._set_coordinate_degrees("pelvis_list", degrees, range_min, range_max)
 
     @property
     def body_roll(self) -> float:
-        """Return the raw pelvis list coordinate in degrees."""
+        """Return the raw pelvis list coordinate in degrees.
+
+        Positive values roll the trunk right; negative values roll it left.
+        """
         return self._coordinate_degrees("pelvis_list")
 
-    def set_body_yaw(self, degrees: float) -> None:
+    def set_body_yaw(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ) -> None:
         """Set the whole-body yaw through the pelvis root joint.
 
         Sets the absolute ``pelvis_rotation`` coordinate about the y axis, in
-        degrees. The pelvis origin stays fixed and joint posture is unchanged.
-        Call :meth:`update_state` before using derived quantities.
+        degrees. Positive values turn the body toward the user's left;
+        negative values turn it right. The pelvis origin stays fixed and joint
+        posture is unchanged. Call :meth:`update_state` before using derived
+        quantities.
 
         Parameters
         ----------
         degrees : float
-            Finite angle in degrees, positive about the OpenSim y axis.
+            Finite angle in degrees: positive turns left, negative right.
+
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace
+            the current corresponding bounds; omitted limits remain
+            unchanged. The requested angle must lie within the resulting
+            range.
 
         Raises
         ------
         ValueError
             If ``degrees`` is not finite.
         """
-        self._set_coordinate_degrees("pelvis_rotation", degrees)
+        self._set_coordinate_degrees("pelvis_rotation", degrees, range_min, range_max)
 
     @property
     def body_yaw(self) -> float:
-        """Return the raw pelvis rotation coordinate in degrees."""
+        """Return the raw pelvis rotation coordinate in degrees.
+
+        Positive values turn the body left; negative values turn it right.
+        """
         return self._coordinate_degrees("pelvis_rotation")
 
-    def _set_coordinate_degrees(self, name: str, degrees: float) -> None:
+    def set_trunk_rotation(
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ) -> None:
+        """Set axial trunk rotation relative to the pelvis, in degrees.
+
+        This is an alias for the lumbar rotation coordinate. It rotates the
+        trunk without changing the pelvis pose. Positive values turn right;
+        negative values turn left. Call :meth:`update_state` before using
+        derived quantities.
+
+        Parameters
+        ----------
+        degrees : float
+            Rotation angle in degrees, positive right and negative left.
+        range_min, range_max : float or None, optional
+            Exact coordinate limits in degrees. Supplied limits replace the
+            current corresponding bounds; omitted limits remain unchanged.
+
+        Raises
+        ------
+        ValueError
+            If the angle or either limit is non-finite, or if the angle is
+            outside the resulting range.
+        """
+        self._set_coordinate_degrees(
+            "lumbar_rotation", degrees, range_min, range_max
+        )
+
+    @property
+    def trunk_rotation(self) -> float:
+        """Return trunk rotation relative to the pelvis, in degrees.
+
+        Positive values turn right; negative values turn left.
+        """
+        return self._coordinate_degrees("lumbar_rotation")
+
+    def _set_coordinate_degrees(
+        self,
+        name: str,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+    ) -> None:
         if not math.isfinite(degrees):
             raise ValueError("coordinate angle must be finite")
-        self.getCoordinateSet().get(name).setValue(
-            self.state, math.radians(degrees), False
-        )
+        coordinate = self.getCoordinateSet().get(name)
+        current_min = math.degrees(coordinate.getRangeMin())
+        current_max = math.degrees(coordinate.getRangeMax())
+        target_min = current_min if range_min is None else range_min
+        target_max = current_max if range_max is None else range_max
+        if not math.isfinite(target_min) or not math.isfinite(target_max):
+            raise ValueError("coordinate range limits must be finite")
+        if target_min > target_max:
+            raise ValueError("coordinate range_min must not exceed range_max")
+        if (range_min is not None or range_max is not None) and not (
+            target_min <= degrees <= target_max
+        ):
+            raise ValueError("coordinate angle must be within the requested range")
+        if range_min is not None or range_max is not None:
+            if target_min > current_max:
+                coordinate.setRangeMax(math.radians(target_max))
+                coordinate.setRangeMin(math.radians(target_min))
+            elif target_max < current_min:
+                coordinate.setRangeMin(math.radians(target_min))
+                coordinate.setRangeMax(math.radians(target_max))
+            else:
+                coordinate.setRangeMin(math.radians(target_min))
+                coordinate.setRangeMax(math.radians(target_max))
+        coordinate.setValue(self.state, math.radians(degrees), False)
 
     def extend_coordinate_range(
         self, name: str, minimum: float | None = None, maximum: float | None = None
