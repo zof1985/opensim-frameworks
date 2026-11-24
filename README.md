@@ -275,6 +275,9 @@ The shoulder-girdle convenience setters take angles in degrees:
 `user.set_right_shoulder_protraction(degrees)`. Each preserves the other
 sternoclavicular angle and uses the shoulder map to calculate the remaining
 scapular coordinates, so the scapula follows the requested girdle position.
+Each also accepts optional `range_min` and `range_max` bounds in degrees
+after `degrees`; supplied bounds replace the corresponding current limits,
+and the requested angle must lie within the resulting range.
 Elevation here means raising/lowering the shoulder girdle, not raising the
 humerus at the glenohumeral joint. Positive elevation raises and negative
 depresses; positive protraction moves the shoulder forward and negative

@@ -587,10 +587,18 @@ class _ScapulothoracicMixin:
         )
 
     def _set_shoulder_elevation(
-        self, side: str, degrees: float, *, check_contact: bool = True
+        self,
+        side: str,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+        *,
+        check_contact: bool = True,
     ) -> None:
-        if not math.isfinite(degrees):
-            raise ValueError("shoulder angle must be finite")
+        if range_min is not None or range_max is not None:
+            self._set_coordinate_degrees(
+                f"sc_elevation_{side}", degrees, range_min, range_max
+            )
         coordinates = self.getCoordinateSet()
         protraction = coordinates.get(f"sc_protraction_{side}").getValue(self.state)
         self.set_shoulder_girdle(
@@ -598,7 +606,12 @@ class _ScapulothoracicMixin:
         )
 
     def set_left_shoulder_elevation(
-        self, degrees: float, *, check_contact: bool = True
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+        *,
+        check_contact: bool = True,
     ) -> None:
         """Set left shoulder-girdle elevation and adapt scapular orientation.
 
@@ -610,6 +623,11 @@ class _ScapulothoracicMixin:
         ----------
         degrees : float
             Elevation in degrees, positive upward and negative downward.
+        range_min, range_max : float or None, optional
+            Coordinate bounds in degrees. Supplied bounds replace the
+            corresponding current bounds; omitted bounds remain unchanged.
+            When either bound is supplied, ``degrees`` must lie in the
+            resulting range.
         check_contact : bool, default=True
             Report possible separation or intersection after setting the pose.
 
@@ -618,10 +636,17 @@ class _ScapulothoracicMixin:
         ValueError
             If the angle or requested coordinate range is invalid.
         """
-        self._set_shoulder_elevation("l", degrees, check_contact=check_contact)
+        self._set_shoulder_elevation(
+            "l", degrees, range_min, range_max, check_contact=check_contact
+        )
 
     def set_right_shoulder_elevation(
-        self, degrees: float, *, check_contact: bool = True
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+        *,
+        check_contact: bool = True,
     ) -> None:
         """Set right shoulder-girdle elevation and adapt scapular orientation.
 
@@ -633,6 +658,11 @@ class _ScapulothoracicMixin:
         ----------
         degrees : float
             Elevation in degrees, positive upward and negative downward.
+        range_min, range_max : float or None, optional
+            Coordinate bounds in degrees. Supplied bounds replace the
+            corresponding current bounds; omitted bounds remain unchanged.
+            When either bound is supplied, ``degrees`` must lie in the
+            resulting range.
         check_contact : bool, default=True
             Report possible separation or intersection after setting the pose.
 
@@ -641,13 +671,23 @@ class _ScapulothoracicMixin:
         ValueError
             If the angle or requested coordinate range is invalid.
         """
-        self._set_shoulder_elevation("r", degrees, check_contact=check_contact)
+        self._set_shoulder_elevation(
+            "r", degrees, range_min, range_max, check_contact=check_contact
+        )
 
     def _set_shoulder_protraction(
-        self, side: str, degrees: float, *, check_contact: bool = True
+        self,
+        side: str,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+        *,
+        check_contact: bool = True,
     ) -> None:
-        if not math.isfinite(degrees):
-            raise ValueError("shoulder angle must be finite")
+        if range_min is not None or range_max is not None:
+            self._set_coordinate_degrees(
+                f"sc_protraction_{side}", degrees, range_min, range_max
+            )
         coordinates = self.getCoordinateSet()
         elevation = coordinates.get(f"sc_elevation_{side}").getValue(self.state)
         self.set_shoulder_girdle(
@@ -655,7 +695,12 @@ class _ScapulothoracicMixin:
         )
 
     def set_left_shoulder_protraction(
-        self, degrees: float, *, check_contact: bool = True
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+        *,
+        check_contact: bool = True,
     ) -> None:
         """Set left shoulder-girdle protraction and adapt scapular orientation.
 
@@ -667,6 +712,11 @@ class _ScapulothoracicMixin:
         ----------
         degrees : float
             Protraction in degrees, positive forward and negative backward.
+        range_min, range_max : float or None, optional
+            Coordinate bounds in degrees. Supplied bounds replace the
+            corresponding current bounds; omitted bounds remain unchanged.
+            When either bound is supplied, ``degrees`` must lie in the
+            resulting range.
         check_contact : bool, default=True
             Report possible separation or intersection after setting the pose.
 
@@ -675,10 +725,17 @@ class _ScapulothoracicMixin:
         ValueError
             If the angle or requested coordinate range is invalid.
         """
-        self._set_shoulder_protraction("l", degrees, check_contact=check_contact)
+        self._set_shoulder_protraction(
+            "l", degrees, range_min, range_max, check_contact=check_contact
+        )
 
     def set_right_shoulder_protraction(
-        self, degrees: float, *, check_contact: bool = True
+        self,
+        degrees: float,
+        range_min: float | None = None,
+        range_max: float | None = None,
+        *,
+        check_contact: bool = True,
     ) -> None:
         """Set right shoulder-girdle protraction and adapt scapular orientation.
 
@@ -690,6 +747,11 @@ class _ScapulothoracicMixin:
         ----------
         degrees : float
             Protraction in degrees, positive forward and negative backward.
+        range_min, range_max : float or None, optional
+            Coordinate bounds in degrees. Supplied bounds replace the
+            corresponding current bounds; omitted bounds remain unchanged.
+            When either bound is supplied, ``degrees`` must lie in the
+            resulting range.
         check_contact : bool, default=True
             Report possible separation or intersection after setting the pose.
 
@@ -698,7 +760,9 @@ class _ScapulothoracicMixin:
         ValueError
             If the angle or requested coordinate range is invalid.
         """
-        self._set_shoulder_protraction("r", degrees, check_contact=check_contact)
+        self._set_shoulder_protraction(
+            "r", degrees, range_min, range_max, check_contact=check_contact
+        )
 
     def scapula_contact_report(self, side: str) -> dict[str, float | bool]:
         """Measure scapula-to-rib distance and scapula-thorax mesh crossing.

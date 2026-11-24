@@ -313,16 +313,25 @@ def test_shoulder_angle_setters_preserve_the_other_angle_and_use_the_map(
     coordinates = user.getCoordinateSet()
     coordinates.get("sc_protraction_r").setValue(user.state, np.radians(5.0), False)
     coordinates.get("sc_elevation_r").setValue(user.state, np.radians(8.0), False)
+    left_protraction = coordinates.get("sc_protraction_l").getValue(user.state)
     calls = []
 
     def capture(side, protraction, elevation, *, check_contact=True):
         calls.append((side, protraction, elevation, check_contact))
+        coordinates.get(f"sc_protraction_{side}").setValue(
+            user.state, protraction, False
+        )
+        coordinates.get(f"sc_elevation_{side}").setValue(
+            user.state, elevation, False
+        )
 
     monkeypatch.setattr(user, "set_shoulder_girdle", capture)
 
-    user.set_right_shoulder_elevation(12.0, check_contact=False)
+    user.set_right_shoulder_elevation(
+        12.0, -5.0, 20.0, check_contact=False
+    )
     user.set_left_shoulder_elevation(-3.0)
-    user.set_right_shoulder_protraction(3.0)
+    user.set_right_shoulder_protraction(20.0, -10.0, 30.0)
     user.set_left_shoulder_protraction(-7.0)
 
     assert calls[0][0] == "r"
@@ -330,22 +339,31 @@ def test_shoulder_angle_setters_preserve_the_other_angle_and_use_the_map(
     assert calls[0][3] is False
     assert calls[1][0] == "l"
     assert calls[1][1:3] == pytest.approx(
-        (
-            coordinates.get("sc_protraction_l").getValue(user.state),
-            np.radians(-3.0),
-        )
+        (left_protraction, np.radians(-3.0))
     )
     assert calls[1][3] is True
     assert calls[2][0] == "r"
     assert calls[2][1:3] == pytest.approx(
-        (np.radians(3.0), np.radians(8.0))
+        (np.radians(20.0), np.radians(12.0))
     )
     assert calls[2][3] is True
     assert calls[3][0] == "l"
     assert calls[3][1:3] == pytest.approx(
-        (np.radians(-7.0), coordinates.get("sc_elevation_l").getValue(user.state))
+        (np.radians(-7.0), np.radians(-3.0))
     )
     assert calls[3][3] is True
+    assert coordinates.get("sc_elevation_r").getRangeMin() == pytest.approx(
+        np.radians(-5.0)
+    )
+    assert coordinates.get("sc_elevation_r").getRangeMax() == pytest.approx(
+        np.radians(20.0)
+    )
+    assert coordinates.get("sc_protraction_r").getRangeMin() == pytest.approx(
+        np.radians(-10.0)
+    )
+    assert coordinates.get("sc_protraction_r").getRangeMax() == pytest.approx(
+        np.radians(30.0)
+    )
 
 
 def test_shoulder_map_warns_but_remains_usable_when_all_candidates_fail(user, monkeypatch):
