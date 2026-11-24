@@ -675,6 +675,16 @@ class _ScapulothoracicMixin:
             "r", degrees, range_min, range_max, check_contact=check_contact
         )
 
+    @property
+    def left_shoulder_elevation(self) -> float:
+        """Return left shoulder-girdle elevation in degrees."""
+        return self._coordinate_degrees("sc_elevation_l")
+
+    @property
+    def right_shoulder_elevation(self) -> float:
+        """Return right shoulder-girdle elevation in degrees."""
+        return self._coordinate_degrees("sc_elevation_r")
+
     def _set_shoulder_protraction(
         self,
         side: str,
@@ -763,6 +773,16 @@ class _ScapulothoracicMixin:
         self._set_shoulder_protraction(
             "r", degrees, range_min, range_max, check_contact=check_contact
         )
+
+    @property
+    def left_shoulder_protraction(self) -> float:
+        """Return left shoulder-girdle protraction in degrees."""
+        return self._coordinate_degrees("sc_protraction_l")
+
+    @property
+    def right_shoulder_protraction(self) -> float:
+        """Return right shoulder-girdle protraction in degrees."""
+        return self._coordinate_degrees("sc_protraction_r")
 
     def scapula_contact_report(self, side: str) -> dict[str, float | bool]:
         """Measure scapula-to-rib distance and scapula-thorax mesh crossing.

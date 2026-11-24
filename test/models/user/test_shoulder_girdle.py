@@ -365,14 +365,44 @@ def test_shoulder_angle_setters_preserve_the_other_angle_and_use_the_map(
     assert coordinates.get("sc_elevation_r").getRangeMin() == pytest.approx(
         np.radians(-5.0)
     )
-    for name, value in initial_angles.items():
-        coordinates.get(name).setValue(user.state, value, False)
     assert coordinates.get("sc_elevation_r").getRangeMax() == pytest.approx(
         np.radians(20.0)
     )
     assert coordinates.get("sc_protraction_r").getRangeMin() == pytest.approx(
         np.radians(-10.0)
     )
+    for name, value in initial_angles.items():
+        coordinates.get(name).setValue(user.state, value, False)
+
+
+def test_shoulder_protraction_and_elevation_properties_read_degrees(user):
+    coordinates = user.getCoordinateSet()
+    initial_values = {
+        name: coordinates.get(name).getValue(user.state)
+        for name in (
+            "sc_protraction_l",
+            "sc_protraction_r",
+            "sc_elevation_l",
+            "sc_elevation_r",
+        )
+    }
+    try:
+        for side, suffix in (("left", "l"), ("right", "r")):
+            coordinates.get(f"sc_protraction_{suffix}").setValue(
+                user.state, np.radians(12.5), False
+            )
+            coordinates.get(f"sc_elevation_{suffix}").setValue(
+                user.state, np.radians(-7.5), False
+            )
+            assert getattr(user, f"{side}_shoulder_protraction") == pytest.approx(
+                12.5
+            )
+            assert getattr(user, f"{side}_shoulder_elevation") == pytest.approx(
+                -7.5
+            )
+    finally:
+        for name, value in initial_values.items():
+            coordinates.get(name).setValue(user.state, value, False)
     assert coordinates.get("sc_protraction_r").getRangeMax() == pytest.approx(
         np.radians(30.0)
     )
