@@ -692,9 +692,9 @@ class ChestPress(Equipment, abc.ABC):
         tolerance ends the concentric phase; that detached state is not
         recorded, and the eccentric phase returns from the last attached
         position. At each outward step, only the right arm is refitted and
-        anchored while the captured hand and wrist points remain within
-        0.1 mm of their handle-local targets; the left arm is mirrored from
-        the right and checked against its own targets without refitting. Wrist,
+        anchored toward its captured hand and wrist targets; the left arm is
+        mirrored from the right and checked against its own targets without
+        refitting. Hand-target deviations are logged but do not stop the fit. Wrist,
         elbow, shoulder and shoulder-girdle coordinates remain available to
         the optimizer. The right hand is grasped with its finger coordinates
         mirrored to the left. The eccentric phase

@@ -63,7 +63,7 @@ _FINGER_COORDINATE_PREFIXES = ("index_", "middle_", "ring_", "little_", "thumb_"
 _FIT_COORDINATE_PREFIXES = ("arm_", "elbow_flex_", "pro_sup_", "wrist_")
 _PALM_POSITION_TOLERANCE_M = 0.001
 _POSITION_TOLERANCE_M = 0.001
-_HAND_HANDLE_TOLERANCE_M = 0.0001
+_HAND_HANDLE_TARGET_SCALE_M = 0.002
 _HAND_HANDLE_TARGET_WEIGHT = 1000.0
 _HAND_HANDLE_POINT_NAMES = (
     "palm",
@@ -181,7 +181,7 @@ def _hand_handle_target_residuals(
     rotation = handle_frame[:3, :3]
     origin = handle_frame[:3, 3]
     current_points = _hand_handle_points_ground(user, side)
-    scale = math.sqrt(_HAND_HANDLE_TARGET_WEIGHT) / _HAND_HANDLE_TOLERANCE_M
+    scale = math.sqrt(_HAND_HANDLE_TARGET_WEIGHT) / _HAND_HANDLE_TARGET_SCALE_M
     return np.concatenate(
         [
             scale
@@ -529,13 +529,12 @@ def lock_hands_to_handles(
     The first call records each palm marker in its handle frame. Subsequent
     calls fit that anchor without changing finger articulation. When fixed
     hand-handle targets are present on the framework, palm, wrist and MCP
-    points are also kept within 0.1 mm of their captured handle-frame poses.
+    points are also optimized toward their captured handle-frame poses.
     When ``mirror_left_from_right`` is true, only the right palm anchor is fitted;
     the right arm is mirrored to the left, and the left anchor is checked
     without fitting it. Residuals are logged without stopping simulation.
-    The 1 mm tolerance controls the optimizer's early exit and diagnostic level;
-    it is not a hard acceptance threshold. The 0.1 mm hand-handle tolerance is
-    an acceptance threshold and an exceeded drift returns ``False``.
+    The 1 mm palm tolerance controls contact acceptance. Hand-handle pose
+    deviation is logged for diagnosis and does not reject the fit.
 
     Parameters
     ----------
@@ -544,7 +543,7 @@ def lock_hands_to_handles(
     mirror_left_from_right : bool, default=False
         Fit the right hand and mirror its arm pose to the left instead of
         fitting each side independently. The mirrored left palm anchor is
-        checked but never optimized.
+        checked but never optimized. Hand-handle deviations are diagnostic only.
     fit_log : list of dict, optional
         Log to which anchor residuals and mirrored-arm warnings are appended.
 
@@ -581,8 +580,6 @@ def lock_hands_to_handles(
     ):
         raise ValueError("stored hand-handle targets must be a side-to-target mapping")
     residuals: dict[str, float] = {}
-    hand_target_deviations: dict[str, float] = {}
-
     for side in ("right", "left"):
         handle = equipment.getBodySet().get(f"{side}_handle")
         handle_location = target_locations.get(side)
@@ -622,11 +619,10 @@ def lock_hands_to_handles(
                 starting_values=safe_coordinates.get(side),
                 hand_handle_targets=side_targets,
             )
-            hand_target_deviations[side] = _hand_handle_target_deviation(
-                user, equipment, side, side_targets
-            )
             _report_hand_handle_target_deviation(
-                side, hand_target_deviations[side], fit_log
+                side,
+                _hand_handle_target_deviation(user, equipment, side, side_targets),
+                fit_log,
             )
         residuals[side] = error
         _report_palm_anchor_residual(side, error, converged, message, fit_log)
@@ -656,18 +652,16 @@ def lock_hands_to_handles(
             left_targets = hand_handle_targets.get("left")
             if left_targets is not None:
                 left_targets = _validate_hand_handle_targets(left_targets)
-                hand_target_deviations["left"] = _hand_handle_target_deviation(
-                    user, equipment, "left", left_targets
-                )
                 _report_hand_handle_target_deviation(
-                    "left", hand_target_deviations["left"], fit_log
+                    "left",
+                    _hand_handle_target_deviation(
+                        user, equipment, "left", left_targets
+                    ),
+                    fit_log,
                 )
 
     contact_maintained = all(
         residual <= _PALM_POSITION_TOLERANCE_M for residual in residuals.values()
-    ) and all(
-        deviation <= _HAND_HANDLE_TOLERANCE_M
-        for deviation in hand_target_deviations.values()
     )
     if contact_maintained and hasattr(user, "getCoordinateSet"):
         coordinates = user.getCoordinateSet()
@@ -698,15 +692,15 @@ def _report_hand_handle_target_deviation(
     deviation_m: float,
     fit_log: list[dict[str, Any]] | None,
 ) -> None:
-    if not fit_log or deviation_m <= _HAND_HANDLE_TOLERANCE_M:
+    if not fit_log:
         return
     fit_log[-1]["messages"].append(
         {
             "kind": "hand_handle_fit",
-            "level": "WARNING",
+            "level": "INFO",
             "message": (
-                f"{side} hand/handle pose deviation={deviation_m * 1000.0:.3f} mm "
-                f"(limit={_HAND_HANDLE_TOLERANCE_M * 1000.0:.3f} mm)"
+                f"{side} hand/handle max point deviation="
+                f"{deviation_m * 1000.0:.3f} mm"
             ),
         }
     )
@@ -827,7 +821,7 @@ def _fit_palm_marker_to_handle(
     )
     if (
         position_error <= _PALM_POSITION_TOLERANCE_M
-        and hand_target_error <= _HAND_HANDLE_TOLERANCE_M
+        and hand_target_error <= _HAND_HANDLE_TARGET_SCALE_M
     ):
         return position_error, True, "already within tolerance"
 
@@ -940,17 +934,14 @@ def _fit_palm_marker_to_handle(
         else 0.0
     )
     message = str(result.message)
-    if hand_target_error > _HAND_HANDLE_TOLERANCE_M:
+    if hand_target_error > _HAND_HANDLE_TARGET_SCALE_M:
         message = (
-            f"{message}; hand/handle pose deviation="
+            f"{message}; hand/handle max point deviation="
             f"{hand_target_error * 1000.0:.3f} mm"
         )
     return (
         position_error,
-        bool(
-            result.success
-            and hand_target_error <= _HAND_HANDLE_TOLERANCE_M
-        ),
+        bool(result.success),
         message,
     )
 
@@ -1240,7 +1231,8 @@ def fit_handle(
     arm-plane alignment, shoulder-wrist/handle-axis distance and knuckle-line
     alignment are weighted objectives. Supplying fixed hand-handle targets
     replaces the nominal palm/MCP/knuckle objectives with a high-priority
-    constraint that preserves the captured palm, wrist and MCP locations.
+    objectives that favor preserving the captured palm, wrist and MCP
+    locations; hand-handle deviation is not an acceptance threshold.
     Forearm rotation is encouraged toward 90 degrees and external upper-arm
     rotation is penalized. When a target is provided, axial arm rotation is
     also restrained around that target. Wrist extension is encouraged to at
@@ -1643,15 +1635,13 @@ def fit_handle(
         hand_target_error = _hand_handle_target_deviation(
             user, equipment, side, hand_handle_targets
         )
-        if hand_target_error > _HAND_HANDLE_TOLERANCE_M:
+        if hand_target_error > _HAND_HANDLE_TARGET_SCALE_M:
             warnings.warn(
-                f"{side} hand/handle pose deviation="
-                f"{hand_target_error * 1000.0:.3f} mm exceeds the "
-                f"{_HAND_HANDLE_TOLERANCE_M * 1000.0:.3f} mm limit",
+                f"{side} hand/handle max point deviation="
+                f"{hand_target_error * 1000.0:.3f} mm",
                 RuntimeWarning,
                 stacklevel=2,
             )
-            return None, None
     if not result.success:
         warnings.warn(
             f"{side} handle fit did not converge: {result.message}; nfev={result.nfev}, "

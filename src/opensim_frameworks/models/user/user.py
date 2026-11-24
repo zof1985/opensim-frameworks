@@ -872,6 +872,78 @@ class User(
             if source.resolve() != destination.resolve():
                 shutil.copy2(source, destination)
 
+    def set_body_tilt(self, degrees: float) -> None:
+        """Set the whole-body tilt through the pelvis root joint.
+
+        Sets the absolute ``pelvis_tilt`` coordinate about the z axis, in
+        degrees. The pelvis origin stays fixed and joint posture is unchanged.
+        Call :meth:`update_state` before using derived quantities.
+
+        Parameters
+        ----------
+        degrees : float
+            Finite angle in degrees, positive about the OpenSim z axis.
+
+        Raises
+        ------
+        ValueError
+            If ``degrees`` is not finite.
+        """
+        self._set_coordinate_degrees("pelvis_tilt", degrees)
+
+    @property
+    def body_tilt(self) -> float:
+        """Return the raw pelvis tilt coordinate in degrees."""
+        return self._coordinate_degrees("pelvis_tilt")
+
+    def set_body_roll(self, degrees: float) -> None:
+        """Set the whole-body roll through the pelvis root joint.
+
+        Sets the absolute ``pelvis_list`` coordinate about the x axis, in
+        degrees. The pelvis origin stays fixed and joint posture is unchanged.
+        Call :meth:`update_state` before using derived quantities.
+
+        Parameters
+        ----------
+        degrees : float
+            Finite angle in degrees, positive about the OpenSim x axis.
+
+        Raises
+        ------
+        ValueError
+            If ``degrees`` is not finite.
+        """
+        self._set_coordinate_degrees("pelvis_list", degrees)
+
+    @property
+    def body_roll(self) -> float:
+        """Return the raw pelvis list coordinate in degrees."""
+        return self._coordinate_degrees("pelvis_list")
+
+    def set_body_yaw(self, degrees: float) -> None:
+        """Set the whole-body yaw through the pelvis root joint.
+
+        Sets the absolute ``pelvis_rotation`` coordinate about the y axis, in
+        degrees. The pelvis origin stays fixed and joint posture is unchanged.
+        Call :meth:`update_state` before using derived quantities.
+
+        Parameters
+        ----------
+        degrees : float
+            Finite angle in degrees, positive about the OpenSim y axis.
+
+        Raises
+        ------
+        ValueError
+            If ``degrees`` is not finite.
+        """
+        self._set_coordinate_degrees("pelvis_rotation", degrees)
+
+    @property
+    def body_yaw(self) -> float:
+        """Return the raw pelvis rotation coordinate in degrees."""
+        return self._coordinate_degrees("pelvis_rotation")
+
     def _set_coordinate_degrees(self, name: str, degrees: float) -> None:
         if not math.isfinite(degrees):
             raise ValueError("coordinate angle must be finite")

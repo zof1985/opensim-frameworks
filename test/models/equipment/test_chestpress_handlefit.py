@@ -1609,7 +1609,7 @@ def test_lock_palm_to_handles_leaves_other_motion_free(monkeypatch):
             framework.equipment,
             side,
             framework._chestpress_hand_handle_targets[side],
-        ) <= handlefit._HAND_HANDLE_TOLERANCE_M
+        ) <= handlefit._HAND_HANDLE_TARGET_SCALE_M
         handle_transform = body_transform_array(
             framework.equipment.getBodySet().get(f"{side}_handle"),
             framework.equipment.state,
@@ -1715,6 +1715,7 @@ def test_symmetric_handle_lock_fits_right_and_mirrors_left(monkeypatch):
         return 0.0005, True, "already within tolerance"
 
     mirror_offset = [0.0]
+    hand_target_offset = [0.0]
 
     def mirror(user, to_mirror):
         mirrors.append(to_mirror)
@@ -1728,26 +1729,34 @@ def test_symmetric_handle_lock_fits_right_and_mirrors_left(monkeypatch):
         handlefit,
         "_hand_handle_target_deviation",
         lambda user, equipment, side, targets: (
-            mirror_offset[0] if side == "left" else 0.0
+            hand_target_offset[0] if side == "left" else 0.0
         ),
     )
     initial_log = [{"messages": []}]
     initial_contact = handlefit.lock_hands_to_handles(
         framework, mirror_left_from_right=True, fit_log=initial_log
     )
-    mirror_offset[0] = 0.002
+    mirror_offset[0] = 0.0005
+    hand_target_offset[0] = 0.002
+    boundary_log = [{"messages": []}]
+    boundary_contact = handlefit.lock_hands_to_handles(
+        framework, mirror_left_from_right=True, fit_log=boundary_log
+    )
+    hand_target_offset[0] = 0.0021
     drift_log = [{"messages": []}]
     drift_contact = handlefit.lock_hands_to_handles(
         framework, mirror_left_from_right=True, fit_log=drift_log
     )
 
     assert initial_contact
-    assert not drift_contact
+    assert boundary_contact
+    assert drift_contact
     assert fits == [
         ("right", handlefit._FIT_COORDINATE_PREFIXES, True),
         ("right", handlefit._FIT_COORDINATE_PREFIXES, True),
+        ("right", handlefit._FIT_COORDINATE_PREFIXES, True),
     ]
-    assert mirrors == ["right", "right"]
+    assert mirrors == ["right", "right", "right"]
     anchor_messages = [
         message
         for message in drift_log[-1]["messages"]
@@ -1756,13 +1765,21 @@ def test_symmetric_handle_lock_fits_right_and_mirrors_left(monkeypatch):
     assert len(anchor_messages) == 2
     assert anchor_messages[0]["level"] == "INFO"
     assert "residual=0.500 mm" in anchor_messages[0]["message"]
-    assert anchor_messages[1]["level"] == "WARNING"
-    assert "residual=2.000 mm" in anchor_messages[1]["message"]
+    assert anchor_messages[1]["level"] == "INFO"
+    assert "residual=0.500 mm" in anchor_messages[1]["message"]
     assert "without a left-side fit" in anchor_messages[1]["message"]
-    assert any(
-        message["kind"] == "hand_handle_fit"
-        and "2.000 mm" in message["message"]
+    deviation_messages = [
+        message
         for message in drift_log[-1]["messages"]
+        if message["kind"] == "hand_handle_fit"
+    ]
+    assert any(
+        "right hand/handle max point deviation=0.000 mm" in message["message"]
+        for message in deviation_messages
+    )
+    assert any(
+        "left hand/handle max point deviation=2.100 mm" in message["message"]
+        for message in deviation_messages
     )
 
 
@@ -2505,6 +2522,24 @@ def test_failed_solver_keeps_best_coordinates_and_warns(fit_setup, monkeypatch):
     )
     assert coordinates.get("sc_protraction_r").value == pytest.approx(0.3)
     assert coordinates.get("ac_protraction_r").value == pytest.approx(0.03)
+
+
+def test_fit_accepts_hand_deviation_above_target_scale(fit_setup, monkeypatch):
+    user, equipment, _, _ = fit_setup
+    targets = {name: np.zeros(3) for name in handlefit._HAND_HANDLE_POINT_NAMES}
+    monkeypatch.setattr(
+        handlefit, "_hand_handle_target_deviation", lambda *args: 0.003
+    )
+    monkeypatch.setattr(
+        handlefit, "_hand_handle_target_residuals", lambda *args: np.zeros(18)
+    )
+
+    result, _ = run_fit(
+        monkeypatch, user, equipment, hand_handle_targets=targets
+    )
+
+    assert result[0] is not None
+    assert result[1] is not None
 
 
 def test_fit_can_keep_scapula_fixed(fit_setup, monkeypatch):

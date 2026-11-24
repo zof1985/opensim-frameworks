@@ -637,6 +637,67 @@ def test_posture_setters_do_not_cross_talk_between_sides():
     ) == pytest.approx(0.0)
 
 
+@requires_opensim
+@pytest.mark.parametrize(
+    "name, coordinate_name, axis",
+    [
+        ("tilt", "pelvis_tilt", 2),
+        ("roll", "pelvis_list", 0),
+        ("yaw", "pelvis_rotation", 1),
+    ],
+)
+def test_body_rotation_moves_the_model_about_the_pelvis(name, coordinate_name, axis):
+    user = make_user(gender="M")
+    user.set_left_hip_flexionextension(30.0)
+    user.realizePosition(user.state)
+    pelvis = user.getBodySet().get("pelvis")
+    bodies = [user.getBodySet().get(body) for body in ("torso", "femur_l", "calcn_r")]
+
+    def position(body):
+        point = body.getPositionInGround(user.state)
+        return np.array([point.get(i) for i in range(3)])
+
+    origin = position(pelvis)
+    before = [position(body) - origin for body in bodies]
+    angle = 40.0
+    getattr(user, f"set_body_{name}")(angle)
+    user.realizePosition(user.state)
+
+    rotation = np.eye(3)
+    i, j = (axis + 1) % 3, (axis + 2) % 3
+    rotation[i, i] = rotation[j, j] = math.cos(math.radians(angle))
+    rotation[i, j] = -math.sin(math.radians(angle))
+    rotation[j, i] = math.sin(math.radians(angle))
+    assert position(pelvis) == pytest.approx(origin)
+    for body, vector in zip(bodies, before):
+        assert position(body) - origin == pytest.approx(rotation @ vector, abs=1e-8)
+    assert getattr(user, f"body_{name}") == pytest.approx(angle)
+    assert user.getCoordinateSet().get(coordinate_name).getValue(user.state) == pytest.approx(
+        math.radians(angle)
+    )
+    assert user.left_hip_flexionextension == pytest.approx(30.0)
+
+
+@requires_opensim
+def test_body_rotations_are_absolute_independent_and_reject_nonfinite_values():
+    user = make_user(gender="F")
+    user.set_body_tilt(15.0)
+    user.set_body_roll(-20.0)
+    user.set_body_yaw(180.0)
+    user.set_body_tilt(10.0)
+
+    assert (user.body_tilt, user.body_roll, user.body_yaw) == pytest.approx(
+        (10.0, -20.0, 180.0)
+    )
+    for name in ("tilt", "roll", "yaw"):
+        for value in (float("nan"), float("inf"), -float("inf")):
+            with pytest.raises(ValueError, match="finite"):
+                getattr(user, f"set_body_{name}")(value)
+    assert (user.body_tilt, user.body_roll, user.body_yaw) == pytest.approx(
+        (10.0, -20.0, 180.0)
+    )
+
+
 def test_posture_properties_mirror_every_posture_setter():
     expected = {
         setter_name[len("set_") :]: coordinate_name

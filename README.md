@@ -234,6 +234,18 @@ left-side measurements are independent: for example,
 
 ### Changing posture
 
+`set_body_tilt(degrees)`, `set_body_roll(degrees)`, and
+`set_body_yaw(degrees)` set the absolute ground-pelvis rotation coordinates
+`pelvis_tilt`, `pelvis_list`, and `pelvis_rotation`; the corresponding
+properties are `body_tilt`, `body_roll`, and `body_yaw`. These are OpenSim's
+ordered z-x-y rotations, with positive angles following the right-hand rule,
+not independent rotations about fixed world axes when combined. They rotate the
+whole model about the pelvis origin without changing joint angles or
+automatically regrounding the feet. Like other raw posture setters, they do
+not enforce coordinate ranges; the bundled model's initial range is
+approximately -90 to +90 degrees for each. Before exporting or reinitializing
+with values outside that range, widen it as described below.
+
 The cervical joints provide neck-base flexion/extension and lateral flexion
 (`neck_base_flexion`, `neck_base_lateral_flexion`), and head flexion/extension,
 lateral flexion, and rotation (`neck_flexion`, `neck_lateral_flexion`,
