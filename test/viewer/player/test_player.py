@@ -10,6 +10,7 @@ from opensim_frameworks.models.user.user import DEFAULT_MESHES_DIR, DEFAULT_MODE
 from opensim_frameworks.viewer.player import (
     MotionData,
     MotionPlayer,
+    _fit_viewer_size,
     _step_frame_time,
 )
 
@@ -31,6 +32,16 @@ def make_table(column_names, times, rows, *, in_degrees=True):
     for time, row in zip(times, rows):
         table.appendRow(time, opensim.RowVector(row))
     return table
+
+
+def test_player_viewer_size_reserves_screen_space_for_controls():
+    width, height = _fit_viewer_size((1920, 1080), 180, 1920, 1200)
+
+    assert width < 1920
+    assert width <= 1920 - 80
+    assert height + 180 + 80 <= 1200
+    assert width / height == pytest.approx(1920 / 1080, rel=1e-3)
+    assert _fit_viewer_size((1920, 1080), 180, 3840, 2160) == (1920, 1080)
 
 
 # ---------------------------------------------------------------------------

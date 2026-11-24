@@ -96,6 +96,20 @@ _ROTATIONAL_MOTION_TYPE = 1
 _NO_MOTION_TEXT = "(nessuna animazione)"
 
 
+def _fit_viewer_size(
+    default_size: tuple[int, int],
+    controls_height: int,
+    screen_width: int,
+    screen_height: int,
+) -> tuple[int, int]:
+    """Scale the 3D viewport to leave room for controls on the screen."""
+    width, height = default_size
+    available_width = max(1, screen_width - 80)
+    available_height = max(1, screen_height - controls_height - 80)
+    scale = min(1.0, available_width / width, available_height / height)
+    return int(width * scale), int(height * scale)
+
+
 class MotionData:
     """A time-indexed table of coordinate values, ready to drive a model.
 
@@ -1285,8 +1299,16 @@ def start_player(
             reachability_check.config(state="disabled")
 
         root.update_idletasks()
+        controls_height = controls_frame.winfo_reqheight()
+        viewer_width, viewer_height = _fit_viewer_size(
+            DEFAULT_SIZE,
+            controls_height,
+            root.winfo_screenwidth(),
+            root.winfo_screenheight(),
+        )
+        viewer_frame.configure(width=viewer_width, height=viewer_height)
         root.geometry(
-            f"{default_width}x{default_height + controls_frame.winfo_reqheight()}"
+            f"{viewer_width}x{viewer_height + controls_height}"
         )
         root.update()
 
