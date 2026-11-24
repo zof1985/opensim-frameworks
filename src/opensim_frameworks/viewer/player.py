@@ -709,17 +709,8 @@ def start_player(
         # "📷" uncomfortably small/off-centre otherwise.
         style.configure("Icon.TButton", font=("Segoe UI", 12))
 
-        default_width, default_height = DEFAULT_SIZE
-        viewer_frame = tk.Frame(
-            root, bg="black", width=default_width, height=default_height
-        )
+        viewer_frame = tk.Frame(root, bg="black")
         viewer_frame.pack(side="top", fill="both", expand=True)
-        # has no Tk-managed children (the embedded VTK window is a raw
-        # Win32 child, invisible to Tk's own geometry management) -- lock
-        # in the explicit size above instead of collapsing to one that fits
-        # (empty) content, until <Configure> (bound once VTKVisualizer
-        # embeds into this frame, below) takes over sizing it from then on.
-        viewer_frame.pack_propagate(False)
 
         controls_frame = ttk.Frame(root, padding=(8, 8, 8, 0))
         controls_frame.pack(side="bottom", fill="x")
@@ -1306,7 +1297,6 @@ def start_player(
             root.winfo_screenwidth(),
             root.winfo_screenheight(),
         )
-        viewer_frame.configure(width=viewer_width, height=viewer_height)
         root.geometry(
             f"{viewer_width}x{viewer_height + controls_height}"
         )
