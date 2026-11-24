@@ -546,7 +546,7 @@ class _ScapulothoracicMixin:
         return built
 
     def set_shoulder_girdle(
-        self, side: str, protraction: float, elevation: float, *, check_contact: bool = True
+        self, side: str, protraction: float, elevation: float, *, check_contact: bool = False
     ) -> None:
         """Set shoulder angles and derive the three scapular coordinates.
 
@@ -556,7 +556,7 @@ class _ScapulothoracicMixin:
             Shoulder side.
         protraction, elevation : float
             Sternoclavicular angles in radians.
-        check_contact : bool, default=True
+        check_contact : bool, default=False
             Warn about gaps or mesh intersections at the interpolated pose.
 
         Notes
@@ -593,7 +593,7 @@ class _ScapulothoracicMixin:
         range_min: float | None = None,
         range_max: float | None = None,
         *,
-        check_contact: bool = True,
+        check_contact: bool = False,
     ) -> None:
         if range_min is not None or range_max is not None:
             self._set_coordinate_degrees(
@@ -611,7 +611,7 @@ class _ScapulothoracicMixin:
         range_min: float | None = None,
         range_max: float | None = None,
         *,
-        check_contact: bool = True,
+        check_contact: bool = False,
     ) -> None:
         """Set left shoulder-girdle elevation and adapt scapular orientation.
 
@@ -628,7 +628,7 @@ class _ScapulothoracicMixin:
             corresponding current bounds; omitted bounds remain unchanged.
             When either bound is supplied, ``degrees`` must lie in the
             resulting range.
-        check_contact : bool, default=True
+        check_contact : bool, default=False
             Report possible separation or intersection after setting the pose.
 
         Raises
@@ -646,7 +646,7 @@ class _ScapulothoracicMixin:
         range_min: float | None = None,
         range_max: float | None = None,
         *,
-        check_contact: bool = True,
+        check_contact: bool = False,
     ) -> None:
         """Set right shoulder-girdle elevation and adapt scapular orientation.
 
@@ -663,7 +663,7 @@ class _ScapulothoracicMixin:
             corresponding current bounds; omitted bounds remain unchanged.
             When either bound is supplied, ``degrees`` must lie in the
             resulting range.
-        check_contact : bool, default=True
+        check_contact : bool, default=False
             Report possible separation or intersection after setting the pose.
 
         Raises
@@ -682,7 +682,7 @@ class _ScapulothoracicMixin:
         range_min: float | None = None,
         range_max: float | None = None,
         *,
-        check_contact: bool = True,
+        check_contact: bool = False,
     ) -> None:
         if range_min is not None or range_max is not None:
             self._set_coordinate_degrees(
@@ -700,7 +700,7 @@ class _ScapulothoracicMixin:
         range_min: float | None = None,
         range_max: float | None = None,
         *,
-        check_contact: bool = True,
+        check_contact: bool = False,
     ) -> None:
         """Set left shoulder-girdle protraction and adapt scapular orientation.
 
@@ -717,7 +717,7 @@ class _ScapulothoracicMixin:
             corresponding current bounds; omitted bounds remain unchanged.
             When either bound is supplied, ``degrees`` must lie in the
             resulting range.
-        check_contact : bool, default=True
+        check_contact : bool, default=False
             Report possible separation or intersection after setting the pose.
 
         Raises
@@ -735,7 +735,7 @@ class _ScapulothoracicMixin:
         range_min: float | None = None,
         range_max: float | None = None,
         *,
-        check_contact: bool = True,
+        check_contact: bool = False,
     ) -> None:
         """Set right shoulder-girdle protraction and adapt scapular orientation.
 
@@ -752,7 +752,7 @@ class _ScapulothoracicMixin:
             corresponding current bounds; omitted bounds remain unchanged.
             When either bound is supplied, ``degrees`` must lie in the
             resulting range.
-        check_contact : bool, default=True
+        check_contact : bool, default=False
             Report possible separation or intersection after setting the pose.
 
         Raises
@@ -805,7 +805,7 @@ class _ScapulothoracicMixin:
         }
 
     def set_scapular_girdle_values(
-        self, side: str, values: Sequence[float], *, check_contact: bool = True
+        self, side: str, values: Sequence[float], *, check_contact: bool = False
     ) -> None:
         """Set the five scapular-girdle coordinates, in radians.
 
@@ -815,7 +815,7 @@ class _ScapulothoracicMixin:
             Scapular side.
         values : sequence of float
             Values in the order of ``SHOULDER_GIRDLE_COORDINATES``.
-        check_contact : bool, default=True
+        check_contact : bool, default=False
             Report possible separation or intersection after setting the pose.
             Solvers may disable this for intermediate candidate poses.
 

@@ -311,12 +311,22 @@ def test_shoulder_angle_setters_preserve_the_other_angle_and_use_the_map(
     user, monkeypatch
 ):
     coordinates = user.getCoordinateSet()
+    coordinate_names = (
+        "sc_protraction_r",
+        "sc_elevation_r",
+        "sc_protraction_l",
+        "sc_elevation_l",
+    )
+    initial_angles = {
+        name: coordinates.get(name).getValue(user.state)
+        for name in coordinate_names
+    }
     coordinates.get("sc_protraction_r").setValue(user.state, np.radians(5.0), False)
     coordinates.get("sc_elevation_r").setValue(user.state, np.radians(8.0), False)
     left_protraction = coordinates.get("sc_protraction_l").getValue(user.state)
     calls = []
 
-    def capture(side, protraction, elevation, *, check_contact=True):
+    def capture(side, protraction, elevation, *, check_contact=False):
         calls.append((side, protraction, elevation, check_contact))
         coordinates.get(f"sc_protraction_{side}").setValue(
             user.state, protraction, False
@@ -341,20 +351,22 @@ def test_shoulder_angle_setters_preserve_the_other_angle_and_use_the_map(
     assert calls[1][1:3] == pytest.approx(
         (left_protraction, np.radians(-3.0))
     )
-    assert calls[1][3] is True
+    assert calls[1][3] is False
     assert calls[2][0] == "r"
     assert calls[2][1:3] == pytest.approx(
         (np.radians(20.0), np.radians(12.0))
     )
-    assert calls[2][3] is True
+    assert calls[2][3] is False
     assert calls[3][0] == "l"
     assert calls[3][1:3] == pytest.approx(
         (np.radians(-7.0), np.radians(-3.0))
     )
-    assert calls[3][3] is True
+    assert calls[3][3] is False
     assert coordinates.get("sc_elevation_r").getRangeMin() == pytest.approx(
         np.radians(-5.0)
     )
+    for name, value in initial_angles.items():
+        coordinates.get(name).setValue(user.state, value, False)
     assert coordinates.get("sc_elevation_r").getRangeMax() == pytest.approx(
         np.radians(20.0)
     )
