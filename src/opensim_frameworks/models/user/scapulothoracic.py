@@ -1,11 +1,13 @@
 """Scapulothoracic contact of the shoulder girdle of :class:`User`.
 
 The kinematic tree of the user has no scapulothoracic joint (see
-:mod:`.shoulder`). The handle fit uses distances from three costal scapular
-mesh vertices to the rib surface as soft objectives, with a separate mesh
-intersection report. These unsigned distances do not guarantee contact or
-non-penetration. This module also provides ellipsoidal residual functions for
-other uses; neither method adds a kinematic constraint to the model.
+:mod:`.shoulder`). The shoulder map fits the acromioclavicular coordinates by
+minimizing the sum of distances from all scapular mesh vertices to the
+arithmetic centroid of the rib-mesh vertices, rejecting poses where the
+scapula and ribs intersect. The handle fit separately uses distances from
+three costal scapular mesh vertices to the rib surface as soft objectives.
+This module also provides ellipsoidal residual functions for other uses;
+neither method adds a kinematic constraint to the model.
 
 The thorax is an axis-aligned ellipsoid fitted by the biomechanics specialist
 to the ribs of the bundled model, expressed in the torso frame of the
@@ -42,15 +44,15 @@ import warnings
 import numpy as np
 import opensim
 import vtk
-from scipy.interpolate import RegularGridInterpolator
-from scipy.ndimage import distance_transform_edt
 from scipy.optimize import least_squares
+from scipy.stats import qmc
 from vtk.util.numpy_support import vtk_to_numpy
 
 from ...utils.collision import collision_detector, mesh_matrix, mesh_polydata
 from ...utils.kinematics import KinematicChain
 from ...utils.opensim import rotation_to_numpy, vec3_to_numpy
 from .mapping import segment_scale_factors
+from .scapular_map import BilinearShoulderMap, load_scapular_map
 from .shoulder import SHOULDER_GIRDLE_COORDINATES, SHOULDER_GIRDLE_REFERENCE_POSE
 
 __all__ = []
@@ -85,9 +87,7 @@ _MIRROR = np.array([1.0, 1.0, -1.0])
 _GIRDLE_NAMES = tuple(SHOULDER_GIRDLE_COORDINATES)
 _MESH_CONTACT_TARGET_M = 0.005
 _MESH_CONTACT_MAX_GAP_M = 0.0055
-_SHOULDER_MAP_STEP_RAD = math.radians(5.0)
-# Strong soft preference for collision-free map samples; exact post-fit
-# collision checks remain the final guard.
+# Penalty used when handle fitting encounters a colliding current pose.
 _SHOULDER_COLLISION_PENALTY = 1000.0
 # Rib-facing vertices on the inferior, superior and lateral costal surface of
 # the bundled right scapula, in the unscaled mesh frame. The left mesh mirrors
@@ -100,7 +100,7 @@ _COSTAL_FIT_POINTS = np.array([
 
 
 class _ScapulaMeshContact:
-    """Measure proximity and intersections of the scapula and thorax meshes."""
+    """Measure scapula-to-thorax mesh distances and intersections."""
 
     def __init__(self, user: Any, side: str) -> None:
         self.user = user
@@ -125,6 +125,7 @@ class _ScapulaMeshContact:
         self.costal_vertices = self.vertices[indices]
         self.ribs_locator = vtk.vtkStaticCellLocator()
         self.ribs = None
+        self.ribs_vertices = None
         self.detectors = []
         torso = user.getBodySet().get("torso")
         for index in range(torso.getPropertyByName("attached_geometry").size()):
@@ -144,6 +145,10 @@ class _ScapulaMeshContact:
             )
             if name == "hat_ribs_torso.vtp":
                 self.ribs = mesh
+                rib_vertices = vtk_to_numpy(thorax_data.GetPoints().GetData()).copy()
+                self.ribs_vertices = np.column_stack(
+                    (rib_vertices, np.ones(len(rib_vertices)))
+                )
                 scale = mesh.get_scale_factors()
                 transform = vtk.vtkTransform()
                 transform.Scale(scale.get(0), scale.get(1), scale.get(2))
@@ -179,12 +184,65 @@ class _ScapulaMeshContact:
     def distance(self) -> float:
         return float(np.min(self._distances(self.vertices)))
 
+    def distances_to_rib_center(self) -> np.ndarray:
+        """Return distances from every scapular vertex to the rib-mesh vertex centroid."""
+        scapula_matrix = mesh_matrix(self.scapula, self.user.state)
+        scapula_transform = np.array(
+            [
+                [scapula_matrix.GetElement(row, column) for column in range(4)]
+                for row in range(3)
+            ]
+        )
+        ribs_matrix = mesh_matrix(self.ribs, self.user.state)
+        ribs_transform = np.array(
+            [
+                [ribs_matrix.GetElement(row, column) for column in range(4)]
+                for row in range(3)
+            ]
+        )
+        scapula_points = self.vertices @ scapula_transform.T
+        ribs_points = self.ribs_vertices @ ribs_transform.T
+        rib_center = np.mean(ribs_points, axis=0)
+        return np.linalg.norm(scapula_points - rib_center, axis=1)
+
     def costal_distances(self) -> np.ndarray:
         return self._distances(self.costal_vertices)
 
-    def intersects(self) -> bool:
+    def intersects_ribs(self) -> bool:
+        """Return whether the scapula surface intersects the rib surface."""
+        return self._intersects(meshes=(self.ribs,))
+
+    def rib_intersection_contact_count(self) -> int:
+        """Return the largest detected contact count in either mesh order."""
+        count = 0
         scapula_matrix = mesh_matrix(self.scapula, self.user.state)
         for mesh, forward, reverse in self.detectors:
+            if mesh is not self.ribs:
+                continue
+            torso_matrix = mesh_matrix(mesh, self.user.state)
+            for detector, first, second in (
+                (forward, scapula_matrix, torso_matrix),
+                (reverse, torso_matrix, scapula_matrix),
+            ):
+                detector.SetCollisionModeToAllContacts()
+                try:
+                    detector.SetMatrix(0, first)
+                    detector.SetMatrix(1, second)
+                    detector.Update()
+                    count = max(count, int(detector.GetNumberOfContacts()))
+                finally:
+                    detector.SetCollisionModeToFirstContact()
+        return count
+
+    def intersects(self) -> bool:
+        """Return whether the scapula surface intersects ribs or spine."""
+        return self._intersects()
+
+    def _intersects(self, meshes: tuple[Any, ...] | None = None) -> bool:
+        scapula_matrix = mesh_matrix(self.scapula, self.user.state)
+        for mesh, forward, reverse in self.detectors:
+            if meshes is not None and mesh not in meshes:
+                continue
             torso_matrix = mesh_matrix(mesh, self.user.state)
             for detector, first, second in (
                 (forward, scapula_matrix, torso_matrix),
@@ -308,13 +366,15 @@ class _Setup:
 
 @dataclass
 class _ShoulderMap:
-    """Interpolation of scapular coordinates for one scaled user and side."""
+    """Gender-specific bilinear map, independent of user stature."""
 
     reference: Any
     state: Any
-    bounds: tuple[tuple[float, float], ...]
-    interpolator: RegularGridInterpolator
-    collision_risk: RegularGridInterpolator
+    side: str
+    model: BilinearShoulderMap
+
+    def predict(self, protraction: float, elevation: float) -> np.ndarray:
+        return self.model.predict(protraction, elevation)
 
 
 class _ScapulothoracicMixin:
@@ -385,9 +445,8 @@ class _ScapulothoracicMixin:
         -------
         numpy.ndarray
             Retraction, elevation, three equally weighted costal-point
-            distances from the 5 mm target, and a soft collision-risk
-            residual derived from the sampled shoulder map. The risk is an
-            interpolation, not a collision test at the current pose.
+            distances from the 5 mm target, and a hard mesh-intersection
+            penalty for the current scapula pose.
         """
         if side not in ("r", "l"):
             raise ValueError("side must be 'r' or 'l'")
@@ -397,7 +456,7 @@ class _ScapulothoracicMixin:
         protraction = coordinates.get(f"sc_protraction_{side}")
         elevation = coordinates.get(f"sc_elevation_{side}")
         shoulder = (protraction.getValue(self.state), elevation.getValue(self.state))
-        risk = float(self._shoulder_map(side).collision_risk(shoulder))
+        risk = float(self._scapula_mesh_contact(side).intersects_ribs())
         return np.concatenate((
             np.array([
                 math.sqrt(protraction_weight) * (shoulder[0] - protraction.getRangeMin()),
@@ -409,140 +468,134 @@ class _ScapulothoracicMixin:
             np.array([_SHOULDER_COLLISION_PENALTY * risk]),
         ))
 
-    def _shoulder_map(self, side: str) -> _ShoulderMap:
-        if side not in ("r", "l"):
-            raise ValueError("side must be 'r' or 'l'")
+    def _fit_scapula_for_shoulder(
+        self, side: str, shoulder: np.ndarray, starts: Sequence[np.ndarray]
+    ) -> np.ndarray:
         coordinates = [
             self.getCoordinateSet().get(f"{name}_{side}") for name in _GIRDLE_NAMES
         ]
-        bounds = tuple(
-            (coordinate.getRangeMin(), coordinate.getRangeMax())
-            for coordinate in coordinates
+        lower = np.array([coordinate.getRangeMin() for coordinate in coordinates[2:]])
+        upper = np.array([coordinate.getRangeMax() for coordinate in coordinates[2:]])
+        contact = self._scapula_mesh_contact(side)
+        saved = np.array([coordinate.getValue(self.state) for coordinate in coordinates])
+
+        def apply(scapula: np.ndarray) -> None:
+            for coordinate, value in zip(
+                coordinates, np.concatenate((shoulder, scapula))
+            ):
+                coordinate.setValue(self.state, float(value), False)
+            self.realizePosition(self.state)
+
+        def residual(scapula: np.ndarray) -> np.ndarray:
+            apply(scapula)
+            # Least squares of sqrt(distance) minimizes the requested sum of
+            # Euclidean distances from every scapular vertex to the rib centroid.
+            return np.sqrt(contact.distances_to_rib_center())
+
+        unique_starts = []
+        for start in starts:
+            bounded = np.clip(np.asarray(start, dtype=float), lower, upper)
+            if not any(np.allclose(bounded, existing) for existing in unique_starts):
+                unique_starts.append(bounded)
+
+        sampled = []
+        sobol_samples = qmc.Sobol(d=3, scramble=False).random_base2(m=12)
+
+        def add_feasible_samples(samples: np.ndarray) -> None:
+            for sample in samples:
+                candidate = lower + sample * (upper - lower)
+                objective = residual(candidate)
+                if not contact.intersects_ribs():
+                    sampled.append((float(objective @ objective), candidate.copy()))
+
+        add_feasible_samples(sobol_samples[:128])
+        if not sampled:
+            add_feasible_samples(sobol_samples[128:])
+        unique_starts.extend(
+            candidate
+            for _, candidate in sorted(sampled, key=lambda item: item[0])[:3]
+            if not any(np.allclose(candidate, existing) for existing in unique_starts)
         )
+
+        candidates = []
+        for start in unique_starts:
+            objective = residual(start)
+            candidates.append(
+                (
+                    contact.intersects_ribs(),
+                    float(objective @ objective),
+                    start.copy(),
+                )
+            )
+            result = least_squares(
+                residual, start, bounds=(lower, upper), max_nfev=100,
+                ftol=1e-7, xtol=1e-7, gtol=1e-7,
+            )
+            objective = residual(result.x)
+            candidates.append(
+                (
+                    contact.intersects_ribs(),
+                    float(objective @ objective),
+                    result.x.copy(),
+                )
+            )
+
+        clear = [candidate for candidate in candidates if not candidate[0]]
+        crossing = [candidate for candidate in candidates if candidate[0]]
+        if clear and crossing:
+            safe = min(clear, key=lambda item: item[1])
+            target = min(crossing, key=lambda item: item[1])
+            if target[1] < safe[1]:
+                low, high = 0.0, 1.0
+                for _ in range(16):
+                    fraction = (low + high) / 2.0
+                    candidate = safe[2] + fraction * (target[2] - safe[2])
+                    objective = residual(candidate)
+                    if contact.intersects_ribs():
+                        high = fraction
+                    else:
+                        low = fraction
+                        candidates.append(
+                            (False, float(objective @ objective), candidate.copy())
+                        )
+
+        clear = [candidate for candidate in candidates if not candidate[0]]
+        if not clear:
+            for coordinate, value in zip(coordinates[:2], shoulder):
+                coordinate.setValue(self.state, float(value), False)
+            for coordinate, value in zip(coordinates[2:], saved[2:]):
+                coordinate.setValue(self.state, float(value), False)
+            self.realizePosition(self.state)
+            raise ValueError(
+                f"No non-intersecting scapular pose found for {side} shoulder "
+                f"protraction={np.degrees(shoulder[0]):.2f}°, "
+                f"elevation={np.degrees(shoulder[1]):.2f}°"
+            )
+
+        chosen = min(clear, key=lambda item: item[1])[2]
+        apply(chosen)
+        return chosen
+
+    def _shoulder_map(self, side: str) -> _ShoulderMap:
+        if side not in ("r", "l"):
+            raise ValueError("side must be 'r' or 'l'")
         cache = self.__dict__.setdefault("_shoulder_map_cache", {})
-        built = cache.get(side)
+        gender = str(self.gender).strip().upper()
+        built = cache.get(gender)
         if (
             built is not None
             and built.reference is self._reference
             and built.state is self.state
-            and built.bounds == bounds
+            and built.side == side
         ):
             return built
-
-        # Cover the full requested shoulder ranges for this scaled user.
-        grid = [
-            np.linspace(low, high, math.ceil((high - low) / _SHOULDER_MAP_STEP_RAD) + 1)
-            for low, high in bounds[:2]
-        ]
-        lower = np.array([limit[0] for limit in bounds[2:]])
-        upper = np.array([limit[1] for limit in bounds[2:]])
-        values = np.empty((len(grid[0]), len(grid[1]), 3))
-        crosses = np.empty(values.shape[:2], dtype=bool)
-        contact = self._scapula_mesh_contact(side)
-        saved = np.array([coordinate.getValue(self.state) for coordinate in coordinates])
-        failed = 0
-
-        def apply(shoulder: np.ndarray, scapula: np.ndarray) -> None:
-            for coordinate, value in zip(coordinates, np.concatenate((shoulder, scapula))):
-                coordinate.setValue(self.state, float(value), False)
-            self.realizePosition(self.state)
-
-        try:
-            for i, protraction in enumerate(grid[0]):
-                for j, elevation in enumerate(grid[1]):
-                    shoulder = np.array([protraction, elevation])
-                    previous = values[i, j - 1] if j else (
-                        values[i - 1, j] if i else np.clip(np.zeros(3), lower, upper)
-                    )
-
-                    def residual(scapula: np.ndarray) -> np.ndarray:
-                        apply(shoulder, scapula)
-                        return np.concatenate((
-                            1000.0 / math.sqrt(3.0) * (
-                                contact.costal_distances() - _MESH_CONTACT_TARGET_M
-                            ),
-                            0.1 * scapula,
-                        ))
-
-                    # Check both the continued pose and a neutral start; prefer
-                    # a non-intersecting candidate when one is found.
-                    candidates = []
-                    successful = False
-                    neutral = np.clip(np.zeros(3), lower, upper)
-                    starts = (
-                        [previous] if np.array_equal(previous, neutral)
-                        else [previous, neutral]
-                    )
-                    starts.append(np.clip(np.radians([10.0, 0.0, 15.0]), lower, upper))
-                    for start in starts:
-                        objective = residual(start)
-                        candidates.append(
-                            (contact.intersects(), float(objective @ objective), start.copy())
-                        )
-                        result = least_squares(
-                            residual, start, bounds=(lower, upper), max_nfev=60,
-                            ftol=1e-4, xtol=1e-4, gtol=1e-4,
-                        )
-                        successful = successful or result.success
-                        objective = residual(result.x)
-                        candidates.append(
-                            (contact.intersects(), float(objective @ objective), result.x.copy())
-                        )
-                    if not successful:
-                        failed += 1
-                    clear = [candidate for candidate in candidates if not candidate[0]]
-                    crossing = [candidate for candidate in candidates if candidate[0]]
-                    if clear and crossing:
-                        safe = min(clear, key=lambda item: item[1])
-                        target = min(crossing, key=lambda item: item[1])
-                        if target[1] < safe[1]:
-                            # Search toward the closer solution without changing
-                            # the requested shoulder angles.
-                            low, high = 0.0, 1.0
-                            for _ in range(12):
-                                fraction = (low + high) / 2.0
-                                candidate = safe[2] + fraction * (target[2] - safe[2])
-                                objective = residual(candidate)
-                                collides = contact.intersects()
-                                if collides:
-                                    high = fraction
-                                else:
-                                    low = fraction
-                                    candidates.append(
-                                        (False, float(objective @ objective), candidate.copy())
-                                    )
-                    chosen = min(candidates, key=lambda item: (item[0], item[1]))
-                    crosses[i, j], values[i, j] = chosen[0], chosen[2]
-        finally:
-            for coordinate, value in zip(coordinates, saved):
-                coordinate.setValue(self.state, float(value), False)
-            self.realizePosition(self.state)
-
-        if failed:
-            warnings.warn(
-                f"{side} shoulder map: optimization did not converge for {failed} "
-                f"of {len(grid[0]) * len(grid[1])} samples; best candidates retained",
-                RuntimeWarning,
-                stacklevel=2,
-            )
-        if np.all(crosses):
-            warnings.warn(
-                f"{side} shoulder map: no collision-free sampled poses found",
-                RuntimeWarning,
-                stacklevel=2,
-            )
-            risk = np.ones(crosses.shape)
-        else:
-            spacing = tuple((axis[1] - axis[0]) / _SHOULDER_MAP_STEP_RAD for axis in grid)
-            risk = distance_transform_edt(crosses, sampling=spacing)
         built = _ShoulderMap(
             reference=self._reference,
             state=self.state,
-            bounds=bounds,
-            interpolator=RegularGridInterpolator(tuple(grid), values),
-            collision_risk=RegularGridInterpolator(tuple(grid), risk),
+            side=side,
+            model=load_scapular_map(gender),
         )
-        cache[side] = built
+        cache[gender] = built
         return built
 
     def set_shoulder_girdle(
@@ -557,19 +610,30 @@ class _ScapulothoracicMixin:
         protraction, elevation : float
             Sternoclavicular angles in radians.
         check_contact : bool, default=False
-            Warn about gaps or mesh intersections at the interpolated pose.
+            Warn about modeled gaps or thorax mesh intersections at the fitted pose.
 
         Notes
         -----
-        The cached map is fitted separately to each scaled user's mesh.
-        Its 5 mm point targets, collision-guided candidate search and
-        interpolation are approximations; none guarantees that the full
-        scapular mesh remains outside the thorax.
+        A saved bilinear model, fitted separately for each gender on reference
+        users at the 10th, 50th and 90th stature percentiles, predicts the
+        scapular coordinates. It minimizes the combined sum of distances from
+        all scapular vertices to the rib-mesh vertex centroid across those
+        references. The predicted pose is checked against this user's rib mesh.
 
         Raises
         ------
         ValueError
-            If the side or either angle is invalid or outside its range.
+            If the side or either angle is invalid or outside its coordinate
+            range.
+
+        Warnings
+        --------
+        RuntimeWarning
+            If the predicted scapula intersects the rib mesh. The pose is
+            retained and the warning reports the maximum detected mesh-contact
+            count from the two collision-test input orders. Extrapolation beyond
+            the fit domain and clipping to coordinate ranges also produce
+            warnings.
         """
         if side not in ("r", "l"):
             raise ValueError("side must be 'r' or 'l'")
@@ -581,10 +645,51 @@ class _ScapulothoracicMixin:
             coordinate = coordinates.get(f"{name}_{side}")
             if not coordinate.getRangeMin() <= value <= coordinate.getRangeMax():
                 raise ValueError("shoulder angle outside its range")
-        scapula = self._shoulder_map(side).interpolator(tuple(angles))
-        self.set_scapular_girdle_values(
-            side, np.concatenate((angles, scapula)), check_contact=check_contact
+        shoulder_map = self._shoulder_map(side)
+        predicted = shoulder_map.predict(*angles)
+        if not shoulder_map.model.contains(*angles):
+            warnings.warn(
+                f"{side} shoulder angles are outside the fitted bilinear-map "
+                f"domain; extrapolating at protraction={np.degrees(angles[0]):.2f}°, "
+                f"elevation={np.degrees(angles[1]):.2f}°",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        scapular_coordinates = [
+            coordinates.get(f"{name}_{side}") for name in _GIRDLE_NAMES[2:]
+        ]
+        lower = np.array(
+            [coordinate.getRangeMin() for coordinate in scapular_coordinates]
         )
+        upper = np.array(
+            [coordinate.getRangeMax() for coordinate in scapular_coordinates]
+        )
+        bounded = np.clip(predicted[2:], lower, upper)
+        if not np.array_equal(bounded, predicted[2:]):
+            warnings.warn(
+                f"{side} bilinear scapular prediction exceeded coordinate "
+                f"limits and was clipped to "
+                f"{np.degrees(bounded).round(2).tolist()}°",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            predicted[2:] = bounded
+        self.set_scapular_girdle_values(
+            side, predicted, check_contact=False
+        )
+        contact = self._scapula_mesh_contact(side)
+        if contact.intersects_ribs():
+            contact_count = contact.rib_intersection_contact_count()
+            warnings.warn(
+                f"{side} scapula prediction intersects the rib mesh at "
+                f"protraction={np.degrees(angles[0]):.2f}°, "
+                f"elevation={np.degrees(angles[1]):.2f}° "
+                f"({contact_count} detected mesh contacts)",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        if check_contact:
+            self.scapula_contact_report(side)
 
     def _set_shoulder_elevation(
         self,

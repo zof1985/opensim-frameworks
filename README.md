@@ -292,6 +292,50 @@ Elevation here means raising/lowering the shoulder girdle, not raising the
 humerus at the glenohumeral joint. Positive elevation raises and negative
 depresses; positive protraction moves the shoulder forward and negative
 retracts it. The model's coordinate ranges still apply.
+The shoulder map is a saved bilinear model, fitted separately for M and F from
+collision-free reference poses at the 10th, 50th, and 90th stature percentiles
+and additional extreme statures (M: 150/205 cm; F: 140/195 cm). Each reference
+minimizes the combined sum of distances from all scapular mesh vertices to the
+arithmetic centroid of the rib-mesh vertices. At runtime the same coefficients
+are used at every stature. If the predicted pose intersects that user's rib
+mesh, the setter retains the predicted pose and emits a `RuntimeWarning` with
+the largest detected mesh-contact count from the two collision-test input
+orders (a mesh-resolution-dependent indicator, not penetration depth or
+overlap volume). If predicted acromioclavicular coordinates exceed their
+coordinate limits, they are clipped to those limits with a warning. The fitted
+domain is protraction `[-10, 30]` degrees and elevation `[-10, 30]` degrees;
+outside it, the predictor extrapolates with a warning.
+Thus the high-ending request `(-20, -10)` still produces coordinates, but is
+an extrapolation and may warn about collision.
+
+The reference data, independent validation poses, and saved coefficients are
+in `src/opensim_frameworks/models/user/assets/scapulothoracic_map_ground_truth.csv`,
+`scapulothoracic_map_validation.csv`, and
+`scapulothoracic_map_coefficients.csv`. Recreate them with
+`python -m opensim_frameworks.models.user.generate_scapulothoracic_map`.
+The validation table records signed coordinate errors, collision outcomes,
+and objective regret at holdout angles; large angular errors can coexist with
+small objective regret because the mesh-distance objective may have
+near-equivalent scapular solutions. The reference poses are the best
+collision-free candidates found by deterministic Sobol sampling and bounded
+least-squares, not a mathematical certificate of global optimality.
+
+On the 16 withheld angle pairs per gender, the M-map AC-angle MAE was
+`[6.44, 2.48, 12.48]°` and its maximum absolute errors were
+`[20.05, 6.55, 29.32]°` (protraction, upward rotation, axial rotation).
+For F the corresponding values were MAE `[7.12, 3.19, 9.04]°` and maximum
+absolute errors `[19.00, 6.74, 29.25]°`. No bilinear predictions intersected
+the rib meshes at any of the five validation cohorts. Mean objective regret
+was `0.13%` for M and `0.46%` for F (maximum `0.43%` and `1.02%`). Thus the fit
+preserves the optimized mesh-distance objective well, but its coordinate
+errors—especially axial rotation—are substantial and should not be interpreted
+as precise anatomical angle predictions. Runtime checks still warn rather
+than suppress predictions if an unvalidated or extrapolated pose intersects.
+Across the combined 41 training and holdout angles at exact extreme statures,
+the runtime produced outputs at every angle; collision warnings occurred in
+3/41 poses for M150, 0/41 for M205, 5/41 for F140, and 5/41 for F195. The
+detected contact-count proxy therefore remains useful for flagging the
+height-dependent failures that the gender-specific regression cannot remove.
 
 The cervical joints provide neck-base flexion/extension and lateral flexion
 (`neck_base_flexion`, `neck_base_lateral_flexion`), and head flexion/extension,
