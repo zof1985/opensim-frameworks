@@ -24,6 +24,7 @@ __all__ = [
     "local_to_global",
     "global_to_local",
     "translate_model",
+    "rotate_model",
     "extend_coordinate_range",
     "weld_bodies",
     "read_vtp_vertices",
@@ -401,68 +402,234 @@ def extend_coordinate_range(
 def translate_model(
     model: Any,
     state: Any,
-    axes: dict[str, Iterable[float]],
     vector: Iterable[float],
-) -> np.ndarray:
-    """Translate a model through its translational coordinates.
-
-    Each coordinate named in ``axes`` is increased by the projection of
-    ``vector`` on its own translation axis, so the same call moves a user
-    (pelvis translations along x, y and z) or a seat (one slider along its
-    sliding direction).
+    inplace: bool = False,
+) -> Any:
+    """Translate a model rigidly along the Ground axes.
 
     Parameters
     ----------
-    model
-        OpenSim model owning the coordinates.
-    state
-        State belonging to ``model``; it is updated and realized to Position.
-    axes : dict
-        Coordinate name to its translation axis in Ground. The axes must be
-        mutually orthogonal and non-zero; they are normalized here.
-    vector : iterable of float
+    model : opensim.Model
+        OpenSim model to copy or modify.
+    state : opensim.State
+        State belonging to ``model`` whose coordinates and speeds are copied.
+    vector : array-like, shape (3,) or opensim.Vec3
         Requested displacement in Ground, in metres.
+    inplace : bool, default=False
+        If true, modify and return ``model``. Otherwise return an independent
+        Framework Model copy.
 
     Returns
     -------
-    numpy.ndarray, shape (3,)
-        Displacement actually obtained, in metres. It differs from ``vector``
-        by its component outside the span of ``axes``.
+    opensim_frameworks.Model or opensim.Model
+        Translated model. A copy is returned unless ``inplace`` is true.
 
     Raises
     ------
+    TypeError
+        If ``model``, ``state``, or ``inplace`` has an invalid type.
     ValueError
-        If ``vector`` is not three finite numbers, or an axis is invalid.
-    RuntimeError
-        If a coordinate would leave its range. No coordinate is modified in
-        that case.
+        If ``vector`` does not contain three finite coordinates.
     """
-    displacement = np.asarray(vector, dtype=float)
+    opensim = import_opensim()
+    displacement = np.asarray(
+        [vector.get(index) for index in range(3)]
+        if isinstance(vector, opensim.Vec3)
+        else vector,
+        dtype=float,
+    )
     if displacement.shape != (3,) or not np.all(np.isfinite(displacement)):
         raise ValueError("vector must contain three finite coordinates")
-    coordinates = model.getCoordinateSet()
-    achieved = np.zeros(3)
-    values = {}
-    for name, axis in axes.items():
-        direction = np.asarray(axis, dtype=float)
-        norm = np.linalg.norm(direction)
-        if direction.shape != (3,) or not np.isfinite(norm) or norm == 0.0:
-            raise ValueError(f"axis of {name} must be a non-zero 3D vector")
-        direction = direction / norm
-        coordinate = coordinates.get(name)
-        increment = float(displacement @ direction)
-        value = coordinate.getValue(state) + increment
-        if not coordinate.getRangeMin() <= value <= coordinate.getRangeMax():
-            raise RuntimeError(
-                f"{name}={value:.6g} outside its range "
-                f"[{coordinate.getRangeMin():.6g}, {coordinate.getRangeMax():.6g}]"
-            )
-        values[name] = value
-        achieved += increment * direction
-    for name, value in values.items():
-        coordinates.get(name).setValue(state, value, False)
-    model.realizePosition(state)
-    return achieved
+    return _transform_model(
+        model,
+        state,
+        displacement,
+        np.eye(3),
+        inplace,
+    )
+
+
+def _body_fixed_xyz_matrix(angles: np.ndarray) -> np.ndarray:
+    x, y, z = angles
+    cx, cy, cz = np.cos(angles)
+    sx, sy, sz = np.sin(angles)
+    return np.array(
+        [
+            [cy * cz, -cy * sz, sy],
+            [cx * sz + sx * sy * cz, cx * cz - sx * sy * sz, -sx * cy],
+            [sx * sz - cx * sy * cz, sx * cz + cx * sy * sz, cx * cy],
+        ]
+    )
+
+
+def _body_fixed_xyz_angles(matrix: np.ndarray) -> tuple[float, float, float]:
+    y = math.asin(max(-1.0, min(1.0, matrix[0, 2])))
+    if abs(matrix[0, 2]) < 1.0 - 1e-12:
+        x = math.atan2(-matrix[1, 2], matrix[2, 2])
+        z = math.atan2(-matrix[0, 1], matrix[0, 0])
+    else:
+        x = math.atan2(matrix[2, 1], matrix[1, 1])
+        z = 0.0
+    return x, y, z
+
+
+def _transform_model(
+    model: Any,
+    state: Any,
+    translation: np.ndarray,
+    rotation: np.ndarray,
+    inplace: bool,
+) -> Any:
+    opensim = import_opensim()
+    from ..models.model import Model
+
+    if not isinstance(model, opensim.Model):
+        raise TypeError("model must be an opensim.Model")
+    if not isinstance(state, opensim.State):
+        raise TypeError("state must be an opensim.State")
+    if not isinstance(inplace, bool):
+        raise TypeError("inplace must be a bool")
+
+    variable_names = model.getStateVariableNames()
+    variable_values = model.getStateVariableValues(state)
+    time = state.getTime()
+    result = model if inplace else Model.from_model(model)
+    components = result.getComponentsList()
+    used_names = {component.getName() for component in components}
+    anchor_name = "opensim_frameworks_ground_offset"
+    suffix = 2
+    while anchor_name in used_names:
+        anchor_name = f"opensim_frameworks_ground_offset_{suffix}"
+        suffix += 1
+
+    anchor = opensim.PhysicalOffsetFrame(
+        anchor_name, result.getGround(), opensim.Transform()
+    )
+    anchor.set_translation(opensim.Vec3(*map(float, translation)))
+    anchor.set_orientation(opensim.Vec3(*_body_fixed_xyz_angles(rotation)))
+    result.addComponent(anchor)
+    anchor.thisown = False
+    result.finalizeFromProperties()
+
+    anchor_path = f"/{anchor_name}"
+    for component in components:
+        if component.getAbsolutePathString() == anchor_path:
+            continue
+        for socket_name in component.getSocketNames():
+            socket = component.updSocket(socket_name)
+            if socket.isListSocket():
+                paths = [
+                    socket.getConnecteePath(index)
+                    for index in range(socket.getNumConnectees())
+                ]
+                if any(path in ("ground", "/ground") for path in paths):
+                    connectees = [
+                        socket.getConnecteeAsObject(index)
+                        for index in range(socket.getNumConnectees())
+                    ]
+                    socket.disconnect()
+                    for path, connectee in zip(paths, connectees):
+                        socket.connect(
+                            anchor
+                            if path in ("ground", "/ground")
+                            else connectee
+                        )
+            elif socket.getConnecteePath() in ("ground", "/ground"):
+                socket.connect(anchor)
+
+    result.finalizeConnections()
+    result_state = result.initSystem()
+    for index in range(variable_names.getSize()):
+        result.setStateVariableValue(
+            result_state,
+            variable_names.get(index),
+            variable_values.get(index),
+        )
+    result_state.setTime(time)
+    result.realizePosition(result_state)
+    if isinstance(result, Model):
+        result.state = result_state
+    return result
+
+
+def rotate_model(
+    model: Any,
+    state: Any,
+    origin: Iterable[float],
+    angles: Iterable[float],
+    degrees: bool = True,
+    inplace: bool = False,
+) -> Any:
+    """Rotate a model rigidly around a point in Ground.
+
+    Rotations are applied successively about the mobile X, Y, and Z axes,
+    initially aligned with Ground. Every model socket attached directly to
+    Ground is redirected through a new offset frame, preserving its local
+    transform while rotating the model as a whole.
+
+    Parameters
+    ----------
+    model : opensim.Model
+        OpenSim model to copy and rotate. Framework ``Model`` subclasses
+        retain their Python-side configuration.
+    state : opensim.State
+        State belonging to ``model`` whose coordinates and speeds are copied.
+    origin : array-like, shape (3,) or opensim.Vec3
+        Rotation centre in Ground, in metres.
+    angles : array-like, shape (3,) or opensim.Vec3
+        Successive X, Y, and Z rotation angles.
+    degrees : bool, default=True
+        Whether ``angles`` are in degrees. If false, they are in radians.
+    inplace : bool, default=False
+        If true, modify and return ``model``. Otherwise return an independent
+        Framework Model copy.
+
+    Returns
+    -------
+    opensim_frameworks.Model or opensim.Model
+        Rotated model. A copy is returned unless ``inplace`` is true.
+
+    Raises
+    ------
+    TypeError
+        If ``model`` is not an ``opensim.Model``, ``state`` is not an
+        ``opensim.State``, or ``degrees`` or ``inplace`` is not a bool.
+    ValueError
+        If ``origin`` or ``angles`` do not contain three finite coordinates.
+    """
+    if not isinstance(degrees, bool):
+        raise TypeError("degrees must be a bool")
+    if not isinstance(inplace, bool):
+        raise TypeError("inplace must be a bool")
+
+    opensim = import_opensim()
+    centre = np.asarray(
+        [origin.get(index) for index in range(3)]
+        if isinstance(origin, opensim.Vec3)
+        else origin,
+        dtype=float,
+    )
+    rotation_angles = np.asarray(
+        [angles.get(index) for index in range(3)]
+        if isinstance(angles, opensim.Vec3)
+        else angles,
+        dtype=float,
+    )
+    if centre.shape != (3,) or not np.all(np.isfinite(centre)):
+        raise ValueError("origin must contain three finite coordinates")
+    if rotation_angles.shape != (3,) or not np.all(np.isfinite(rotation_angles)):
+        raise ValueError("angles must contain three finite coordinates")
+    if degrees:
+        rotation_angles = np.radians(rotation_angles)
+
+    rotation = _body_fixed_xyz_matrix(rotation_angles)
+    return _transform_model(
+        model,
+        state,
+        centre - rotation @ centre,
+        rotation,
+        inplace,
+    )
 
 
 def _step_name(value: str, used: set[str]) -> str:

@@ -351,29 +351,156 @@ def _slider_model(range_max: float = 1.0):
     return model, body, state
 
 
-def test_translate_model_projects_the_displacement_on_each_axis():
+def test_translate_model_returns_a_translated_copy_without_changing_coordinates():
     model, body, state = _slider_model()
-    axis = np.array([np.cos(np.radians(105)), np.sin(np.radians(105)), 0.0])
 
-    achieved = osf.translate_model(
-        model, state, {"slide_position": tuple(axis)}, (0.1, 0.2, 0.3)
+    translated = osf.translate_model(model, state, (0.1, 0.2, 0.3))
+
+    assert isinstance(translated, osf.Model)
+    translated_body = translated.getBodySet().get("slid")
+    position = osf.vec3_to_numpy(
+        translated_body.getTransformInGround(translated.state).p()
+    )
+    assert position == pytest.approx((0.1, 0.2, 0.3))
+    assert osf.vec3_to_numpy(body.getTransformInGround(state).p()) == pytest.approx(
+        (0.0, 0.0, 0.0)
+    )
+    assert model.getCoordinateSet().get("slide_position").getValue(state) == 0.0
+
+
+def test_translate_model_can_modify_the_input_in_place():
+    model, _, state = _slider_model()
+
+    translated = osf.translate_model(
+        model, state, opensim.Vec3(0.1, 0.2, 0.3), inplace=True
     )
 
-    expected = (np.array([0.1, 0.2, 0.3]) @ axis) * axis
-    assert achieved == pytest.approx(expected)
-    position = osf.vec3_to_numpy(body.getTransformInGround(state).p())
-    assert position == pytest.approx(expected)
+    assert translated is model
+    position = osf.vec3_to_numpy(
+        model.getBodySet()
+        .get("slid")
+        .getTransformInGround(model.getWorkingState())
+        .p()
+    )
+    assert position == pytest.approx((0.1, 0.2, 0.3))
 
 
-def test_translate_model_raises_without_modifying_when_out_of_range():
-    model, body, state = _slider_model(range_max=0.05)
-    axis = (np.cos(np.radians(105)), np.sin(np.radians(105)), 0.0)
+def test_rotate_model_returns_a_rotated_copy_and_preserves_input():
+    model, body, state = _posed_body()
+    original_position = osf.vec3_to_numpy(body.getTransformInGround(state).p())
 
-    with pytest.raises(RuntimeError, match="outside its range"):
-        osf.translate_model(model, state, {"slide_position": axis}, (0.0, 1.0, 0.0))
+    rotated = osf.rotate_model(
+        model,
+        state,
+        np.array([0.0, 0.0, 0.0]),
+        np.array([0.0, 0.0, 90.0]),
+    )
 
-    coordinate = model.getCoordinateSet().get("slide_position")
-    assert coordinate.getValue(state) == 0.0
+    assert isinstance(rotated, osf.Model)
+    rotated_state = rotated.state
+    rotated_body = rotated.getBodySet().get("test_body")
+    position = osf.vec3_to_numpy(
+        rotated_body.getTransformInGround(rotated_state).p()
+    )
+    assert position == pytest.approx((-2.0, 1.0, 3.0))
+    assert osf.vec3_to_numpy(body.getTransformInGround(state).p()) == pytest.approx(
+        original_position
+    )
+
+
+def test_rotate_model_can_modify_the_input_in_place():
+    model, _, state = _posed_body()
+
+    rotated = osf.rotate_model(
+        model, state, (0.0, 0.0, 0.0), (0.0, 0.0, 90.0), inplace=True
+    )
+
+    assert rotated is model
+    position = osf.vec3_to_numpy(
+        model.getBodySet()
+        .get("test_body")
+        .getTransformInGround(model.getWorkingState())
+        .p()
+    )
+    assert position == pytest.approx((-2.0, 1.0, 3.0))
+
+
+def test_in_place_model_transforms_compose():
+    model, _, state = _posed_body()
+
+    osf.translate_model(model, state, (1.0, 0.0, 0.0), inplace=True)
+    osf.rotate_model(
+        model,
+        model.getWorkingState(),
+        (0.0, 0.0, 0.0),
+        (0.0, 0.0, 90.0),
+        inplace=True,
+    )
+
+    position = osf.vec3_to_numpy(
+        model.getBodySet()
+        .get("test_body")
+        .getTransformInGround(model.getWorkingState())
+        .p()
+    )
+    assert position == pytest.approx((-2.0, 2.0, 3.0))
+
+
+def test_rotate_model_rotates_ground_markers_about_origin():
+    model = opensim.Model()
+    marker = opensim.Marker("ground_marker", model.getGround(), opensim.Vec3(1, 0, 0))
+    model.addMarker(marker)
+    state = model.initSystem()
+
+    rotated = osf.rotate_model(
+        model,
+        state,
+        opensim.Vec3(0, 1, 0),
+        opensim.Vec3(0, 0, 90),
+    )
+
+    marker_position = osf.vec3_to_numpy(
+        rotated.getMarkerSet()
+        .get("ground_marker")
+        .getLocationInGround(rotated.state)
+    )
+    assert marker_position == pytest.approx((1.0, 2.0, 0.0))
+
+
+def test_rotate_model_uses_mobile_xyz_axes_and_radians_when_requested():
+    model = opensim.Model()
+    marker = opensim.Marker("ground_marker", model.getGround(), opensim.Vec3(0, 1, 0))
+    model.addMarker(marker)
+    state = model.initSystem()
+
+    rotated = osf.rotate_model(
+        model,
+        state,
+        (0.0, 0.0, 0.0),
+        (np.pi / 2, np.pi / 2, 0.0),
+        degrees=False,
+    )
+
+    marker_position = osf.vec3_to_numpy(
+        rotated.getMarkerSet()
+        .get("ground_marker")
+        .getLocationInGround(rotated.state)
+    )
+    assert marker_position == pytest.approx((0.0, 0.0, 1.0))
+
+
+@pytest.mark.parametrize(
+    ("origin", "angles", "field"),
+    [
+        ((0.0, 1.0), (0.0, 0.0, 0.0), "origin"),
+        ((0.0, 0.0, 0.0), (0.0, float("nan"), 0.0), "angles"),
+    ],
+)
+def test_rotate_model_rejects_invalid_vectors(origin, angles, field):
+    model, _, state = _posed_body()
+
+    with pytest.raises(ValueError, match=field):
+        osf.rotate_model(model, state, origin, angles)
 
 
 @pytest.mark.parametrize("vector", [(1.0, 2.0), (np.nan, 0.0, 0.0)])
@@ -381,7 +508,7 @@ def test_translate_model_rejects_invalid_vector(vector):
     model, _, state = _slider_model()
 
     with pytest.raises(ValueError, match="three finite"):
-        osf.translate_model(model, state, {"slide_position": (1, 0, 0)}, vector)
+        osf.translate_model(model, state, vector)
 
 
 def test_extend_coordinate_range_widens_only_in_the_given_units():

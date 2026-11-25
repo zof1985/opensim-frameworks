@@ -16,11 +16,6 @@ from opensim_frameworks.utils.geometry import (
 
 __all__ = ["position_user"]
 
-_PELVIS_AXES = {
-    "pelvis_tx": (1.0, 0.0, 0.0),
-    "pelvis_ty": (0.0, 1.0, 0.0),
-    "pelvis_tz": (0.0, 0.0, 1.0),
-}
 _TRUNK_COORDINATES = (
     "pelvis_tilt",
     "lumbar_extension",
@@ -200,14 +195,14 @@ def align_user_to_backrest(
         )
 
     def translate(vector: np.ndarray) -> None:
-        """Translate the user along the pelvis translation coordinates.
+        """Translate the user in Ground.
 
         Parameters
         ----------
         vector : numpy.ndarray, shape (3,)
             Translation vector in Ground, in metres.
         """
-        translate_model(user, user.state, _PELVIS_AXES, vector)
+        translate_model(user, user.state, vector, inplace=True)
 
     def contact_gaps() -> tuple[float, float]:
         """Return the torso and pelvis gaps from the back pad.
@@ -372,15 +367,11 @@ def seat_to_pelvis(
             seat.getRangeMax(),
         )
         if abs(target - position) > 1e-12:
-            translate_model(
-                equipment,
-                equipment.state,
-                {"seat_position": tuple(slide)},
-                (target - position) * slide,
-            )
+            seat.setValue(equipment.state, target, False)
+            equipment.realizePosition(equipment.state)
         else:
             step = -current / slope * slide
-            translate_model(user, user.state, _PELVIS_AXES, step)
+            translate_model(user, user.state, step, inplace=True)
             user_translation += step
     else:
         raise RuntimeError("Seat pad contact with the pelvis was not achieved")

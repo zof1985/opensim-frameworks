@@ -18,6 +18,7 @@ from .opensim import (
     body_transform_array,
     numpy_to_vec3,
     translate_model,
+    rotate_model,
 )
 
 __all__ = [
@@ -40,6 +41,7 @@ __all__ = [
     "body_transform_array",
     "numpy_to_vec3",
     "translate_model",
+    "rotate_model",
 ]
 
 
