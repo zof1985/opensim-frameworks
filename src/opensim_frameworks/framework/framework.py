@@ -2039,6 +2039,7 @@ class Framework(dict[str, Model]):
             clones: dict[str, list[Any]] = {
                 set_name: [] for set_name, _ in _MODEL_SETS
             }
+            clones["frames"] = []
             renamed_paths: dict[str, str] = {}
             joints_by_original_name: dict[str, Any] = {}
             for set_name, getter_name in _MODEL_SETS:
@@ -2065,11 +2066,35 @@ class Framework(dict[str, Model]):
                     if set_name == "jointset":
                         joints_by_original_name[original_name] = clone
 
+            frame_names = existing_names.setdefault("frames", set())
+            for component in source.getComponentsList():
+                source_path = _component_path(component)
+                if source_path.count("/") != 1:
+                    continue
+                frame = opensim.PhysicalOffsetFrame.safeDownCast(component)
+                if frame is None:
+                    continue
+                clone = frame.clone()
+                original_name = clone.getName()
+                final_name = (
+                    _unique_name(model_name, original_name, frame_names)
+                    if original_name in frame_names
+                    else original_name
+                )
+                frame_names.add(final_name)
+                if final_name != original_name:
+                    renamed_paths[f"/{original_name}"] = f"/{final_name}"
+                    clone.setName(final_name)
+                clones["frames"].append(clone)
+
             for set_name, getter_name in _MODEL_SETS:
                 target_set = getattr(merged, getter_name)()
                 for clone in clones[set_name]:
                     target_set.adoptAndAppend(clone)
                     clone.thisown = False
+            for clone in clones["frames"]:
+                merged.addComponent(clone)
+                clone.thisown = False
 
             merged.finalizeFromProperties()
             for components in clones.values():

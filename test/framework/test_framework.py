@@ -169,6 +169,22 @@ def test_merge_to_model_clones_members_and_resolves_component_name_collisions():
     assert first.getBodySet().getSize() == second.getBodySet().getSize() == 1
 
 
+def test_merge_to_model_preserves_root_ground_offset_frames():
+    from opensim_frameworks.utils.opensim import translate_model
+
+    member = make_single_body_model()
+    translate_model(member, member.state, (0.1, 0.0, 0.0), inplace=True)
+
+    merged = Framework({"translated": member}).merge_to_model()
+    offset = merged.getComponent("/opensim_frameworks_ground_offset")
+    translation = offset.get_translation()
+
+    assert tuple(translation.get(index) for index in range(3)) == pytest.approx(
+        (0.1, 0.0, 0.0)
+    )
+    merged.initSystem()
+
+
 def test_merge_to_model_carries_member_meshes(tmp_path):
     from opensim_frameworks.bodies.shapes import MESHES_DIR
 
