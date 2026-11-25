@@ -23,7 +23,7 @@ from opensim_frameworks.utils.motion_profiles import (
     gaussian_time_for_position,
     gaussian_velocity_profile,
 )
-from .handlefit import (
+from ..handlefit import (
     _capture_hand_handle_targets,
     fit_handle,
     lock_hands_to_handles,

@@ -15,6 +15,7 @@ from opensim_frameworks.models.equipment.chestpress import (
     chestpress,
     handlefit,
 )
+from opensim_frameworks.models.equipment import handlefit as equipment_handlefit
 from opensim_frameworks.models.equipment.chestpress.chestpress import ChestPress
 from opensim_frameworks import Framework, Model
 from opensim_frameworks.utils.geometry import body_transform_array
@@ -25,6 +26,10 @@ from opensim_frameworks.utils.motion_profiles import (
     gaussian_time_for_position,
     gaussian_velocity_profile,
 )
+
+
+def test_handlefit_is_shared_from_equipment_package():
+    assert equipment_handlefit.fit_handle is handlefit.fit_handle
 
 
 class Coordinate:

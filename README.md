@@ -103,7 +103,9 @@ endpoint 2 (higher Ground Z).
 The fit does not favor the palm being above or below the handle axis.
 The objectives are continuous weighted penalties rather than hard acceptance
 thresholds. Geometric loss components are public functions exported by the
-`handlefit` module; scapular contact and collision residuals are computed by
+`opensim_frameworks.models.equipment.handlefit` module, shared across equipment
+models. The old ChestPress import path remains available as a compatibility
+alias. Scapular contact and collision residuals are computed by
 `User.scapular_fit_residuals`. The defaults keep most weights at 1.0; scapular
 retraction and depression are weighted at 10.0, palm contact at 20.0, knuckle
 alignment and endpoint limits at 10.0, and wrist deviation at 0.2. The weighted
