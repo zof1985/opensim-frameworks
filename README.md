@@ -256,6 +256,16 @@ range. For example:
 user.set_left_hip_flexionextension(110, range_min=-30, range_max=120)
 ```
 
+The corresponding `<joint_property>_range` properties return the current
+`(minimum, maximum)` coordinate limits in degrees. For example,
+`user.left_knee_flexionextension_range` returns the current limits for the
+left knee; the values update when a setter changes those limits. The same
+pattern is available for the named posture properties, including the neck,
+shoulder girdle, and articulated fingers.
+For example, `right_shoulder_protraction_range` reports the OpenSim coordinate
+limits; the separately named `right_scapular_protraction_range` remains the
+collision-free admissible interval used by the scapular-protraction API.
+
 Changing the range does not change the model's default coordinate values. If a
 new range excludes a default, call `user.reinitialize()` after setting a valid
 current angle and before initializing, exporting, or merging the model.

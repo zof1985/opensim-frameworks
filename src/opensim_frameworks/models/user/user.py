@@ -40,11 +40,12 @@ from .grasp import _GraspMixin
 from .hand import MOVING_HAND_SEGMENTS, add_articulated_hands
 from .joint_center_table import JOINT_CENTER_NAMES as _JOINT_CENTER_NAMES
 from .joint_centers_generated import _JointCenterMixin
-from .landmarks import _FOOT_MARKER_NAMES, _LandmarkMixin
+from .landmarks import _LandmarkMixin
 from .mapping import segment_scale_factors
 from .measurement_generated import _MeasurementMixin
 from .neck_posture import _NeckPostureMixin
 from .posture_generated import _PostureMixin
+from .posture_table import POSTURE_COORDINATE_NAMES
 from .scapulothoracic import _ScapulothoracicMixin
 from .scapular_protraction import _ScapularProtractionMixin
 from .scaling import _AnthropometricScalingMixin, _validate_mass_kg
@@ -299,21 +300,18 @@ class User(
                 "gender": self._reference.gender,
                 "percentile": float(self._reference.percentile),
                 "values": {
-                    name: float(value)
-                    for name, value in self._reference.values.items()
+                    name: float(value) for name, value in self._reference.values.items()
                 },
             },
             "baseline": {
                 "gender": self._baseline.gender,
                 "percentile": float(self._baseline.percentile),
                 "values": {
-                    name: float(value)
-                    for name, value in self._baseline.values.items()
+                    name: float(value) for name, value in self._baseline.values.items()
                 },
             },
             "side_measurements": {
-                name: float(value)
-                for name, value in self._side_measurements.items()
+                name: float(value) for name, value in self._side_measurements.items()
             },
             "mass_kg": float(self._mass_kg),
             "requested_gender": self._requested_gender,
@@ -383,8 +381,7 @@ class User(
             str(name): float(value) for name, value in side_measurements.items()
         }
         if any(
-            not math.isfinite(value)
-            for value in normalized_side_measurements.values()
+            not math.isfinite(value) for value in normalized_side_measurements.values()
         ):
             raise ValueError("side_measurements must contain only finite numbers")
         mass_kg = float(config["mass_kg"])
@@ -394,9 +391,7 @@ class User(
         self._baseline = references["baseline"]
         self._side_measurements = normalized_side_measurements
         self._mass_kg = mass_kg
-        self._requested_gender = config.get(
-            "requested_gender", self._reference.gender
-        )
+        self._requested_gender = config.get("requested_gender", self._reference.gender)
         if self._requested_gender not in {"M", "F"}:
             raise ValueError("requested_gender must be 'M' or 'F'")
         self._requested_height_cm = config.get("requested_height_cm")
@@ -757,9 +752,7 @@ class User(
         """
         from ...viewer import FrameworkViewer
 
-        return FrameworkViewer(self, sampling_frequency_hz=fps).show(
-            motion, loop=loop
-        )
+        return FrameworkViewer(self, sampling_frequency_hz=fps).show(motion, loop=loop)
 
     def to_osim(
         self,
@@ -1022,9 +1015,7 @@ class User(
             If the angle or either limit is non-finite, or if the angle is
             outside the resulting range.
         """
-        self._set_coordinate_degrees(
-            "lumbar_rotation", degrees, range_min, range_max
-        )
+        self._set_coordinate_degrees("lumbar_rotation", degrees, range_min, range_max)
 
     @property
     def trunk_rotation(self) -> float:
@@ -1101,6 +1092,13 @@ class User(
         value = self.getCoordinateSet().get(name).getValue(self.state)
         return math.degrees(value)
 
+    def _coordinate_range_degrees(self, name: str) -> tuple[float, float]:
+        coordinate = self.getCoordinateSet().get(name)
+        return (
+            math.degrees(coordinate.getRangeMin()),
+            math.degrees(coordinate.getRangeMax()),
+        )
+
     def _expand_bilateral_bodies(self, factors: dict[str, tuple[float, float, float]]):
         expanded: dict[str, tuple[float, float, float]] = {}
         body_set = self.getBodySet()
@@ -1128,3 +1126,84 @@ class User(
         if mesh_path is None:
             return []
         return sorted(mesh_path.glob("*.vtp"))
+
+
+def _degree_range_property(coordinate_name: str, property_name: str) -> property:
+    def get_range(self: User) -> tuple[float, float]:
+        return self._coordinate_range_degrees(coordinate_name)
+
+    get_range.__name__ = property_name
+    get_range.__doc__ = f"""Return the coordinate limits for {property_name.removesuffix('_range')}, in degrees.
+
+        Returns
+        -------
+        tuple of float
+            Current ``(minimum, maximum)`` coordinate limits.
+        """
+    return property(get_range)
+
+
+def _finger_degree_range_property(
+    side: str, finger: str, joint: str, motion: str, property_name: str
+) -> property:
+    def get_range(self: User) -> tuple[float, float]:
+        coordinate = self.finger_coordinate(side, finger, joint, motion)
+        return self._coordinate_range_degrees(coordinate.getName())
+
+    get_range.__name__ = property_name
+    get_range.__doc__ = (
+        f"""Return the limits for {property_name.removesuffix('_range')}, in degrees.
+
+        Returns
+        -------
+        tuple of float
+            Current ``(minimum, maximum)`` coordinate limits relative to the
+            corrected reference pose.
+        """
+    )
+    return property(get_range)
+
+
+_COORDINATE_RANGE_ALIASES = {
+    "body_tilt": "pelvis_tilt",
+    "body_roll": "pelvis_list",
+    "body_yaw": "pelvis_rotation",
+    "trunk_rotation": "lumbar_rotation",
+    "neck_flexion": "neck_flexion",
+    "neck_lateral_flexion": "neck_lateral_flexion",
+    "neck_rotation": "neck_rotation",
+    "neck_base_flexion": "neck_base_flexion",
+    "neck_base_lateral_flexion": "neck_base_lateral_flexion",
+    "left_shoulder_protraction": "sc_protraction_l",
+    "right_shoulder_protraction": "sc_protraction_r",
+    "left_shoulder_elevation": "sc_elevation_l",
+    "right_shoulder_elevation": "sc_elevation_r",
+}
+for _property_name, _coordinate_name in (
+    POSTURE_COORDINATE_NAMES | _COORDINATE_RANGE_ALIASES
+).items():
+    setattr(
+        User,
+        f"{_property_name}_range",
+        _degree_range_property(_coordinate_name, f"{_property_name}_range"),
+    )
+
+for _property_name, _descriptor in vars(_FingerPostureMixin).items():
+    if not isinstance(_descriptor, property):
+        continue
+    _parts = _property_name.split("_")
+    if len(_parts) < 4 or _parts[0] not in {"left", "right"}:
+        continue
+    _side, _joint, _motion = _parts[0], _parts[-2], _parts[-1]
+    _finger = "_".join(_parts[1:-2])
+    setattr(
+        User,
+        f"{_property_name}_range",
+        _finger_degree_range_property(
+            _side,
+            _finger,
+            _joint,
+            _motion,
+            f"{_property_name}_range",
+        ),
+    )

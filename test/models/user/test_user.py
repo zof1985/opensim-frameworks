@@ -12,6 +12,9 @@ from opensim_frameworks.models.user.data import (
     resolve_reference,
 )
 from opensim_frameworks.models.user.hand import MOVING_HAND_SEGMENTS
+from opensim_frameworks.models.user.finger_posture_generated import (
+    _FingerPostureMixin,
+)
 from opensim_frameworks.models.user.user import (
     DEFAULT_MESHES_DIR,
     _FOOT_MARKER_NAMES,
@@ -787,6 +790,60 @@ def test_posture_angle_property_reads_back_the_coordinate(
 # ---------------------------------------------------------------------------
 # Joint centres and derived measurements
 # ---------------------------------------------------------------------------
+
+
+@requires_opensim
+def test_coordinate_range_properties_cover_exposed_posture_getters():
+    user = make_user(gender="F")
+    coordinates = user.getCoordinateSet()
+
+    aliases = {
+        "body_tilt": "pelvis_tilt",
+        "body_roll": "pelvis_list",
+        "body_yaw": "pelvis_rotation",
+        "trunk_rotation": "lumbar_rotation",
+        "neck_flexion": "neck_flexion",
+        "neck_lateral_flexion": "neck_lateral_flexion",
+        "neck_rotation": "neck_rotation",
+        "neck_base_flexion": "neck_base_flexion",
+        "neck_base_lateral_flexion": "neck_base_lateral_flexion",
+        "left_shoulder_protraction": "sc_protraction_l",
+        "right_shoulder_protraction": "sc_protraction_r",
+        "left_shoulder_elevation": "sc_elevation_l",
+        "right_shoulder_elevation": "sc_elevation_r",
+    }
+    coordinate_properties = {
+        **_POSTURE_COORDINATE_NAMES,
+        **aliases,
+    }
+    for property_name, coordinate_name in coordinate_properties.items():
+        range_name = f"{property_name}_range"
+        assert isinstance(getattr(type(user), range_name), property)
+        coordinate = coordinates.get(coordinate_name)
+        assert getattr(user, range_name) == pytest.approx(
+            (
+                math.degrees(coordinate.getRangeMin()),
+                math.degrees(coordinate.getRangeMax()),
+            )
+        )
+
+    for property_name, descriptor in vars(_FingerPostureMixin).items():
+        if not isinstance(descriptor, property):
+            continue
+        parts = property_name.split("_")
+        if len(parts) < 4 or parts[0] not in {"left", "right"}:
+            continue
+        side, joint, motion = parts[0], parts[-2], parts[-1]
+        finger = "_".join(parts[1:-2])
+        coordinate = user.finger_coordinate(side, finger, joint, motion)
+        range_name = f"{property_name}_range"
+        assert isinstance(getattr(type(user), range_name), property)
+        assert getattr(user, range_name) == pytest.approx(
+            (
+                math.degrees(coordinate.getRangeMin()),
+                math.degrees(coordinate.getRangeMax()),
+            )
+        )
 
 
 @requires_opensim
